@@ -2,6 +2,21 @@ import socket
 import json
 import threading
 
+''' 
+Overview of Interaction Between Socket Servers and Clients:
+
+nanovisQ_endpoint.py (Client)          flux_socket_host.py (Server)
+     Port 31951                          Port 31951 (HTTP)
+         |                                   |
+         |-------- User types 'c' -------->|
+         |                                   |
+         |-- Connect to port 31952 -------->| Command Server
+         |-- Send command as JSON -------->|
+         |<-- Receive acknowledgement ------|
+         |                                   |
+         |-- Connect to port 31951 -------->| HTTP Server
+         |-- Send/receive HTTP requests -->|
+'''
 
 # Global variable to store queued commands
 queued_command = None
