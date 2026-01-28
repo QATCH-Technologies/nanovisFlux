@@ -80,5 +80,16 @@ class SerialError(FluxException):
         )
 
 
-if __name__ == "__main__":
-    raise SerialError("Test serial error", port="1234")
+class FlexMaintenanceError(FluxException):
+    """Raised when the robot is reachable but currently performing maintenance (booting, updating)."""
+
+    pass
+
+
+# --- Exceptions ---
+class FlexConnectionError(FluxException):
+    pass
+
+
+class FlexCommandError(FluxException):
+    pass
