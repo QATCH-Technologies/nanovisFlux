@@ -18,9 +18,9 @@ from ..schemas import (
 
 # Logging import
 try:
-    from flex_serial_controls.log import get_tagged_logger
+    from src.common.log import get_logger
 
-    log = get_tagged_logger("FlexRuns")
+    log = get_logger("FlexRuns")
 except ImportError:
     import logging
 

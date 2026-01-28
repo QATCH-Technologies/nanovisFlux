@@ -13,13 +13,13 @@ from .services.system import SystemService
 
 # Logging import
 try:
-    from flex_serial_controls.log import get_tagged_logger
+    from src.common.log import get_logger
 
-    log = get_tagged_logger("FlexAPI")
+    log = get_logger("FlexController")
 except ImportError:
     import logging
 
-    log = logging.getLogger("FlexAPI")
+    log = logging.getLogger("FlexController")
 
 
 class FlexController:

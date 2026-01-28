@@ -21,11 +21,11 @@ from ..schemas import (
 try:
     from src.common.log import get_logger
 
-    log = get_logger("OpentronsFlex")
+    log = get_logger("FlexSystem")
 except ImportError:
     import logging
 
-    log = logging.getLogger("OpentronsFlex")
+    log = logging.getLogger("FlexSystem")
 
 
 class SystemService:
