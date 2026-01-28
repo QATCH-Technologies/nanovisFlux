@@ -2,15 +2,17 @@ pyserial==3.5
 pyserial-asyncio==0.6
 websockets==12.0
 aiohttp==3.9.1
-opentrons>8.0.0
-opentrons-shared-data==7.0.2
+opentrons==7.0.2
+opentrons-shared-data==opentrons-shared-data-8.8.1
 pydantic==1.8.2
+# Required by opentrons API to be ==1.8.2
 python-dotenv==1.0.0
 loguru==0.7.2 
 pytest==7.4.3
 pytest-asyncio==0.23.2
 ultralytics==8.3.252
-numpy<2.0.2
+numpy<2.0
+# Required by opentrons API <2.0
 scikit-learn==1.7.2
 scipy==1.16.2
 torch==2.8.0
