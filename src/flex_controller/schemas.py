@@ -350,3 +350,113 @@ class DataFile(BaseModel):
     name: str
     source: str
     createdAt: str
+
+
+# ... (Previous imports remain the same)
+
+# ============================================================================
+#                               RUN MANAGEMENT
+# ============================================================================
+
+
+class CommandType(str, Enum):
+    # --- Liquid Handling ---
+    ASPIRATE = "aspirate"
+    ASPIRATE_IN_PLACE = "aspirateInPlace"
+    ASPIRATE_WHILE_TRACKING = "aspirateWhileTracking"  # Flex Specific
+    DISPENSE = "dispense"
+    DISPENSE_IN_PLACE = "dispenseInPlace"
+    DISPENSE_WHILE_TRACKING = "dispenseWhileTracking"  # Flex Specific
+    BLOW_OUT = "blowOut"
+    BLOW_OUT_IN_PLACE = "blowOutInPlace"
+    AIR_GAP_IN_PLACE = "airGapInPlace"
+    TOUCH_TIP = "touchTip"
+
+    # --- Tip Management ---
+    PICK_UP_TIP = "pickUpTip"
+    DROP_TIP = "dropTip"
+    DROP_TIP_IN_PLACE = "dropTipInPlace"
+    CONFIGURE_NOZZLE_LAYOUT = "configureNozzleLayout"  # Flex Specific (8 vs 96 channel)
+    VERIFY_TIP_PRESENCE = "verifyTipPresence"  # Flex Specific (Sensors)
+    GET_TIP_PRESENCE = "getTipPresence"
+    GET_NEXT_TIP = "getNextTip"
+
+    # --- Motion (Atomic) ---
+    MOVE_TO_COORDINATES = "moveToCoordinates"
+    MOVE_TO_WELL = "moveToWell"
+    MOVE_TO_ADDRESSABLE_AREA = "moveToAddressableArea"  # e.g. Waste Chute
+    MOVE_TO_ADDRESSABLE_AREA_FOR_DROP_TIP = "moveToAddressableAreaForDropTip"
+    MOVE_RELATIVE = "moveRelative"
+    MOVE_LABWARE = "moveLabware"  # Gripper Move
+    HOME = "home"
+    RETRACT_AXIS = "retractAxis"
+    SAVE_POSITION = "savePosition"
+
+    # --- Setup & Configuration ---
+    LOAD_LABWARE = "loadLabware"
+    RELOAD_LABWARE = "reloadLabware"
+    LOAD_PIPETTE = "loadPipette"
+    LOAD_MODULE = "loadModule"
+    LOAD_LIQUID = "loadLiquid"
+    LOAD_LIQUID_CLASS = "loadLiquidClass"
+    LOAD_LID_STACK = "loadLidStack"
+    LOAD_LID = "loadLid"
+    CONFIGURE_FOR_VOLUME = "configureForVolume"
+
+    # --- Module Control ---
+    # Thermocycler / HeaterShaker / TempDeck
+    SET_TARGET_TEMPERATURE = "setTargetTemperature"
+    WAIT_FOR_TEMPERATURE = "waitForTemperature"
+    DEACTIVATE_HEATER = "deactivateHeater"
+    SET_AND_WAIT_FOR_SHAKE_SPEED = "setAndWaitForShakeSpeed"
+    DEACTIVATE_SHAKER = "deactivateShaker"
+    OPEN_LABWARE_LATCH = "openLabwareLatch"
+    CLOSE_LABWARE_LATCH = "closeLabwareLatch"
+
+    # Thermocycler Specific
+    SET_TARGET_BLOCK_TEMPERATURE = "setTargetBlockTemperature"
+    WAIT_FOR_BLOCK_TEMPERATURE = "waitForBlockTemperature"
+    SET_TARGET_LID_TEMPERATURE = "setTargetLidTemperature"
+    WAIT_FOR_LID_TEMPERATURE = "waitForLidTemperature"
+    DEACTIVATE_BLOCK = "deactivateBlock"
+    DEACTIVATE_LID = "deactivateLid"
+    OPEN_LID = "openLid"
+    CLOSE_LID = "closeLid"
+    RUN_PROFILE = "runProfile"
+
+    # Magnetic Block
+    DISENGAGE = "disengage"
+    ENGAGE = "engage"
+
+    # Absorbance Reader (Plate Reader)
+    INITIALIZE = "initialize"
+    READ_ABSORBANCE = "readAbsorbance"
+
+    # Flex Stacker
+    RETRIEVE = "retrieve"
+    STORE = "store"
+    SET_STORED_LABWARE = "setStoredLabware"
+    FILL = "fill"
+    EMPTY = "empty"
+
+    # --- Utility & System ---
+    COMMENT = "comment"
+    CUSTOM = "custom"  # Legacy
+    SET_RAIL_LIGHTS = "setRailLights"
+    SET_STATUS_BAR = "setStatusBar"
+    WAIT_FOR_RESUME = "waitForResume"  # Pause Protocol
+    WAIT_FOR_DURATION = "waitForDuration"
+
+    # --- Calibration & Maintenance (Unsafe) ---
+    CALIBRATE_GRIPPER = "calibrateGripper"
+    CALIBRATE_PIPETTE = "calibratePipette"
+    CALIBRATE_MODULE = "calibrateModule"
+    MOVE_TO_MAINTENANCE_POSITION = "moveToMaintenancePosition"
+    UPDATE_POSITION_ESTIMATORS = "updatePositionEstimators"
+
+    # --- Pressure / Liquid Probing (Flex Specific) ---
+    LIQUID_PROBE = "liquidProbe"
+    TRY_LIQUID_PROBE = "tryLiquidProbe"
+    SEAL_PIPETTE_TO_TIP = "sealPipetteToTip"
+    UNSEAL_PIPETTE_FROM_TIP = "unsealPipetteFromTip"
+    PRESSURE_DISPENSE = "pressureDispense"
