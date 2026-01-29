@@ -24,7 +24,7 @@ def map_pipette_model(hardware_model: str) -> str:
 
 
 async def main():
-    bot = FlexController("192.168.1.100")
+    bot = FlexController("169.254.143.61")
     await bot.connect()
 
     try:
@@ -55,17 +55,19 @@ async def main():
             wait=True,
         )
         print(f"Pipette Loaded Successfully: {load_result}.")
-
-        move_result = await bot.runs.execute_maintenance_command(
-            command_type="moveToCoordinates",
-            params={
-                "pipetteId": LOGICAL_ID,
-                "coordinates": {"x": 100.0, "y": 100.0, "z": 150.0},
-                "minimumZHeight": 50.0,
-            },
-            wait=True,
+        await bot.runs.execute_maintenance_command(
+            command_type="home", params={"target": "robot"}, wait=True
         )
-        print("Move Complete:", move_result)
+        # move_result = await bot.runs.execute_maintenance_command(
+        #     command_type="moveToCoordinates",
+        #     params={
+        #         "pipetteId": LOGICAL_ID,
+        #         "coordinates": {"x": 50.0, "y": 200.0, "z": 150.0},
+        #         "minimumZHeight": 50.0,
+        #     },
+        #     wait=True,
+        # )
+        # print("Move Complete:", move_result)
 
     except Exception as e:
         print(f"Command Failed: {e}")
