@@ -28,9 +28,8 @@ async def main():
     await bot.connect()
 
     try:
-        print("--- 1. Hardware Discovery ---")
         instruments = await bot.hardware.get_instruments()
-
+        print(f"Found instruments:\n{instruments}")
         left_physical = next(
             (i for i in instruments if i.mount == "left" and i.is_pipette), None
         )
@@ -49,7 +48,7 @@ async def main():
         load_result = await bot.runs.execute_maintenance_command(
             command_type="loadPipette",
             params={
-                "pipetteName": load_name,  # Use the Mapped Name
+                "pipetteName": load_name,
                 "mount": "left",
                 "pipetteId": LOGICAL_ID,
             },
