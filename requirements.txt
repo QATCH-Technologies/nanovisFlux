@@ -6,7 +6,7 @@ aiosignal==1.4.0
 attrs==25.4.0
 annotated-types==0.7.0
 opentrons==7.0.2
-opentrons-shared-data==opentrons-shared-data-8.8.1
+opentrons-shared-data==8.8.1
 pydantic==1.8.2
 # Required by opentrons API to be ==1.8.2
 python-dotenv==1.0.0

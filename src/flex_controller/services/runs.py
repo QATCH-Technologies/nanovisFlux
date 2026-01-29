@@ -151,7 +151,7 @@ class RunService:
         if not self.current_run_id:
             await self.create_run()
 
-        path = Endpoints.RUN_COMMANDS.format(run_id=self.current_run_id)
+        path = Endpoints.RUN_ACTIONS.format(run_id=self.current_run_id)
         payload = {
             "data": {"commandType": command_type, "params": params, "intent": intent}
         }
@@ -173,7 +173,7 @@ class RunService:
 
         return result_data
 
-    async def get_run_commands(self, run_id: str = None) -> List[RunCommandSummary]:
+    async def get_RUN_ACTIONS(self, run_id: str = None) -> List[RunCommandSummary]:
         """
         GET /runs/{runId}/commands
         """
@@ -181,7 +181,7 @@ class RunService:
         if not target_id:
             raise ValueError("No run specified.")
 
-        path = Endpoints.RUN_COMMANDS.format(run_id=target_id)
+        path = Endpoints.RUN_ACTIONS.format(run_id=target_id)
         data = await self.client.get(path)
         return [RunCommandSummary(**item) for item in data.get("data", [])]
 
@@ -265,7 +265,11 @@ class RunService:
         log.debug(f"Deleted maintenance run: {target_id}")
 
     async def execute_maintenance_command(
-        self, command_type: str, params: Dict[str, Any], wait: bool = True
+        self,
+        command_type: str,
+        params: Dict[str, Any],
+        wait: bool = True,
+        intent: str = "setup",
     ) -> Dict[str, Any]:
         """
         POST /maintenance_runs/{runId}/commands
