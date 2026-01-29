@@ -20,31 +20,42 @@ async def main():
     print("--- Starting Flex Bridge Demo ---")
 
     bot = FlexController(ROBOT_IP)
+    instruments = await bot.hardware.get_instruments()
+
+    # Find the pipette on the left mount
+    left_pipette = next(
+        (i for i in instruments if i.mount == "left" and i.is_pipette), None
+    )
+
+    if not left_pipette:
+        print("Error: No pipette found on Left mount.")
+        return
+
+    print(f"Using Pipette ID: {left_pipette.serialNumber}")
+
+    # 2. Execute Move with Correct Structure
+    # API expects:
+    # - pipetteId: UUID string
+    # - coordinates: {x, y, z} dictionary
+    # - minimumZHeight: (Optional) float
 
     try:
-        print("Connecting to robot...")
-        await bot.connect()
-        print("--- System Status ---")
-        sys_time = await bot.system.get_system_time()
-        print(f"Robot Time: {sys_time.systemTime} (Synced: {sys_time.synchronized})")
         ret = await bot.runs.execute_maintenance_command(
-            "moveToCoordinates",
-            {"mount": "left", "point": [100, 100, 0], "target": "mount"},
+            command_type="moveToCoordinates",
+            params={
+                "pipetteId": left_pipette.serialNumber,  # Use the UUID, not "left"
+                "coordinates": {"x": 100.0, "y": 100.0, "z": 50.0},
+                "minimumZHeight": 50.0,
+            },
             wait=True,
-            intent="protocol",
+            intent="setup",
         )
-        # ret = await bot.runs.execute_maintenance_command(
-        #     "commands",
-        #     wait=True,
-        # )
-        print(ret)
-    except Exception as e:
-        log.critical(f"Bridge Script Crashed: {e}", exc_info=True)
+        print("Command Success:", ret)
 
-    finally:
-        print("Disconnecting...")
-        await bot.disconnect()
-        print("--- Demo Complete ---")
+    except Exception as e:
+        print(f"Command Failed: {e}")
+
+    await bot.disconnect()
 
 
 if __name__ == "__main__":

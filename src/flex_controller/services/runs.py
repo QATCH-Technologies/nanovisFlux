@@ -173,7 +173,7 @@ class RunService:
 
         return result_data
 
-    async def get_RUN_ACTIONS(self, run_id: str = None) -> List[RunCommandSummary]:
+    async def get_run_actions(self, run_id: str = None) -> List[RunCommandSummary]:
         """
         GET /runs/{runId}/commands
         """
@@ -274,6 +274,13 @@ class RunService:
         """
         POST /maintenance_runs/{runId}/commands
         Execute immediate command.
+
+        Args:
+            command_type: Protocol Engine command (e.g., 'moveToCoordinates').
+            params: Command parameters.
+            wait: If True, blocks until command completes.
+            intent: 'setup' (default) or 'fixit' (for recovery).
+                    Note: 'protocol' intent is rarely used in maintenance runs.
         """
         if not self.current_maintenance_run_id:
             await self.create_maintenance_run()
@@ -281,11 +288,12 @@ class RunService:
         path = (
             f"{Endpoints.MAINTENANCE_RUNS}/{self.current_maintenance_run_id}/commands"
         )
+
         payload = {
-            "data": {"commandType": command_type, "params": params, "intent": "setup"}
+            "data": {"commandType": command_type, "params": params, "intent": intent}
         }
 
-        qs_params = {"waitUntilComplete": "true", "timeout": "infinite"} if wait else {}
+        qs_params = {"waitUntilComplete": "true"} if wait else {}
 
         response = await self.client.post(path, json=payload, params=qs_params)
         result_data = response.get("data", {})
