@@ -1,5 +1,3 @@
-
-
 from src.flex_controller.client import FlexHTTPClient
 from src.flex_controller.constants import APIDefaults
 from src.flex_controller.models import Health
@@ -16,6 +14,7 @@ from src.flex_controller.services.modules import ModuleService
 from src.flex_controller.services.motors import MotorService
 from src.flex_controller.services.networking import NetworkingService
 from src.flex_controller.services.pipettes import PipetteService
+from src.flex_controller.services.run_management import RunManagementService
 from src.flex_controller.services.settings import SettingsService
 
 # Logging import
@@ -87,6 +86,7 @@ class FlexController:
         self.health = HealthService(self._client)
         self.client_data = ClientDataservice(self._client)
         self.labware_offset_management = LabwareOffsetManagementService(self._client)
+        self.runs = RunManagementService(self._client)
 
         # CameraService disabled for Flex as it has no camera.
         # self.camera = CameraService(self._client)
