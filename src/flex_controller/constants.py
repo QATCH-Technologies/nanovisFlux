@@ -1,3 +1,4 @@
+import enum
 from enum import Enum
 
 
@@ -7,65 +8,39 @@ class APIDefaults:
     DEFAULT_TIMEOUT = 30
 
 
+class StatusCodes:
+    OK = 200
+    CREATED = 201
+    ACCEPTED = 202
+    NO_CONTENT = 204
+    BAD_REQUEST = 400
+    UNAUTHORIZED = 401
+    NOT_FOUND = 404
+    CONFLICT = 409
+    UNPROCESSABLE_ENTITY = 422
+    INTERNAL_SERVER_ERROR = 500
+
+
 class Endpoints:
-    # --- System & Connection ---
-    HEALTH = "/health"
-    NETWORKING_STATUS = "/networking/status"
-    WIFI_LIST = "/wifi/list"
-    WIFI_CONFIGURE = "/wifi/configure"
-    WIFI_DISCONNECT = "/wifi/disconnect"
-    WIFI_KEYS = "/wifi/keys"
-    WIFI_EAP_OPTIONS = "/wifi/eap-options"
-    SYSTEM_TIME = "/system/time"
-    SETTINGS = "/settings"
-    SETTINGS_ROBOT = "/settings/robot"
-    SETTINGS_RESET_OPTIONS = "/settings/reset/options"
-    SETTINGS_RESET = "/settings/reset"
-    LOG_LEVEL_LOCAL = "/settings/log_level/local"
+    # DELETE endpoints
+    DELETE_WIFI_KEYS = "/wifi/keys/{key_uuid}"
 
-    # --- Hardware & Subsystems ---
-    SUBSYSTEMS_STATUS = "/subsystems/status"
-    SUBSYSTEMS_UPDATES_CURRENT = "/subsystems/updates/current"
-    # Format with .format(subsystem=...)
-    SUBSYSTEM_UPDATE = "/subsystems/updates/{subsystem}"
-    MODULES = "/modules"
-    # Format with .format(serial=...)
-    MODULE_UPDATE = "/modules/{serial}/update"
-    INSTRUMENTS = "/instruments"
-    PIPETTES = "/pipettes"  # Legacy/Compat
+    # GET endpoints
+    GET_NETWORKING_STATUS = "/networking/status"
+    GET_WIFI_LIST = "/wifi/list"
+    GET_WIFI_CONFIGURE = "/wifi/configure"
+    GET_WIFI_KEYS = "/wifi/keys"
+    GET_WIFI_EAP_OPTIONS = "/wifi/eap-options"
+    GET_ROBOT_POSITIONS = "/robot/positions"
+    GET_ROBOT_LIGHTS = "/robot/lights"
 
-    # --- Motor Controls ---
-    MOTORS_ENGAGED = "/motors/engaged"
-    MOTORS_DISENGAGED = "/motors/disengaged"
-    ROBOT_LIGHTS = "/robot/lights"
-    IDENTIFY = "/identify"
+    # POST endpoints
+    POST_WIFI_KEYS = "/wifi/keys"
+    POST_WIFI_DISCONNECT = "/wifi/disconnect"
+    POST_IDENTIFY = "/identify"
+    POST_ROBOT_MOVE = "/robot/move"
+    POST_ROBOT_HOME = "/robot/home"
+    POST_ROBOT_LIGHTS = "/robot/lights"
+    POST_SETTINGS = "/robot/settings"
 
-    # --- Safety ---
-    ESTOP_STATUS = "/robot/control/estopStatus"
-    ESTOP_ACK = "/robot/control/acknowledgeEstopDisengage"
-    DOOR_STATUS = "/robot/door/status"
-
-    # --- Runs & Protocol Engine ---
-    RUNS = "/runs"
-    MAINTENANCE_RUNS = "/maintenance_runs"
-    MAINTENANCE_RUNS_CURRENT = "/maintenance_runs/current_run"
-    PROTOCOLS = "/protocols"
-    PROTOCOL_ANALYSES = "/protocols/{protocol_id}/analyses"
-    COMMANDS = "/commands"  # Stateless/Simple commands
-    RUN_ACTIONS = "/runs/{run_id}/actions"
-
-    # --- Data & Configuration ---
-    CLIENT_DATA = "/clientData"
-    DATA_FILES = "/dataFiles"
-    DECK_CONFIGURATION = "/deck_configuration"
-    LABWARE_OFFSETS = "/labwareOffsets"
-    LABWARE_OFFSETS_SEARCH = "/labwareOffsets/searches"
-
-    # --- Calibration ---
-    CALIBRATION_STATUS = "/calibration/status"
-    CALIBRATION_PIPETTE_OFFSET = "/calibration/pipette_offset"
-    CALIBRATION_TIP_LENGTH = "/calibration/tip_length"
-
-    # --- Logging ---
-    # Format with .format(log_type=...)
-    LOGS_FETCH = "/logs/{log_type}"
+    # PUT endpoints
