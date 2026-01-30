@@ -2349,12 +2349,31 @@ class SavePositionParams(BaseModel):
 
 class TipPickUpParams(BaseModel):
     """
-    Advanced parameters for the physical engagement of a tip,
-    including press force and speed.
+    Detailed mechanical parameters for the physical engagement of a tip.
+    Used primarily in 'sealPipetteToTip' commands to manage precise
+    vertical distances for the press and sensor backing-off.
     """
 
-    force: Optional[float] = Field(None, description="Press force in Newtons.")
-    speed: Optional[float] = Field(None, description="Approach speed in mm/s.")
+    prepDistance: float = Field(
+        0.0,
+        description=(
+            "The initial distance (mm) to move down to begin fitting the tips "
+            "before applying the full press force."
+        ),
+    )
+    pressDistance: float = Field(
+        0.0,
+        description="The distance (mm) to further press into the tips to ensure a seal.",
+    )
+    ejectorPushMm: float = Field(
+        0.0,
+        description=(
+            "The distance (mm) to move the ejector back to ensure the "
+            "internal tip presence sensors are cleared after engagement."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
 
 
 # --- Seal Pipette to Tip Command ---
@@ -2429,6 +2448,556 @@ class SetStatusBarParams(BaseModel):
 
     animation: StatusBarAnimation = Field(
         ..., description="The animation that should be executed on the status bar."
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class StackerStoredLabwareDetails(BaseModel):
+    """Reference to the specific labware definition stored in the stacker."""
+
+    loadName: str = Field(..., description="The labware definition name.")
+    namespace: str = Field(..., description="Namespace (e.g., 'opentrons').")
+    version: int = Field(..., description="The version of the definition.")
+
+
+class SetStoredLabwareParams(BaseModel):
+    """
+    Defines the initial contents of a Flex Stacker hopper.
+    Handles complex logic for initial counts and pre-existing labware IDs.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Flex Stacker.")
+    primaryLabware: StackerStoredLabwareDetails = Field(
+        ..., description="The main labware (e.g., a 96-well plate) in the stack."
+    )
+    lidLabware: Optional[StackerStoredLabwareDetails] = Field(
+        None, description="Details of the lid on the primary labware, if any."
+    )
+    adapterLabware: Optional[StackerStoredLabwareDetails] = Field(
+        None, description="Details of the adapter under the primary labware, if any."
+    )
+    initialCount: Optional[int] = Field(
+        None, ge=0, description="Total number of items initially in the stacker."
+    )
+    initialStoredLabware: Optional[List[StackerStoredLabwareGroup]] = Field(
+        None, description="Ordered list of specific IDs in the stacker (bottom to top)."
+    )
+    poolOverlapOverride: Optional[float] = Field(
+        None,
+        description="Manual Z-stacking overlap in mm. Overrides labware definitions.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class SetTargetBlockTemperatureParams(BaseModel):
+    """
+    Input parameters to set a Thermocycler's target block temperature.
+    Used for steady-state temperature control or pre-warming.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Thermocycler Module.")
+    celsius: float = Field(
+        ..., title="Celsius", description="Target temperature in °C."
+    )
+    blockMaxVolumeUl: Optional[float] = Field(
+        None,
+        description=(
+            "Maximum liquid volume in uL. Helps the controller "
+            "calculate ramp rates and thermal load."
+        ),
+    )
+    holdTimeSeconds: Optional[float] = Field(
+        None,
+        description=(
+            "Optional duration to hold the temperature. If provided, "
+            "subsequent 'waitForBlockTemperature' commands will respect this timer."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class SetTargetLidTemperatureParams(BaseModel):
+    """
+    Input parameters to set the Thermocycler's heated lid temperature.
+    Ensures condensation does not form on the top of the PCR plate/tubes.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Thermocycler Module.")
+    celsius: float = Field(
+        ..., title="Celsius", description="Target lid temperature in °C."
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class StackerLabwareMovementStrategy(str, Enum):
+    """Strategy for moving labware within the stacker system."""
+
+    AUTOMATIC = "automatic"
+    MANUAL = "manual"
+
+
+class StoreParams(BaseModel):
+    """
+    Input parameters for a labware storage command.
+    Moves labware from the transfer position into the stacker hopper.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Flex Stacker module.")
+    strategy: StackerLabwareMovementStrategy = Field(
+        ...,
+        description=(
+            "Use 'automatic' for standard robot-controlled storage. "
+            "Use 'manual' if the labware was placed in the hopper by a user "
+            "(common in error recovery scenarios)."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class TouchTipParams(BaseModel):
+    """
+    Payload required to perform a 'touch tip' action.
+    The pipette moves to the sides of the well to remove residual droplets.
+    """
+
+    pipetteId: str = Field(
+        ..., description="Identifier of pipette to use for liquid handling."
+    )
+    labwareId: str = Field(..., description="Identifier of labware to use.")
+    wellName: str = Field(..., description="Name of well (e.g., 'A1').")
+    wellLocation: Optional[LiquidHandlingWellLocation] = Field(
+        default_factory=lambda: LiquidHandlingWellLocation(
+            origin=WellOrigin.TOP, offset=WellOffset(z=-1.0)
+        ),
+        description="The Z-height relative to the well at which to touch the sides.",
+    )
+    radius: float = Field(
+        1.0,
+        description=(
+            "The proportion of the target well's radius the pipette tip will move towards. "
+            "1.0 is the very edge."
+        ),
+    )
+    mmFromEdge: Optional[float] = Field(
+        None,
+        description=(
+            "Offset away from the well edge in mm. "
+            "Incompatible with radius values other than 1.0."
+        ),
+    )
+    speed: Optional[float] = Field(
+        None,
+        description="Override the travel speed in mm/s for the side-to-side motion.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class TryLiquidProbeParams(BaseModel):
+    """
+    Parameters required for a liquid probe attempt.
+    This command uses the pipette's pressure sensors to detect the
+    liquid-air interface. Unlike 'liquidProbe', this 'try' variant
+    is typically non-terminating on failure, allowing for custom
+    error handling logic.
+    """
+
+    pipetteId: str = Field(
+        ..., description="Identifier of pipette to use for liquid handling."
+    )
+    labwareId: str = Field(..., description="Identifier of labware to use.")
+    wellName: str = Field(..., description="Name of well (e.g., 'C3').")
+    wellLocation: Optional[LiquidHandlingWellLocation] = Field(
+        default_factory=lambda: LiquidHandlingWellLocation(
+            origin=WellOrigin.TOP, offset=WellOffset(z=0.0)
+        ),
+        description="The location (usually the top of the well) where the probing search begins.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafeBlowOutInPlaceParams(BaseModel):
+    """
+    Payload required to blow-out in place.
+    """
+
+    pipetteId: str = Field(
+        ..., description="Identifier of pipette to use for liquid handling."
+    )
+    flowRate: float = Field(
+        ..., gt=0, description="Speed in µL/s for the air expulsion."
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafeEngageAxesParams(BaseModel):
+    """
+    Payload required to enable power/holding torque to specific motor axes.
+    Useful for 'locking' the robot's position after a manual move or
+    re-engaging motors after a safe-stop.
+    """
+
+    axes: List[MotorAxis] = Field(
+        ..., description="List of axes to enable (e.g., ['x', 'y', 'leftZ'])."
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafeFlexStackerCloseLatchParams(BaseModel):
+    """
+    Parameters for manually closing the Flex Stacker latch.
+    WARNING: This does not perform safety checks for labware alignment
+    or gripper clearance. Use primarily for low-level recovery or
+    specialized hand-off routines.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Flex Stacker module.")
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafeFlexStackerOpenLatchParams(BaseModel):
+    """
+    Parameters for manually opening the Flex Stacker latch.
+    WARNING: This command bypasses safety checks. Ensure the gripper
+    is not currently holding the labware and that the elevator is
+    in a safe state to prevent labware from shifting or falling.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Flex Stacker module.")
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafeFlexStackerPrepareShuttleParams(BaseModel):
+    """
+    Parameters to manually position the Flex Stacker shuttle.
+    This is often used to align the shuttle for a retrieval or storage
+    operation when standard high-level commands are interrupted.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Flex Stacker module.")
+    ignoreLatch: bool = Field(
+        False,
+        description=(
+            "If True, the shuttle will move regardless of the latch sensor state. "
+            "Use with caution to avoid mechanical interference."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafePlaceLabwareParams(BaseModel):
+    """
+    Payload required to programmatically update the location of a labware
+    instance without a physical move command.
+    """
+
+    labwareURI: str = Field(
+        ...,
+        description="The URI identifying the labware definition (e.g., 'opentrons/opentrons_96_wellplate_200ul_pcr/1').",
+    )
+    location: Union[
+        DeckSlotLocation, ModuleLocation, OnLabwareLocation, AddressableAreaLocation
+    ] = Field(..., description="The new logical location for this labware.")
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsafeUngripLabwareParams(BaseModel):
+    """
+    Payload required to force the gripper to release its current load.
+    WARNING: This command does not verify if the labware is safely
+    supported. Use only after a manual Z-move or during error recovery.
+    """
+
+    model_config = {"extra": "forbid"}
+
+
+class UnsealPipetteFromTipParams(BaseModel):
+    """
+    Payload required to unseal and drop a tip into a specific well or waste bin.
+    This triggers the physical ejection mechanism to break the airtight seal.
+    """
+
+    pipetteId: str = Field(
+        ..., description="Identifier of pipette to use for liquid handling."
+    )
+    labwareId: str = Field(
+        ..., description="Identifier of target labware (e.g., a waste bin or tip rack)."
+    )
+    wellName: str = Field(
+        ..., description="Name of the well or location to drop the tip into."
+    )
+    wellLocation: Optional[DropTipWellLocation] = Field(
+        default_factory=DropTipWellLocation,
+        description="Relative well location for the drop operation.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class UpdatePositionEstimatorsParams(BaseModel):
+    """
+    Payload required to sync the robot's digital position estimators
+    with physical motor encoders.
+
+    This is essential after high-force operations (like tip pickup) or
+    potential stalls to maintain micron-level accuracy without homing.
+    """
+
+    axes: List[MotorAxis] = Field(
+        ...,
+        description=(
+            "The axes (e.g., 'x', 'y', 'leftZ') to update. "
+            "Non-existent axes on the hardware will be silently ignored."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class TipPresenceStatus(str, Enum):
+    """Possible tip states detected by the pipette sensors."""
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+
+
+class InstrumentSensorId(str, Enum):
+    """Identifiers for the redundant sensors in the pipette nozzle."""
+
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+    BOTH = "both"
+
+
+class VerifyTipPresenceParams(BaseModel):
+    """
+    Payload for hardware-level verification of tip attachment.
+    If the actual state doesn't match the 'expectedState', the
+    robot will typically trigger a recovery or error.
+    """
+
+    pipetteId: str = Field(..., description="Identifier of pipette to verify.")
+    expectedState: TipPresenceStatus = Field(
+        ..., description="The state you expect the sensors to report."
+    )
+    followSingularSensor: Optional[InstrumentSensorId] = Field(
+        None,
+        description=(
+            "Optional sensor override. Useful if one sensor is known "
+            "to be malfunctioning or if using specialized tips."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class WaitForBlockTemperatureParams(BaseModel):
+    """
+    Input parameters to wait for the Thermocycler's target block temperature.
+    This command blocks execution until the block reaches the temperature
+    set by a previous 'setTargetBlockTemperature' call.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Thermocycler Module.")
+
+    model_config = {"extra": "forbid"}
+
+
+class WaitForDurationParams(BaseModel):
+    """
+    Payload required to pause the protocol for a specific duration.
+    Useful for timed incubations or allowing mechanical oscillations to settle.
+    """
+
+    seconds: float = Field(..., description="Duration, in seconds, to wait for.")
+    message: Optional[str] = Field(
+        None,
+        description="A user-facing message displayed on the Flex touchscreen during the pause.",
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class WaitForLidTemperatureParams(BaseModel):
+    """
+    Input parameters to wait for the Thermocycler's target lid temperature.
+    Ensures the lid is at temperature before proceeding with sensitive steps
+    to prevent condensation on the labware seal.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Thermocycler Module.")
+
+    model_config = {"extra": "forbid"}
+
+
+class NoParams(BaseModel):
+    """
+    A generic empty parameter model for commands that require no input
+    (e.g., homing, stopping a shaker, or opening a module lid).
+    """
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__absorbance_reader__close_lid__CloseLidParams(
+    BaseModel
+):
+    """
+    Input parameters to close the lid on an absorbance reading.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the absorbance reader.")
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__absorbance_reader__open_lid__OpenLidParams(
+    BaseModel
+):
+    """
+    Input parameters to open the lid on an Absorbance Reader module.
+    This must be executed before a gripper or user can place labware
+    inside the module for a reading.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the absorbance reader.")
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__heater_shaker__wait_for_temperature__WaitForTemperatureParams(
+    BaseModel
+):
+    """
+    Input parameters to set a Heater-Shaker's target temperature.
+    Used for maintaining consistent incubation temperatures during agitation.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Heater-Shaker Module.")
+    celsius: float = Field(..., description="Target temperature in °C.")
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__temperature_module__set_target_temperature__SetTargetTemperatureParams(
+    BaseModel
+):
+    """
+    Input parameters to wait for a Heater-Shaker's target temperature.
+    Blocks execution until the module stabilizes at the set temperature.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Heater-Shaker Module.")
+    celsius: Optional[float] = Field(
+        None,
+        description=(
+            "Target temperature in °C. Highly recommended to leave as None "
+            "to use the current module target."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__temperature_module__wait_for_temperature__WaitForTemperatureParams(
+    BaseModel
+):
+    """
+    Input parameters to set the target temperature for a Temperature Module.
+    Ideal for cooling reagents or stable incubation of sensitive liquids.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Temperature Module.")
+    celsius: float = Field(..., description="Target temperature in °C.")
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__thermocycler__close_lid__CloseLidParams(
+    BaseModel
+):
+    """
+    Input parameters to close a Thermocycler's lid.
+    This command initiates the motorized closing and sealing mechanism
+    of the Thermocycler module.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Thermocycler.")
+
+    model_config = {"extra": "forbid"}
+
+
+class opentrons__protocol_engine__commands__thermocycler__open_lid__OpenLidParams(
+    BaseModel
+):
+    """
+    Input parameters to open the lid of a Thermocycler module.
+    Essential for allowing gantry access to the thermal block.
+    """
+
+    moduleId: str = Field(..., description="Unique ID of the Thermocycler.")
+
+    model_config = {"extra": "forbid"}
+
+
+class robot_server__robot__calibration__check__models__SessionCreateParams(BaseModel):
+    """
+    Parameters to initialize a Calibration Health Check session.
+    This session allows the robot to verify its pipette-to-deck accuracy.
+    """
+
+    hasCalibrationBlock: bool = Field(
+        False,
+        description=(
+            "Whether to use the physical calibration block. "
+            "Using a block provides a more stable Z-axis reference."
+        ),
+    )
+    tipRacks: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "List of labware definitions for the racks to be used "
+            "during the calibration health check."
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
+class robot_server__robot__calibration__models__SessionCreateParams(BaseModel):
+    """
+    Parameters required to initiate Tip Length and Pipette Offset calibration.
+    These values determine how the robot calculates the exact Z-height of tips
+    and the X/Y centering of the pipette nozzle.
+    """
+
+    mount: Literal["left", "right"] = Field(
+        ...,
+        description="The physical mount (left or right) of the pipette to calibrate.",
+    )
+    hasCalibrationBlock: bool = Field(
+        False, description="Whether to use the physical calibration block for TLC."
+    )
+    tipRackDefinition: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Full labware definition of the tip rack. Defaults to existing calibration if None.",
+    )
+    shouldRecalibrateTipLength: bool = Field(
+        True,
+        description="If True, performs Tip Length Calibration before Pipette Offset calibration.",
     )
 
     model_config = {"extra": "forbid"}
