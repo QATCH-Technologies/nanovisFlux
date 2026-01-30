@@ -3617,16 +3617,26 @@ class NetworkingSecurityType(Enum):
     unsupported = 'unsupported'
 
 
+# class NetworkingStatus(BaseModel):
+#     status: ConnectivityStatus | None = Field(
+#         'none', description='Overall connectivity of the robot'
+#     )
+#     interfaces: dict[str, InterfaceStatus] | None = Field(
+#         default_factory=lambda: InterfaceStatus.parse_obj({}),
+#         description='Per-interface networking status. Properties are named for network interfaces',
+#         title='Interfaces',
+#     )
+
 class NetworkingStatus(BaseModel):
     status: ConnectivityStatus | None = Field(
-        'none', description='Overall connectivity of the robot'
+        default=ConnectivityStatus.none,
+        description='Overall connectivity of the robot'
     )
     interfaces: dict[str, InterfaceStatus] | None = Field(
-        default_factory=lambda: InterfaceStatus.parse_obj({}),
+        default_factory=dict, 
         description='Per-interface networking status. Properties are named for network interfaces',
         title='Interfaces',
     )
-
 
 class NextStepLink(BaseModel):
     url: str = Field(..., title='Url')

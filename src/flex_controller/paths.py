@@ -135,3 +135,9 @@ class Endpoints:
         LABWARE_OFFSET_ID = "/labwareOffsets/{id}"
         COMMAND_QUEUE = "/commands"
         COMMAND_ID = "/commands/{commandId}"
+
+    class Camera:
+        CAMERA_PICTURE = "/camera/picture"
+
+    class Logs:
+        LOG_IDENTIFIER = "/logs/{log_identifier}"

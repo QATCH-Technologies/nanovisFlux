@@ -1,15 +1,22 @@
-import asyncio
-from typing import Optional
 
-# Import the core client and constants
-from .client import FlexHTTPClient
-from .constants import APIDefaults
-from .services.calibration import CalibrationService
-from .services.hardware import HardwareService
-from .services.runs import RunService
 
-# Import Domain Services
-from .services.system import SystemService
+from src.flex_controller.client import FlexHTTPClient
+from src.flex_controller.constants import APIDefaults
+from src.flex_controller.models import Health
+from src.flex_controller.services.camera import CameraService
+from src.flex_controller.services.client_data import ClientDataservice
+from src.flex_controller.services.control import ControlService
+from src.flex_controller.services.deck_calibration import DeckCalibrationService
+from src.flex_controller.services.health import HealthService
+from src.flex_controller.services.labware_offset_management import (
+    LabwareOffsetManagementService,
+)
+from src.flex_controller.services.logs import LogsService
+from src.flex_controller.services.modules import ModuleService
+from src.flex_controller.services.motors import MotorService
+from src.flex_controller.services.networking import NetworkingService
+from src.flex_controller.services.pipettes import PipetteService
+from src.flex_controller.services.settings import SettingsService
 
 # Logging import
 try:
@@ -69,10 +76,20 @@ class FlexController:
         self._client = FlexHTTPClient(base_url)
 
         # 2. Initialize Domain Services (Namespaces)
-        self.system = SystemService(self._client)
-        self.runs = RunService(self._client)
-        self.hardware = HardwareService(self._client)
-        self.calibration = CalibrationService(self._client)
+        self.networking = NetworkingService(self._client)
+        self.control = ControlService(self._client)
+        self.settings = SettingsService(self._client)
+        self.deck_calibration = DeckCalibrationService(self._client)
+        self.modules = ModuleService(self._client)
+        self.pipettes = PipetteService(self._client)
+        self.motors = MotorService(self._client)
+        self.logs = LogsService(self._client)
+        self.health = HealthService(self._client)
+        self.client_data = ClientDataservice(self._client)
+        self.labware_offset_management = LabwareOffsetManagementService(self._client)
+
+        # CameraService disabled for Flex as it has no camera.
+        # self.camera = CameraService(self._client)
 
         self._initialized = True
         log.info(f"FlexController initialized at {base_url}")
