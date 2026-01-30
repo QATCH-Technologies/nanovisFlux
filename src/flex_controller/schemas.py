@@ -2843,7 +2843,7 @@ class WaitForLidTemperatureParams(BaseModel):
     model_config = {"extra": "forbid"}
 
 
-class NoParams(BaseModel):
+class _NoParams(BaseModel):
     """
     A generic empty parameter model for commands that require no input
     (e.g., homing, stopping a shaker, or opening a module lid).
