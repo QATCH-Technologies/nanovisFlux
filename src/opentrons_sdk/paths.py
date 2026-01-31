@@ -22,9 +22,6 @@ class Endpoints:
         LIGHTS = "/robot/lights"
         MOTORS_ENGAGED = "/motors/engaged"
         MOTORS_DISENGAGE = "/motors/disengage"
-        ESTOP_STATUS = "/robot/control/estopStatus"
-        ESTOP_ACKNOWLEDGE = "/robot/control/acknowledgeEstopDisengage"
-        DOOR_STATUS = "/robot/door/status"
 
     class Protocols:
         """Endpoints for managing protocol files and analyses."""
@@ -90,9 +87,6 @@ class Endpoints:
         RESET_OPTIONS = "/settings/reset/options"
         RESET = "/settings/reset"
         ROBOT_SETTINGS = "/settings/robot"
-        SYSTEM_TIME = "/system/time"
-        DECK_CONFIG = "/deck_configuration"
-        ERROR_RECOVERY = "/errorRecovery/settings"
 
     class Components:
         """Endpoints for attached hardware (Pipettes, Modules, Instruments)."""
@@ -100,25 +94,13 @@ class Endpoints:
         PIPETTES_ATTACHED = "/pipettes"
         PIPETTE_SETTINGS = "/settings/pipettes"
         PIPETTE_ID_SETTING = "/settings/pipettes/{pipette_id}"
-        MODULES_ATTACHED = "/modules"
         MODULE_COMMAND = "/modules/{serial}"
         MODULE_UPDATE = "/modules/{serial}/update"
-        INSTRUMENTS = "/instruments"
-        SUBSYSTEMS_STATUS = "/subsystems/status"
-        SUBSYSTEM_ID = "/subsystems/status/{subsystem}"
-        SUBSYSTEM_UPDATES = "/subsystems/updates/all"
 
     class Calibration:
         """Endpoints for calibration data and sessions."""
 
         STATUS = "/calibration/status"
-        PIPETTE_OFFSET = "/calibration/pipette_offset"
-        TIP_LENGTH = "/calibration/tip_length"
-        LABWARE_CALIBRATIONS = "/labware/calibrations"
-        LABWARE_CALIBRATION_ID = "/labware/calibrations/{calibrationId}"
-        SESSIONS_CREATE = "/sessions"
-        SESSIONS_ID = "/sessions/{sessionId}"
-        SESSION_COMMAND = "/sessions/{sessionId}/commands/execute"
 
     class Data:
         """Endpoints for file management and logs."""
@@ -133,11 +115,57 @@ class Endpoints:
         LABWARE_OFFSETS = "/labwareOffsets"
         LABWARE_OFFSET_SEARCH = "/labwareOffsets/searches"
         LABWARE_OFFSET_ID = "/labwareOffsets/{id}"
+
+    class SimpleCommands:
         COMMAND_QUEUE = "/commands"
         COMMAND_ID = "/commands/{commandId}"
+
+    class FlexDeckConfiguration:
+        DECK_CONFIG = "/deck_configuration"
 
     class Camera:
         CAMERA_PICTURE = "/camera/picture"
 
     class Logs:
         LOG_IDENTIFIER = "/logs/{log_identifier}"
+
+    class ErrorRecoverySettings:
+        ERROR_RECOVERY = "/errorRecovery/settings"
+
+    class AttachedModules:
+        MODULES_ATTACHED = "/modules"
+
+    class AttachedInstruments:
+        INSTRUMENTS = "/instruments"
+
+    class OT2CalibrationSessions:
+        SESSIONS_CREATE = "/sessions"
+        SESSIONS_ID = "/sessions/{sessionId}"
+        SESSION_COMMAND = "/sessions/{sessionId}/commands/execute"
+
+    class LabwareCalibrationManagement:
+        LABWARE_CALIBRATIONS = "/labware/calibrations"
+        LABWARE_CALIBRATION_ID = "/labware/calibrations/{calibrationId}"
+
+    class PipetteOffsetCalibrationManagement:
+        PIPETTE_OFFSET = "/calibration/pipette_offset"
+
+    class TipLengthCalibrationManagement:
+        TIP_LENGTH = "/calibration/tip_length"
+
+    class SystemControl:
+        SYSTEM_TIME = "/system/time"
+
+    class FlexSubsystemManagament:
+        SUBSYSTEMS_STATUS = "/subsystems/status"
+        SUBSYSTEM_ID = "/subsystems/status/{subsystem}"
+        SUBSYSTEM_UPDATES_ALL = "/subsystems/updates/all"
+        SUBSYSTEM_UPDATES_CURRENT = "/subsystems/updates/current"
+        SUBSYSTEM_UPDATES_CURRENT_SUBSYSTEM = "/subsystems/updates/current/{subsystem}"
+        SUBSYSTEM_UPDATES_ALL_ID = "/subsystems/updates/all/{id}"
+        SUBSYSTEM_UPDATES_SUBSYSTEM = "/subsystem/updates/{subsystem}"
+
+    class Robot:
+        ESTOP_STATUS = "/robot/control/estopStatus"
+        ESTOP_ACKNOWLEDGE = "/robot/control/acknowledgeEstopDisengage"
+        DOOR_STATUS = "/robot/door/status"

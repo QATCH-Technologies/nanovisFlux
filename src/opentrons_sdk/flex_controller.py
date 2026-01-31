@@ -1,21 +1,51 @@
-from src.flex_controller.client import FlexHTTPClient
-from src.flex_controller.constants import APIDefaults
-from src.flex_controller.models import Health
-from src.flex_controller.services.camera import CameraService
-from src.flex_controller.services.client_data import ClientDataservice
-from src.flex_controller.services.control import ControlService
-from src.flex_controller.services.deck_calibration import DeckCalibrationService
-from src.flex_controller.services.health import HealthService
-from src.flex_controller.services.labware_offset_management import (
+from src.opentrons_sdk.client import FlexHTTPClient
+from src.opentrons_sdk.constants import APIDefaults
+from src.opentrons_sdk.models import Health
+from src.opentrons_sdk.services.attached_instruments import AttachedInstrumentsService
+from src.opentrons_sdk.services.attached_modules import AttachedModulesService
+from src.opentrons_sdk.services.camera import CameraService
+from src.opentrons_sdk.services.client_data import ClientDataservice
+from src.opentrons_sdk.services.control import ControlService
+from src.opentrons_sdk.services.data_files_management import (
+    DataFilesManagamentService,
+)
+from src.opentrons_sdk.services.deck_calibration import DeckCalibrationService
+from src.opentrons_sdk.services.error_recovery_settings import (
+    ErrorRecoverySettingsService,
+)
+from src.opentrons_sdk.services.flex_deck_configuration import (
+    FlexDeckConfigurationService,
+)
+from src.opentrons_sdk.services.flex_subsystem_management import (
+    FlexSubsystemManagementService,
+)
+from src.opentrons_sdk.services.health import HealthService
+from src.opentrons_sdk.services.labware_calibration_management import (
+    LabwareCalibrationManagementService,
+)
+from src.opentrons_sdk.services.labware_offset_management import (
     LabwareOffsetManagementService,
 )
-from src.flex_controller.services.logs import LogsService
-from src.flex_controller.services.modules import ModuleService
-from src.flex_controller.services.motors import MotorService
-from src.flex_controller.services.networking import NetworkingService
-from src.flex_controller.services.pipettes import PipetteService
-from src.flex_controller.services.run_management import RunManagementService
-from src.flex_controller.services.settings import SettingsService
+from src.opentrons_sdk.services.logs import LogsService
+from src.opentrons_sdk.services.maintenance_run_management import (
+    MaintenanceRunManagementService,
+)
+from src.opentrons_sdk.services.modules import ModuleService
+from src.opentrons_sdk.services.motors import MotorService
+from src.opentrons_sdk.services.networking import NetworkingService
+from src.opentrons_sdk.services.pipette_offset_calibration_management import (
+    PipetteOffsetCalibrationManagementService,
+)
+from src.opentrons_sdk.services.pipettes import PipetteService
+from src.opentrons_sdk.services.protocol_management import ProtocolManagementService
+from src.opentrons_sdk.services.robot import RobotService
+from src.opentrons_sdk.services.run_management import RunManagementService
+from src.opentrons_sdk.services.settings import SettingsService
+from src.opentrons_sdk.services.simple_commands import SimpleCommandsService
+from src.opentrons_sdk.services.system_control import SystemControlService
+from src.opentrons_sdk.services.tip_length_calibration_management import (
+    TipLengthCalibrationManagementService,
+)
 
 # Logging import
 try:
@@ -86,8 +116,27 @@ class FlexController:
         self.health = HealthService(self._client)
         self.client_data = ClientDataservice(self._client)
         self.labware_offset_management = LabwareOffsetManagementService(self._client)
-        self.runs = RunManagementService(self._client)
-
+        self.run_mangament = RunManagementService(self._client)
+        self.maintenance_run_management = MaintenanceRunManagementService(self._client)
+        self.protocol_management = ProtocolManagementService(self._client)
+        self.data_files_management = DataFilesManagamentService(self._client)
+        self.simple_commands = SimpleCommandsService(self._client)
+        self.flex_deck_configuration = FlexDeckConfigurationService(self._client)
+        self.error_recovery_settings = ErrorRecoverySettingsService(self._client)
+        self.attached_modules = AttachedModulesService(self._client)
+        self.attached_instruments = AttachedInstrumentsService(self._client)
+        self.labware_calibration_management = LabwareCalibrationManagementService(
+            self._client
+        )
+        self.pipette_offset_calibration_management = (
+            PipetteOffsetCalibrationManagementService(self._client)
+        )
+        self.tip_length_calibartion_management = TipLengthCalibrationManagementService(
+            self._client
+        )
+        self.system_control = SystemControlService(self._client)
+        self.flex_subsystem_management = FlexSubsystemManagementService(self._client)
+        self.robot = RobotService(self._client)
         # CameraService disabled for Flex as it has no camera.
         # self.camera = CameraService(self._client)
 

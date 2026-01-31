@@ -1,7 +1,7 @@
 import asyncio
 import re
 
-from src.flex_controller.flex_controller import FlexController
+from src.opentrons_sdk.flex_controller import FlexController
 
 
 async def main():

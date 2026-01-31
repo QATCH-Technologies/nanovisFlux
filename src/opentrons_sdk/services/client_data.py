@@ -32,10 +32,12 @@ class ClientDataservice:
         data = await self.client.get(path)
         return data.get("data", {})
 
-    async def update_client_data(self, key: str, value: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_client_data(
+        self, key: str, value: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         PUT /clientData/{key}
-        Store a small amount of arbitrary client-defined data. 
+        Store a small amount of arbitrary client-defined data.
         Data is cleared when the robot reboots.
 
         Args:

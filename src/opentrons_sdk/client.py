@@ -165,6 +165,20 @@ class FlexHTTPClient:
             log.error(f"Connection failed: {e}")
             raise FlexConnectionError(f"Connection failed to {self.base_url}") from e
 
+    async def get_raw(
+        self, path: str, params: Optional[Dict[str, Any]] = None
+    ) -> bytes:
+        """
+        Executes a GET request and returns the raw binary content.
+        Used for file downloads and experimental 'asDocument' endpoints.
+        """
+        url = f"{self.base_url}{path}"
+        response = await self.get(
+            url, params=params, headers=APIDefaults.VERSION_HEADER
+        )
+        response.raise_for_status()
+        return response.content
+
     # --- Convenience Wrappers ---
 
     async def get(self, path: str, params: Optional[Dict] = None, **kwargs) -> Any:
