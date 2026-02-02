@@ -1,17 +1,24 @@
+"""
+src.opentrons_sdk.services.maintenance_run_management
+
+Service interface for maintenance run management.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, List, Optional, Union
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
+from pydantic import BaseModel
 
 
 class MaintenanceRunManagementService:
@@ -35,12 +42,11 @@ class MaintenanceRunManagementService:
         path = Paths.Endpoints.MaintenanceRuns.CREATE
         payload = None
         if run_data is not None:
-            if hasattr(run_data, "model_dump"):
+            if isinstance(run_data, BaseModel):
                 payload_data = run_data.model_dump(exclude_none=True)
             else:
                 payload_data = dict(run_data)
             payload = {"data": payload_data}
-
         data = await self.client.post(path, json=payload)
         return Models.SimpleBodyMaintenanceRun(**data)
 
@@ -160,15 +166,17 @@ class MaintenanceRunManagementService:
             offsets: A single offset, a list of offsets, or a raw dictionary.
         """
         path = Paths.Endpoints.MaintenanceRuns.LABWARE_OFFSETS.format(runId=run_id)
+
         if isinstance(offsets, list):
             payload_data = [
-                o.model_dump(exclude_none=True) if hasattr(o, "model_dump") else o
+                o.model_dump(exclude_none=True) if isinstance(o, BaseModel) else o
                 for o in offsets
             ]
-        elif hasattr(offsets, "model_dump"):
+        elif isinstance(offsets, BaseModel):
             payload_data = offsets.model_dump(exclude_none=True)
         else:
             payload_data = offsets
+
         payload = {"data": payload_data}
         data = await self.client.post(path, json=payload)
         return Models.SimpleBodyUnionLabwareOffsetListLabwareOffset(**data)
@@ -192,7 +200,7 @@ class MaintenanceRunManagementService:
         path = Paths.Endpoints.MaintenanceRuns.LABWARE_DEFS.format(runId=run_id)
         payload_data = (
             definition.model_dump(exclude_none=True)
-            if hasattr(definition, "model_dump")
+            if isinstance(definition, BaseModel)
             else definition
         )
         payload = {"data": payload_data}

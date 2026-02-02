@@ -5,21 +5,11 @@ import constants
 from loguru import logger
 
 
-def setup_logger(
-    log_dir: str,
-    level: str,
-    console_output: bool,
-):
-    """
-    Configures the nanovisFlux-wide logger.
-
-    Args:
-        console_output (bool): If True, prints logs to stdout/stderr.
-        log_dir (str): Directory where log files will be saved.
-        level (str): Minimum log level to capture (DEBUG, INFO, WARNING, ERROR).
-    """
+def setup_logger(log_dir: str, level: str, console_output: bool):
     logger.remove()
-    log_path = Path(log_dir)
+    project_root = Path(__file__).resolve().parent.parent.parent
+    clean_log_dir = log_dir.lstrip("\\/")
+    log_path = project_root / clean_log_dir
     log_path.mkdir(parents=True, exist_ok=True)
     logger.add(
         log_path / "nanovisFlux-{time:YYYY-MM-DD_HH-mm-ss}.log",

@@ -1,19 +1,22 @@
-import os
+"""
+src.opentrons_sdk.services.client_data
+
+Service interface for client data managment.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict
 
-import aiohttp
-import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class ClientDataservice:

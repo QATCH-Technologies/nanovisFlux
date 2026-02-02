@@ -1,19 +1,23 @@
-import os
+"""
+src.opentrons_sdk.services.modules
+
+Service interface for Opentrons module managment.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, Union
 
-import aiohttp
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class ModuleService:
@@ -21,9 +25,7 @@ class ModuleService:
         self.client = client
 
     async def execute_module_command(
-        self,
-        serial: str,
-        command: Union[Models.SerialCommand, Dict[str, Any]]
+        self, serial: str, command: Union[Models.SerialCommand, Dict[str, Any]]
     ) -> Models.SerialCommandResponse:
         """
         POST /modules/{serial}

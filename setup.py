@@ -17,7 +17,7 @@ setup(
         "aiohttp==3.9.1",
         "opentrons==7.0.2",
         "opentrons-shared-data==7.0.2",
-        "pydantic==2.5.3",
+        "pydantic==1.10.26",
         "python-dotenv==1.0.0",
         "loguru==0.7.2",
         "numpy==2.0.2",

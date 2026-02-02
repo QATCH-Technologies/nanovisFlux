@@ -1,17 +1,23 @@
+"""
+src.opentrons_sdk.services.labware_offset_management
+
+Service interface for managing labware offsets.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, List, Optional, Union
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class LabwareOffsetManagementService:
@@ -19,9 +25,7 @@ class LabwareOffsetManagementService:
         self.client = client
 
     async def get_labware_offsets(
-        self,
-        cursor: Optional[int] = None,
-        page_length: Union[int, str] = "unlimited"
+        self, cursor: Optional[int] = None, page_length: Union[int, str] = "unlimited"
     ) -> Models.SimpleMultiBodyStoredLabwareOffset:
         """
         GET /labwareOffsets
@@ -33,16 +37,19 @@ class LabwareOffsetManagementService:
             page_length: The maximum number of entries to return (integer or "unlimited").
         """
         path = Paths.Endpoints.Data.LABWARE_OFFSETS
-        params = {
-            "cursor": cursor,
-            "pageLength": page_length
-        }
-        data = await self.client.get(path, params={k: v for k, v in params.items() if v is not None})
+        params = {"cursor": cursor, "pageLength": page_length}
+        data = await self.client.get(
+            path, params={k: v for k, v in params.items() if v is not None}
+        )
         return Models.SimpleMultiBodyStoredLabwareOffset(**data)
 
     async def add_labware_offsets(
         self,
-        offsets: Union[Models.StoredLabwareOffsetCreate, List[Models.StoredLabwareOffsetCreate], Dict[str, Any]]
+        offsets: Union[
+            Models.StoredLabwareOffsetCreate,
+            List[Models.StoredLabwareOffsetCreate],
+            Dict[str, Any],
+        ],
     ) -> Models.SimpleBodyUnionStoredLabwareOffsetListStoredLabwareOffset:
         """
         POST /labwareOffsets
@@ -54,11 +61,16 @@ class LabwareOffsetManagementService:
         path = Paths.Endpoints.Data.LABWARE_OFFSETS
 
         if isinstance(offsets, list):
-            payload_data = [o.model_dump(exclude_none=True) if hasattr(o, "model_dump") else o for o in offsets]
-        elif hasattr(offsets, "model_dump"):
-            payload_data = offsets.model_dump(exclude_none=True)
+            payload_data = [
+                o.model_dump(exclude_none=True) if hasattr(o, "model_dump") else o
+                for o in offsets
+            ]
         else:
-            payload_data = offsets
+            model_dump = getattr(offsets, "model_dump", None)
+            if model_dump and callable(model_dump):
+                payload_data = model_dump(exclude_none=True)
+            else:
+                payload_data = offsets
         payload = {"data": payload_data}
         data = await self.client.post(path, json=payload)
         return Models.SimpleBodyUnionStoredLabwareOffsetListStoredLabwareOffset(**data)
@@ -80,7 +92,7 @@ class LabwareOffsetManagementService:
         Search for labware offsets matching specific criteria.
 
         Args:
-            search_query: A SearchCreate model or dict containing search criteria 
+            search_query: A SearchCreate model or dict containing search criteria
                          (e.g., labware definition URI, location, etc.).
         """
         path = Paths.Endpoints.Data.LABWARE_OFFSET_SEARCH
@@ -95,7 +107,9 @@ class LabwareOffsetManagementService:
 
         return Models.SimpleMultiBodyStoredLabwareOffset(**data)
 
-    async def delete_labware_offset(self, offset_id: str) -> Models.SimpleBodyStoredLabwareOffset:
+    async def delete_labware_offset(
+        self, offset_id: str
+    ) -> Models.SimpleBodyStoredLabwareOffset:
         """
         DELETE /labwareOffsets/{id}
         Delete a single labware offset. The deleted offset is returned.

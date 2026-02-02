@@ -1,4 +1,20 @@
-# flex_endpoints.py
+"""
+src.opentrons_sdk.paths
+
+Contains all necessary endpoints for interacting with Opentrons robots
+over HTTP.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
+
 class Endpoints:
     class Networking:
         """Endpoints for network configuration and status."""

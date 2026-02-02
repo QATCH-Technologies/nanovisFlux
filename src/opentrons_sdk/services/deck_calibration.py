@@ -1,17 +1,21 @@
-from typing import Any, Dict, Union
+"""
+src.opentrons_sdk.services.deck_calibration
+
+Service interface for calibrating robot deck(s).
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class DeckCalibrationService:

@@ -2,19 +2,18 @@ import asyncio
 from typing import Any, Dict, Optional, Union
 
 import aiohttp
+from constants import APIDefaults
 
-# Import Constants
-from .constants import APIDefaults
-
-# Import Errors (Adjust path if your error file is located elsewhere)
 try:
     from src.common.error import (
         FlexCommandError,
+        FlexConflictError,
         FlexConnectionError,
         FlexMaintenanceError,
+        FlexNotFoundError,
     )
 except ImportError:
-    # Fallback for standalone testing
+
     class FlexCommandError(Exception):
         pass
 
@@ -24,8 +23,13 @@ except ImportError:
     class FlexMaintenanceError(Exception):
         pass
 
+    class FlexConflictError(FlexCommandError):
+        pass
 
-# Logging Setup
+    class FlexNotFoundError(FlexCommandError):
+        pass
+
+
 try:
     from src.common.log import get_logger
 
@@ -37,21 +41,13 @@ except ImportError:
 
 
 class FlexHTTPClient:
-    """
-    Centralized HTTP Client for Opentrons Flex.
-    Handles session management, headers, timeouts, and exception translation.
-    """
 
     def __init__(self, base_url: str):
-        # Ensure no trailing slash to avoid // in URLs
         self.base_url = base_url.rstrip("/")
         self.session: Optional[aiohttp.ClientSession] = None
-
-        # Default timeout from constants
         self.default_timeout = aiohttp.ClientTimeout(total=APIDefaults.DEFAULT_TIMEOUT)
 
     async def connect(self):
-        """Initializes the aiohttp ClientSession if not already open."""
         if not self.session or self.session.closed:
             log.debug(f"Opening new HTTP Session to {self.base_url}")
             self.session = aiohttp.ClientSession(
@@ -59,11 +55,26 @@ class FlexHTTPClient:
             )
 
     async def close(self):
-        """Closes the active session."""
         if self.session and not self.session.closed:
             await self.session.close()
             self.session = None
             log.debug("HTTP Session closed.")
+
+    def _parse_opentrons_error(self, error_body: Union[Dict, str]) -> str:
+        if isinstance(error_body, dict):
+            if "errors" in error_body and isinstance(error_body["errors"], list):
+                messages = []
+                for err in error_body["errors"]:
+                    title = err.get("title", "Error")
+                    detail = err.get("detail", "")
+                    msg = f"{title}: {detail}" if detail else title
+                    messages.append(msg)
+                return " | ".join(messages)
+            if "message" in error_body:
+                return str(error_body["message"])
+            if "detail" in error_body:
+                return str(error_body["detail"])
+        return str(error_body)
 
     async def request(
         self,
@@ -76,33 +87,13 @@ class FlexHTTPClient:
         **kwargs,
     ) -> Any:
         """
-        Core request handler.
-
-        Args:
-            method: GET, POST, PUT, DELETE, PATCH.
-            path: Endpoint path (e.g., '/health').
-            params: URL Query parameters.
-            json: JSON body payload.
-            data: Raw data or FormData (for file uploads).
-            timeout: Custom timeout in seconds (overrides default).
-
-        Returns:
-            The parsed JSON response or raw text.
-
-        Raises:
-            FlexConnectionError: Network issues.
-            FlexMaintenanceError: Robot is booting (503).
-            FlexCommandError: 4xx or 5xx API errors.
+        Core request handler with enhanced Opentrons error parsing.
         """
         await self.connect()
-
         url = f"{self.base_url}{path}"
-
-        # Handle custom request-specific timeouts
-        request_timeout = self.default_timeout
-        if timeout:
-            request_timeout = aiohttp.ClientTimeout(total=timeout)
-
+        request_timeout = (
+            aiohttp.ClientTimeout(total=timeout) if timeout else self.default_timeout
+        )
         try:
             async with self.session.request(
                 method,
@@ -114,44 +105,31 @@ class FlexHTTPClient:
                 **kwargs,
             ) as resp:
 
-                # --- 1. Handle Opentrons Specific "Maintenance" State ---
-                # 503 usually means the Robot Server is up, but Motor Controller is down/updating.
                 if resp.status == 503:
                     try:
-                        error_data = await resp.json()
-                        msg = error_data.get("message", "Service Unavailable")
+                        text = await resp.text()
                     except Exception:
-                        msg = await resp.text()
-                    raise FlexMaintenanceError(f"System Busy (503): {msg}")
-
-                # --- 2. Handle Standard Errors (4xx - 5xx) ---
+                        text = "Service Unavailable"
+                    raise FlexMaintenanceError(f"System Busy (503): {text[:100]}")
                 if resp.status >= 400:
                     try:
                         error_body = await resp.json()
-                        # Opentrons usually puts details in 'message' or 'errors' list
-                        if "message" in error_body:
-                            detail = error_body["message"]
-                        elif "errors" in error_body and isinstance(
-                            error_body["errors"], list
-                        ):
-                            detail = str(error_body["errors"])
-                        elif "detail" in error_body:
-                            detail = str(error_body["detail"])
-                        else:
-                            detail = str(error_body)
                     except Exception:
-                        detail = await resp.text()
+                        error_body = await resp.text()
 
-                    log.error(f"API Error {resp.status} on {method} {path}: {detail}")
-                    raise FlexCommandError(f"HTTP {resp.status}: {detail}")
+                    error_msg = self._parse_opentrons_error(error_body)
+                    log.error(
+                        f"API Error {resp.status} on {method} {path}: {error_msg}"
+                    )
+                    if resp.status == 409:
+                        raise FlexConflictError(f"Conflict (409): {error_msg}")
+                    if resp.status == 404:
+                        raise FlexNotFoundError(f"Not Found (404): {error_msg}")
+                    raise FlexCommandError(f"HTTP {resp.status}: {error_msg}")
 
-                # --- 3. Handle Success (2xx) ---
-
-                # 204 No Content
                 if resp.status == 204:
                     return None
 
-                # Try parsing JSON, fallback to Text
                 try:
                     return await resp.json()
                 except Exception:
@@ -168,18 +146,31 @@ class FlexHTTPClient:
     async def get_raw(
         self, path: str, params: Optional[Dict[str, Any]] = None
     ) -> bytes:
-        """
-        Executes a GET request and returns the raw binary content.
-        Used for file downloads and experimental 'asDocument' endpoints.
-        """
+        await self.connect()
         url = f"{self.base_url}{path}"
-        response = await self.get(
-            url, params=params, headers=APIDefaults.VERSION_HEADER
-        )
-        response.raise_for_status()
-        return response.content
 
-    # --- Convenience Wrappers ---
+        try:
+            async with self.session.get(
+                url,
+                params=params,
+                headers=APIDefaults.VERSION_HEADER,
+                timeout=self.default_timeout,
+            ) as resp:
+
+                if resp.status >= 400:
+                    try:
+                        error_body = await resp.json()
+                    except:
+                        error_body = await resp.text()
+
+                    error_msg = self._parse_opentrons_error(error_body)
+                    raise FlexCommandError(
+                        f"Download Failed ({resp.status}): {error_msg}"
+                    )
+                return await resp.read()
+
+        except aiohttp.ClientError as e:
+            raise FlexConnectionError(f"Raw download failed: {e}") from e
 
     async def get(self, path: str, params: Optional[Dict] = None, **kwargs) -> Any:
         return await self.request("GET", path, params=params, **kwargs)

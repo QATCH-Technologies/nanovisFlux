@@ -1,3 +1,18 @@
+"""
+src.opentrons_sdk.services.networking
+
+Service interface for network management.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 import os
 from typing import Optional
 
@@ -5,15 +20,6 @@ import aiohttp
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class NetworkingService:
@@ -93,9 +99,7 @@ class NetworkingService:
         return Models.WifiKeyFiles(**data)
 
     async def add_wifi_key(
-        self,
-        file_path: str,
-        filename: Optional[str] = None
+        self, file_path: str, filename: Optional[str] = None
     ) -> Models.AddWifiKeyFileResponse:
         """
         POST /wifi/keys
@@ -103,7 +107,7 @@ class NetworkingService:
 
         Args:
             file_path: Local path to the key file (e.g., 'certs/my-cert.pem').
-            filename: Optional custom filename to store on the robot. 
+            filename: Optional custom filename to store on the robot.
                       Defaults to the basename of the file_path.
         """
         if not os.path.exists(file_path):
@@ -115,7 +119,7 @@ class NetworkingService:
             "key",
             open(file_path, "rb"),
             filename=final_filename,
-            content_type="application/octet-stream"
+            content_type="application/octet-stream",
         )
         response = await self.client.post(path, data=form_data)
         return Models.AddWifiKeyFileResponse(**response)

@@ -9,9 +9,9 @@ logger = get_logger("Error")
 
 
 class ErrorSeverity(str, Enum):
-    WARNING = "WARNING"
-    RECOVERABLE = "RECOVERABLE"
-    CRITICAL = "CRITICAL"
+    WARNING = "WARNING"  # Information/Minor issue (e.g., 404 Not Found)
+    RECOVERABLE = "RECOVERABLE"  # Can retry or wait (e.g., 409 Conflict, 503 Busy)
+    CRITICAL = "CRITICAL"  # Stop everything (e.g., Connection Refused)
 
 
 class ErrorSource(str, Enum):
@@ -36,14 +36,16 @@ class AbstractError(BaseModel):
 
 
 class FluxException(Exception):
+    """Base Exception for the entire application."""
+
     def __init__(
         self,
         message: str,
         code: str = "ERR_GENERIC",
         severity: ErrorSeverity = ErrorSeverity.WARNING,
         source: ErrorSource = ErrorSource.SYSTEM,
-        device_id: str = None,
-        original_exception: Exception = None,
+        device_id: Optional[str] = None,
+        original_exception: Optional[Exception] = None,
     ):
         super().__init__(message)
         self.message = message
@@ -52,7 +54,9 @@ class FluxException(Exception):
         self.source = source
         self.device_id = device_id
         self.original_exception = original_exception
-        logger.error(self.to_schema())
+
+        # Auto-log on creation
+        logger.error(f"[{self.code}] {self.message}")
 
     def to_schema(self) -> AbstractError:
         return AbstractError(
@@ -80,16 +84,68 @@ class SerialError(FluxException):
         )
 
 
-class FlexMaintenanceError(FluxException):
-    """Raised when the robot is reachable but currently performing maintenance (booting, updating)."""
-
-    pass
+# --- Opentrons Flex Specific Errors ---
 
 
-# --- Exceptions ---
-class FlexConnectionError(FluxException):
-    pass
+class FlexBaseError(FluxException):
+    """Base class for all Flex errors to ensure correct Source."""
+
+    def __init__(self, message: str, code: str, severity: ErrorSeverity):
+        super().__init__(
+            message=message, code=code, severity=severity, source=ErrorSource.FLEX
+        )
 
 
-class FlexCommandError(FluxException):
-    pass
+class FlexConnectionError(FlexBaseError):
+    """Raised when the robot cannot be reached (Network/Timeout)."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="ERR_FLEX_CONN",
+            severity=ErrorSeverity.CRITICAL,  # Stop run immediately
+        )
+
+
+class FlexMaintenanceError(FlexBaseError):
+    """Raised when robot is reachable but booting or updating (HTTP 503)."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="ERR_FLEX_MAINT",
+            severity=ErrorSeverity.RECOVERABLE,  # Wait and retry
+        )
+
+
+class FlexConflictError(FlexBaseError):
+    """Raised when a command conflicts with current robot state (HTTP 409)."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="ERR_FLEX_CONFLICT",
+            severity=ErrorSeverity.RECOVERABLE,  # Logic error, but robot is fine
+        )
+
+
+class FlexNotFoundError(FlexBaseError):
+    """Raised when a resource (run, labware, protocol) is missing (HTTP 404)."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message, code="ERR_FLEX_NOT_FOUND", severity=ErrorSeverity.WARNING
+        )
+
+
+class FlexCommandError(FlexBaseError):
+    """Generic fallback for other 4xx/5xx API errors."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message, code="ERR_FLEX_CMD", severity=ErrorSeverity.CRITICAL
+        )
+
+
+if __name__ == "__main__":
+    raise FlexCommandError("Test Error")

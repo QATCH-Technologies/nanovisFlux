@@ -1,16 +1,22 @@
+"""
+src.opentrons_sdk.services.labware_calibration_management
+
+Service interface for managing labware calibration.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, Optional
 
 import models as Models
 import paths as Paths
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class LabwareCalibrationManagementService:

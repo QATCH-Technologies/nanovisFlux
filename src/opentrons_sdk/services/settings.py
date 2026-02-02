@@ -1,17 +1,23 @@
+"""
+src.opentrons_sdk.services.settings
+
+Service interface for general Opentrons settings.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, Union
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class SettingsService:
@@ -107,7 +113,6 @@ class SettingsService:
         """
         path = Paths.Endpoints.SystemSettings.RESET
         data = await self.client.post(path, json=options)
-        log.warning("Robot settings reset initiated. A manual restart is recommended.")
         return Models.V1BasicResponse(**data)
 
     async def get_robot_settings(self) -> Dict[str, Any]:
@@ -140,14 +145,16 @@ class SettingsService:
 
         Note: Per the API spec, this is primarily available for OT-2.
         """
-        path = Paths.Endpoints.Components.PIPETTE_ID_SETTING.format(pipette_id=pipette_id)
+        path = Paths.Endpoints.Components.PIPETTE_ID_SETTING.format(
+            pipette_id=pipette_id
+        )
         data = await self.client.get(path)
         return Models.PipetteSettings(**data)
 
     async def update_pipette_settings(
-        self, 
-        pipette_id: str, 
-        settings_update: Union[Models.PipetteSettingsUpdate, Dict[str, Any]]
+        self,
+        pipette_id: str,
+        settings_update: Union[Models.PipetteSettingsUpdate, Dict[str, Any]],
     ) -> Models.PipetteSettings:
         """
         PATCH /settings/pipettes/{pipette_id}
@@ -159,7 +166,9 @@ class SettingsService:
             pipette_id: The unique ID of the pipette to update.
             settings_update: A PipetteSettingsUpdate model or dict containing the fields to change.
         """
-        path = Paths.Endpoints.Components.PIPETTE_ID_SETTING.format(pipette_id=pipette_id)
+        path = Paths.Endpoints.Components.PIPETTE_ID_SETTING.format(
+            pipette_id=pipette_id
+        )
         if isinstance(settings_update, Models.PipetteSettingsUpdate):
             payload = settings_update.model_dump(exclude_none=True)
         else:

@@ -1,17 +1,24 @@
+"""
+src.opentrons_sdk.services.run_management
+
+Service interface for management and creation of runs.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, List, Optional, Union
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
+from pydantic import BaseModel
 
 
 class RunManagementService:
@@ -51,8 +58,7 @@ class RunManagementService:
 
         payload = None
         if run_data is not None:
-            # Ensure the data is converted to a dictionary for the JSON body
-            if hasattr(run_data, "model_dump"):
+            if isinstance(run_data, BaseModel):
                 payload_data = run_data.model_dump(exclude_none=True)
             else:
                 payload_data = dict(run_data)
@@ -77,10 +83,11 @@ class RunManagementService:
         Update a specific run (e.g., setting it as the 'current' run).
         """
         path = Paths.Endpoints.Runs.UPDATE.format(runId=run_id)
-        if hasattr(update_data, "model_dump"):
+        if isinstance(update_data, BaseModel):
             payload_data = update_data.model_dump(exclude_none=True)
         else:
             payload_data = dict(update_data)
+
         payload = {"data": payload_data}
         data = await self.client.patch(path, json=payload)
         return Models.SimpleBodyRun(**data)
@@ -244,7 +251,7 @@ class RunManagementService:
                     Example: {"actionType": "play"}
         """
         path = Paths.Endpoints.Runs.ACTIONS.format(runId=run_id)
-        if hasattr(action, "model_dump"):
+        if isinstance(action, BaseModel):
             payload_data = action.model_dump(exclude_none=True)
         else:
             payload_data = dict(action)
@@ -270,10 +277,10 @@ class RunManagementService:
         path = Paths.Endpoints.Runs.LABWARE_OFFSETS.format(runId=run_id)
         if isinstance(offsets, list):
             payload_data = [
-                o.model_dump(exclude_none=True) if hasattr(o, "model_dump") else o
+                o.model_dump(exclude_none=True) if isinstance(o, BaseModel) else o
                 for o in offsets
             ]
-        elif hasattr(offsets, "model_dump"):
+        elif isinstance(offsets, BaseModel):
             payload_data = offsets.model_dump(exclude_none=True)
         else:
             payload_data = offsets
@@ -300,7 +307,7 @@ class RunManagementService:
         path = Paths.Endpoints.Runs.LABWARE_DEFS.format(runId=run_id)
         payload_data = (
             definition.model_dump(exclude_none=True)
-            if hasattr(definition, "model_dump")
+            if isinstance(definition, BaseModel)
             else definition
         )
         payload = {"data": payload_data}
@@ -347,7 +354,7 @@ class RunManagementService:
         path = Paths.Endpoints.Runs.ERROR_RECOVERY_POLICY.format(runId=run_id)
         payload_data = (
             policy.model_dump(exclude_none=True)
-            if hasattr(policy, "model_dump")
+            if isinstance(policy, BaseModel)
             else policy
         )
         payload = {"data": payload_data}

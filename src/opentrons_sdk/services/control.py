@@ -1,17 +1,23 @@
+"""
+src.opentrons_sdk.services.control
+
+Service interface for general controls.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, Union
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class ControlService:
@@ -43,12 +49,14 @@ class ControlService:
         data = await self.client.get(path)
         return Models.RobotPositionsResponse(**data)
 
-    async def move_robot(self, target: Union[Models.RobotMoveTarget, Dict[str, Any]]) -> Models.V1BasicResponse:
+    async def move_robot(
+        self, target: Union[Models.RobotMoveTarget, Dict[str, Any]]
+    ) -> Models.V1BasicResponse:
         """
         POST /robot/move
         Move the robot's gantry to a specific position.
 
-        WARNING: Deprecated. Prefer using 'moveToCoordinates' commands 
+        WARNING: Deprecated. Prefer using 'moveToCoordinates' commands
         within a Maintenance Run for safer, collision-aware movement on Flex.
 
         Args:

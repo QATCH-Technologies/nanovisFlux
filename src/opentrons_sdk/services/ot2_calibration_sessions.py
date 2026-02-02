@@ -1,16 +1,22 @@
+"""
+src.opentrons_sdk.services.ot2_calibration_sessions
+
+Service interface for deprecated OT-2 calibration.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 from typing import Any, Dict, Optional
 
 import models as Models
 import paths as Paths
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class OT2CalibrationSessionService:

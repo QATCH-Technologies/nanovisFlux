@@ -2,6 +2,8 @@
 #   filename:  openapi.json
 #   timestamp: 2026-01-30T19:06:28+00:00
 
+
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -317,7 +319,7 @@ class FlowRateByVolumeItem(BaseModel):
     __root__: tuple[
         FlowRateByVolumeItem1 | FlowRateByVolumeItem2,
         FlowRateByVolumeItem3 | FlowRateByVolumeItem4,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class CorrectionByVolumeItem1(BaseModel):
@@ -330,7 +332,7 @@ class CorrectionByVolumeItem2(BaseModel):
 
 class CorrectionByVolumeItem(BaseModel):
     __root__: tuple[CorrectionByVolumeItem1 | CorrectionByVolumeItem2, int | float] = (
-        Field(..., max_items=2, min_items=2)
+        Field(...)  # Removed min_items=2, max_items=2
     )
 
 
@@ -3512,7 +3514,7 @@ class FlowRateByVolumeItem5(BaseModel):
     __root__: tuple[
         FlowRateByVolumeItem51 | FlowRateByVolumeItem52,
         FlowRateByVolumeItem53 | FlowRateByVolumeItem54,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class CorrectionByVolumeItem31(BaseModel):
@@ -3526,7 +3528,7 @@ class CorrectionByVolumeItem32(BaseModel):
 class CorrectionByVolumeItem3(BaseModel):
     __root__: tuple[
         CorrectionByVolumeItem31 | CorrectionByVolumeItem32, int | float
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class ConditioningByVolumeItem1(BaseModel):
@@ -3549,7 +3551,7 @@ class ConditioningByVolumeItem(BaseModel):
     __root__: tuple[
         ConditioningByVolumeItem1 | ConditioningByVolumeItem2,
         ConditioningByVolumeItem3 | ConditioningByVolumeItem4,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class DisposalByVolumeItem1(BaseModel):
@@ -3572,7 +3574,7 @@ class DisposalByVolumeItem(BaseModel):
     __root__: tuple[
         DisposalByVolumeItem1 | DisposalByVolumeItem2,
         DisposalByVolumeItem3 | DisposalByVolumeItem4,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class Id9(Enum):
@@ -5104,7 +5106,7 @@ class AirGapByVolumeItem(BaseModel):
     __root__: tuple[
         AirGapByVolumeItem1 | AirGapByVolumeItem2,
         AirGapByVolumeItem3 | AirGapByVolumeItem4,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class CommandType118(Enum):
@@ -5166,7 +5168,7 @@ class AirGapByVolumeItem5(BaseModel):
     __root__: tuple[
         AirGapByVolumeItem51 | AirGapByVolumeItem52,
         AirGapByVolumeItem53 | AirGapByVolumeItem54,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class CommandType120(Enum):
@@ -7146,7 +7148,7 @@ class FlowRateByVolumeItem6(BaseModel):
     __root__: tuple[
         FlowRateByVolumeItem61 | FlowRateByVolumeItem62,
         FlowRateByVolumeItem63 | FlowRateByVolumeItem64,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class CorrectionByVolumeItem41(BaseModel):
@@ -7160,7 +7162,7 @@ class CorrectionByVolumeItem42(BaseModel):
 class CorrectionByVolumeItem4(BaseModel):
     __root__: tuple[
         CorrectionByVolumeItem41 | CorrectionByVolumeItem42, int | float
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class PushOutByVolumeItem1(BaseModel):
@@ -7183,7 +7185,7 @@ class PushOutByVolumeItem(BaseModel):
     __root__: tuple[
         PushOutByVolumeItem1 | PushOutByVolumeItem2,
         PushOutByVolumeItem3 | PushOutByVolumeItem4,
-    ] = Field(..., max_items=2, min_items=2)
+    ] = Field(...)  # Removed min_items=2, max_items=2
 
 
 class Style4(Enum):
@@ -7560,7 +7562,7 @@ class LocationSequence6(BaseModel):
     __root__: list[LocationSequence61] = Field(
         ...,
         description='Where the labware is located on the robot. The special value `anyLocation` means this offset applies to any labware with a matching `definitionUri`, regardless of its location.',
-        min_length=1,
+        min_items=1,  # Changed from min_length=1
         title='Locationsequence',
     )
 
@@ -15225,7 +15227,7 @@ class LocationSequence4(BaseModel):
     __root__: list[LocationSequence41] = Field(
         ...,
         description='Where the labware is located on the robot. The special value `anyLocation` means this offset applies to any labware with a matching `definitionUri`, regardless of its location.',
-        min_length=1,
+        min_items=1,
         title='Locationsequence',
     )
 

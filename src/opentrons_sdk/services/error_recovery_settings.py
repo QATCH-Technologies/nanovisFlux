@@ -1,17 +1,21 @@
-from typing import Any, Dict, List
+"""
+src.opentrons_sdk.services.error_recovery_settings
+
+Service interface for setting error recovery protocols.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
 
 
 class ErrorRecoverySettingsService:

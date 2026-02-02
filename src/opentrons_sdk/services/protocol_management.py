@@ -1,18 +1,25 @@
+"""
+src.opentrons_sdk.services.protocol_management
+
+Service interface for creation and manamgement of protocols.
+
+Author(s):
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2026-02-02
+
+Version:
+    0.1.0
+"""
+
 import os
 from typing import Any, Dict, List, Optional, Union
 
 import models as Models
 import paths as Paths
 from client import FlexHTTPClient
-
-try:
-    from src.common.log import get_logger
-
-    log = get_logger("FlexSystem")
-except ImportError:
-    import logging
-
-    log = logging.getLogger("FlexSystem")
+from pydantic import BaseModel
 
 
 class ProtocolManagementService:
@@ -124,11 +131,13 @@ class ProtocolManagementService:
         """
         path = Paths.Endpoints.Protocols.CREATE_ANALYSIS.format(protocolId=protocol_id)
         payload = None
+
         if analysis_request is not None:
-            if hasattr(analysis_request, "model_dump"):
+            if isinstance(analysis_request, BaseModel):
                 payload_data = analysis_request.model_dump(exclude_none=True)
             else:
                 payload_data = dict(analysis_request)
+
             payload = {"data": payload_data}
 
         data = await self.client.post(path, json=payload)
