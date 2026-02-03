@@ -47,6 +47,6 @@ class FlexDeckConfigurationService:
             cutouts: A list of cutout configurations (e.g., cutoutId and fixtureId).
         """
         path = Paths.Endpoints.FlexDeckConfiguration.DECK_CONFIG
-        payload = {"data": {"cutouts": cutouts}}
+        payload = {"data": {"cutoutFixtures": cutouts}}
         data = await self.client.put(path, json=payload)
         return Models.SimpleBodyDeckConfigurationResponse(**data)

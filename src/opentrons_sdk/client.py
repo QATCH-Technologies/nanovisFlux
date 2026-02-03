@@ -90,17 +90,42 @@ class FlexHTTPClient:
         Core request handler with enhanced Opentrons error parsing.
         """
         await self.connect()
+
+        # --- FIX 1: Handle 'files' argument for aiohttp ---
+        # aiohttp requires FormData for files, not the 'files' dict/list used by requests.
+        files = kwargs.pop("files", None)
+        if files:
+            data = aiohttp.FormData()
+            # Handle list format: [("file", (filename, file_obj))]
+            if isinstance(files, list):
+                for field_name, file_tuple in files:
+                    if isinstance(file_tuple, tuple) and len(file_tuple) == 2:
+                        filename, file_obj = file_tuple
+                        data.add_field(field_name, file_obj, filename=filename)
+            elif isinstance(files, dict):
+                for key, val in files.items():
+                    data.add_field(key, val)
+        # ------------------------------------------------
+
         url = f"{self.base_url}{path}"
         request_timeout = (
             aiohttp.ClientTimeout(total=timeout) if timeout else self.default_timeout
         )
+
+        # --- FIX 2: Prevent Content-Type Collision ---
+        # If the session has a default 'Content-Type: application/json' header,
+        # it will break the multipart upload. We must temporarily remove it.
+        removed_content_type = None
+        if files and "Content-Type" in self.session.headers:
+            removed_content_type = self.session.headers.pop("Content-Type")
+
         try:
             async with self.session.request(
                 method,
                 url,
                 params=params,
                 json=json,
-                data=data,
+                data=data,  # Contains the FormData for uploads
                 timeout=request_timeout,
                 **kwargs,
             ) as resp:
@@ -111,6 +136,7 @@ class FlexHTTPClient:
                     except Exception:
                         text = "Service Unavailable"
                     raise FlexMaintenanceError(f"System Busy (503): {text[:100]}")
+
                 if resp.status >= 400:
                     try:
                         error_body = await resp.json()
@@ -142,6 +168,11 @@ class FlexHTTPClient:
         except aiohttp.ClientError as e:
             log.error(f"Connection failed: {e}")
             raise FlexConnectionError(f"Connection failed to {self.base_url}") from e
+
+        finally:
+            # Restore the header if we removed it
+            if removed_content_type:
+                self.session.headers["Content-Type"] = removed_content_type
 
     async def get_raw(
         self, path: str, params: Optional[Dict[str, Any]] = None

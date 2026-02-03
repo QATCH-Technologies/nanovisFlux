@@ -2,8 +2,7 @@ from client import FlexHTTPClient
 from constants import APIDefaults
 from services.attached_instruments import AttachedInstrumentsService
 from services.attached_modules import AttachedModulesService
-
-# from services.camera import CameraService
+from services.camera import CameraService
 from services.client_data import ClientDataservice
 from services.control import ControlService
 from services.data_files_management import (
@@ -119,8 +118,7 @@ class FlexController:
         self.system_control = SystemControlService(self._client)
         self.flex_subsystem_management = FlexSubsystemManagementService(self._client)
         self.robot = RobotService(self._client)
-        # CameraService disabled for Flex as it has no camera.
-        # self.camera = CameraService(self._client)
+        self.camera = CameraService(self._client)
 
         self._initialized = True
         log.info(f"FlexController initialized at {base_url}")

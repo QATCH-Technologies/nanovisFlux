@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum, IntEnum
-from typing import Any, Literal
+from typing import Any, List, Literal, Union
 
 from pydantic import BaseModel, Extra, Field, SecretStr
 
@@ -9842,14 +9842,13 @@ class BadPipette(BaseModel):
         description='A route on this server to begin an update of the instrument',
         title='Update',
     )
-    ok: Ok = Field(
+    ok: bool | Any = Field(
         False,
-        const=True,
-        description='If the instrument is not OK, a previous update was interrupted. It must be updated again.',
+        description='If False, a previous update was interrupted.',
         title='Ok',
     )
-    instrumentType: InstrumentType1 = Field(
-        'pipette', const=True, title='Instrumenttype'
+    instrumentType: Literal['pipette'] | Any = Field(
+        'pipette', title='Instrumenttype'
     )
 
 
@@ -19167,8 +19166,8 @@ class Pipette(BaseModel):
     mount: str = Field(
         ..., description='The mount this instrument is attached to.', title='Mount'
     )
-    instrumentType: InstrumentType3 = Field(
-        'pipette', const=True, title='Instrumenttype'
+    instrumentType: Literal['pipette'] | Any = Field(
+        'pipette', title='Instrumenttype'
     )
     instrumentModel: str = Field(..., title='Instrumentmodel')
     serialNumber: str = Field(
@@ -19177,9 +19176,8 @@ class Pipette(BaseModel):
     subsystem: SubSystem | None = Field(
         None, description='The subsystem corresponding to this instrument.'
     )
-    ok: Ok3 = Field(
+    ok: bool | Any = Field(
         True,
-        const=True,
         description='Whether this instrument is OK and ready to go',
         title='Ok',
     )
@@ -20886,8 +20884,8 @@ class Gripper(BaseModel):
     mount: str = Field(
         ..., description='The mount this instrument is attached to.', title='Mount'
     )
-    instrumentType: InstrumentType2 = Field(
-        'gripper', const=True, title='Instrumenttype'
+    instrumentType: Literal['gripper'] | Any = Field(
+        'gripper', title='Instrumenttype'
     )
     instrumentModel: str = Field(..., title='Instrumentmodel')
     serialNumber: str = Field(
@@ -20896,9 +20894,8 @@ class Gripper(BaseModel):
     subsystem: SubSystem | None = Field(
         None, description='The subsystem corresponding to this instrument.'
     )
-    ok: Ok3 = Field(
+    ok: bool | Any = Field(
         True,
-        const=True,
         description='Whether this instrument is OK and ready to go',
         title='Ok',
     )
@@ -22047,12 +22044,15 @@ class SimpleBodyListAnnotatedUnionLabwareDefinition2LabwareDefinition3Discrimina
 
 
 class SimpleMultiBodyUnionPipetteGripperBadPipetteBadGripper(BaseModel):
-    data: list[Pipette | Gripper | BadPipette | BadGripper] = Field(
-        ..., description='The document’s primary data', title='Data'
+    data: List[Union[Pipette, Gripper, BadPipette, BadGripper]] = Field(
+        ..., description='The document\'s primary data', title='Data'
     )
     meta: MultiBodyMeta = Field(
         ..., description='Metadata about the collection response.'
     )
+
+    class Config:
+        use_enum_values = True
 
 
 class SimpleMultiBodyUnionTemperatureModuleMagneticModuleThermocyclerModuleHeaterShakerModuleAbsorbanceReaderModuleFlexStackerModule(
@@ -23075,7 +23075,7 @@ class SimpleBodyUnionPendingAnalysisCompletedAnalysis(BaseModel):
 
 class SimpleMultiBodyUnionPendingAnalysisCompletedAnalysis(BaseModel):
     data: list[PendingAnalysis | CompletedAnalysis] = Field(
-        ..., description='The document’s primary data', title='Data'
+        ..., description='The documents primary data', title='Data'
     )
     meta: MultiBodyMeta = Field(
         ..., description='Metadata about the collection response.'

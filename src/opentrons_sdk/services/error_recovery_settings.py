@@ -30,6 +30,7 @@ class ErrorRecoverySettingsService:
         path = Paths.Endpoints.ErrorRecoverySettings.ERROR_RECOVERY
         data = await self.client.get(path)
         return Models.SimpleBodyResponseData(**data)
+        return await self.client.get(path)
 
     async def patch_error_recovery_settings(
         self, enabled: bool

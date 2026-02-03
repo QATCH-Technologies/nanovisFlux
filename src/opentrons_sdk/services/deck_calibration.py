@@ -28,5 +28,6 @@ class DeckCalibrationService:
         Get the current calibration status of the robot.
         """
         path = Paths.Endpoints.Calibration.STATUS
-        data = await self.client.get(path)
-        return Models.DeckCalibrationStatus(**data)
+        # data = await self.client.get(path)
+        # return Models.DeckCalibrationStatus(**data)
+        return await self.client.get(path)

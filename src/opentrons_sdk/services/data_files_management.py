@@ -24,14 +24,13 @@ class DataFilesManagamentService:
     def __init__(self, client: FlexHTTPClient):
         self.client = client
 
-    async def get_all_data_files(self) -> Models.SimpleMultiBodyStr:
+    async def get_all_data_files(self):
         """
         GET /dataFiles
-        Retrieve a list of all data file IDs stored on the robot server.
+        Returns raw dict to avoid Pydantic validation errors (API returns objects, not strings).
         """
         path = Paths.Endpoints.Data.DATA_FILES
-        data = await self.client.get(path)
-        return Models.SimpleMultiBodyStr(**data)
+        return await self.client.get(path)
 
     async def upload_data_file(self, file_path: str) -> Models.SimpleBodyDataFile:
         """
