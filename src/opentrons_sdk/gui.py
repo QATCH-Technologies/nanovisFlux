@@ -448,22 +448,22 @@ class ManualControlTab(QWidget):
             self.btn_identify.setEnabled(True)
 
 
+# --- MOVEMENT WIDGET (Smart Load Logic) ---
 class MovementControlWidget(QWidget):
     """
-    Handles WASD (XY) and QE (Z) input via Maintenance Run Commands.
-    Robustly handles 'No Current Run' 404 errors.
+    Handles WASD (XY) and QE (Z) input.
+    Automatically loads attached pipettes into the Maintenance Run to allow movement.
     """
 
     def __init__(self, log_callback):
         super().__init__()
         self.log = log_callback
         self.step_size = 10.0
-        self.active_run_id = None
-        self.z_axis = "leftZ"  # Default to left mount
+        self.target_mount = "left"
 
         layout = QVBoxLayout()
 
-        # 1. Visual Guide
+        # 1. Guide
         guide = QLabel("Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis")
         guide.setAlignment(Qt.AlignCenter)
         guide.setStyleSheet(
@@ -471,26 +471,26 @@ class MovementControlWidget(QWidget):
         )
         layout.addWidget(guide)
 
-        # 2. Settings (Step Size & Z-Axis)
+        # 2. Settings
         settings_grp = QGroupBox("Movement Settings")
         settings_layout = QVBoxLayout()
 
-        # Step Size
+        # Step
         step_row = QHBoxLayout()
         step_row.addWidget(QLabel("Step (mm):"))
         self.step_input = QComboBox()
         self.step_input.addItems(["0.1", "1.0", "10.0", "50.0", "100.0"])
-        self.step_input.setCurrentIndex(2)  # 10.0
+        self.step_input.setCurrentIndex(2)
         self.step_input.currentTextChanged.connect(self.update_step_size)
         step_row.addWidget(self.step_input)
 
-        # Z-Axis Selection (Flex has two Zs)
+        # Mount
         z_row = QHBoxLayout()
-        z_row.addWidget(QLabel("Active Mount (Z):"))
+        z_row.addWidget(QLabel("Active Mount:"))
         self.rb_left = QRadioButton("Left")
         self.rb_right = QRadioButton("Right")
         self.rb_left.setChecked(True)
-        self.rb_left.toggled.connect(self.update_z_axis)
+        self.rb_left.toggled.connect(self.update_mount)
 
         bg = QButtonGroup(self)
         bg.addButton(self.rb_left)
@@ -519,11 +519,8 @@ class MovementControlWidget(QWidget):
         except ValueError:
             pass
 
-    def update_z_axis(self):
-        if self.rb_left.isChecked():
-            self.z_axis = "leftZ"
-        else:
-            self.z_axis = "rightZ"
+    def update_mount(self):
+        self.target_mount = "left" if self.rb_left.isChecked() else "right"
 
     def handle_key_event(self, event):
         key = event.key()
@@ -539,81 +536,152 @@ class MovementControlWidget(QWidget):
         elif key == Qt.Key_D:
             axis, distance = "x", self.step_size
         elif key == Qt.Key_Q:
-            axis, distance = self.z_axis, self.step_size  # Up
+            axis, distance = "z", self.step_size
         elif key == Qt.Key_E:
-            axis, distance = self.z_axis, -self.step_size  # Down
+            axis, distance = "z", -self.step_size
 
         if axis:
             asyncio.create_task(self.trigger_move(axis, distance))
             return True
         return False
 
-    async def get_or_create_run(self):
+    def _extract_data(self, response):
+        if isinstance(response, dict):
+            return response.get("data", response)
+        elif hasattr(response, "data"):
+            return response.data
+        return response
+
+    async def ensure_pipette_loaded(self, run_id):
         """
-        Ensures a maintenance run exists.
-        Handles the expected 404 if no run is currently active.
+        Checks if a pipette is loaded in the run.
+        If not, checks hardware and loads it.
         """
         ctl = FlexController.get_instance()
 
-        # 1. Try to get existing run
+        # 1. Check what is ALREADY loaded in the run
         try:
-            resp = await ctl.maintenance_run_management.get_current_maintenance_run()
-
-            # If successful, parse ID
-            data = (
-                resp.get("data")
-                if isinstance(resp, dict)
-                else getattr(resp, "data", None)
+            #
+            resp = await ctl.maintenance_run_management.get_maintenance_run(run_id)
+            run_data = self._extract_data(resp)
+            loaded_pipettes = (
+                run_data.get("pipettes", [])
+                if isinstance(run_data, dict)
+                else getattr(run_data, "pipettes", [])
             )
-            if data and isinstance(data, dict) and data.get("id"):
-                return data.get("id")
 
+            # If we find one on the correct mount, return its ID
+            for pip in loaded_pipettes:
+                p_mount = (
+                    pip.get("mount")
+                    if isinstance(pip, dict)
+                    else getattr(pip, "mount", "")
+                )
+                if p_mount == self.target_mount:
+                    return (
+                        pip.get("id")
+                        if isinstance(pip, dict)
+                        else getattr(pip, "id", "")
+                    )
         except Exception:
-            # This logic block catches the 404 "No current run found" error.
-            # This is normal; it just means we need to create one.
             pass
 
-        # 2. Create new run if none found
-        # self.log("No active run found. Creating new Maintenance Run...")
+        # 2. If not loaded, check HARDWARE
         try:
-            # Create a blank run (payload={} -> data={})
-            resp = await ctl.maintenance_run_management.create_maintenance_run({})
-            data = (
-                resp.get("data")
-                if isinstance(resp, dict)
-                else getattr(resp, "data", None)
+            hw_resp = await ctl.pipettes.get_pipettes()
+            # Structure: {"left": {"name": "p1000..."}, "right": ...}
+            hw_data = hw_resp if isinstance(hw_resp, dict) else hw_resp.dict()
+
+            mount_data = hw_data.get(self.target_mount, {})
+            pipette_name = mount_data.get("name")
+
+            if not pipette_name:
+                self.log(f"No hardware pipette detected on {self.target_mount} mount.")
+                return None
+
+            # 3. LOAD IT into the run
+            self.log(f"Loading {pipette_name} onto {self.target_mount}...")
+
+            load_cmd = {
+                "commandType": "loadPipette",
+                "intent": "setup",
+                "params": {"pipetteName": pipette_name, "mount": self.target_mount},
+            }
+
+            #
+            cmd_resp = await ctl.maintenance_run_management.enqueue_maintenance_command(
+                run_id, load_cmd, wait_until_complete=True
             )
 
-            if data and data.get("id"):
-                run_id = data.get("id")
-                self.log(f"Created new Maintenance Run: {run_id}")
-                return run_id
+            # Extract Result
+            res_data = self._extract_data(cmd_resp)
+            result = res_data.get("result", {})
+            if result and "pipetteId" in result:
+                return result["pipetteId"]
 
         except Exception as e:
-            self.status_label.setText("Error: Robot Busy?")
-            self.status_label.setStyleSheet("color: red;")
-            self.log(f"Failed to create run (Robot likely busy): {e}")
-            return None
+            self.log(f"Auto-Load Pipette Failed: {e}")
 
         return None
+
+    async def get_run_and_pipette(self):
+        ctl = FlexController.get_instance()
+        run_id = None
+
+        # A. Find or Create Run
+        try:
+            resp = await ctl.maintenance_run_management.get_current_maintenance_run()
+            data = self._extract_data(resp)
+            if data and (isinstance(data, dict) and data.get("id")):
+                run_id = data.get("id")
+        except Exception:
+            pass
+
+        if not run_id:
+            try:
+                resp = await ctl.maintenance_run_management.create_maintenance_run({})
+                data = self._extract_data(resp)
+                if data and (isinstance(data, dict) and data.get("id")):
+                    run_id = data.get("id")
+            except Exception:
+                return None, None
+
+        if not run_id:
+            return None, None
+
+        # B. Get Pipette ID (Auto-Loading if needed)
+        pipette_id = await self.ensure_pipette_loaded(run_id)
+
+        return run_id, pipette_id
 
     async def trigger_move(self, axis, distance):
         self.status_label.setText(f"Moving {axis} {distance}mm...")
         self.status_label.setStyleSheet("color: blue;")
 
         try:
-            run_id = await self.get_or_create_run()
+            run_id, pipette_id = await self.get_run_and_pipette()
             if not run_id:
-                return  # Error logged in helper
+                self.status_label.setText("No Run")
+                self.status_label.setStyleSheet("color: red;")
+                return
 
-            # Use moveAxesRelative (Jogging)
+            if not pipette_id:
+                self.status_label.setText(f"No Pipette ({self.target_mount})")
+                self.status_label.setStyleSheet("color: red;")
+                return
+
+            # Construct 'moveRelative' Command
             cmd = {
-                "commandType": "moveAxesRelative",
-                "params": {"axis": axis, "distance": distance},
+                "commandType": "moveRelative",
+                "intent": "setup",
+                "params": {
+                    "pipetteId": pipette_id,
+                    "axis": axis,
+                    "distance": float(distance),
+                },
             }
 
             ctl = FlexController.get_instance()
-            #
             await ctl.maintenance_run_management.enqueue_maintenance_command(
                 run_id, cmd, wait_until_complete=True
             )
