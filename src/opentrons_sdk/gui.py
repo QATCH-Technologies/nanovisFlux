@@ -448,13 +448,12 @@ class ManualControlTab(QWidget):
             self.btn_identify.setEnabled(True)
 
 
-# --- MOVEMENT WIDGET (Smooth "Hold-to-Move" Logic) ---
+# --- MOVEMENT WIDGET (Hybrid Precise-Tap / Smooth-Hold) ---
 class MovementControlWidget(QWidget):
     """
     Handles WASD (XY) and QE (Z) input.
-    - Queue Stuffing: Feeds commands continuously while key is held.
-    - Shift Key: Increases speed (300mm/s) and step size.
-    - Smooth Stop: Uses key release events to stop the feed loop.
+    - Tap: Sends ONE blocking command (Precise, no over-run).
+    - Hold: Switches to non-blocking stream (Smooth motion).
     """
 
     def __init__(self, log_callback):
@@ -479,7 +478,7 @@ class MovementControlWidget(QWidget):
 
         # 1. Guide
         guide = QLabel(
-            "Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis\n\n(Hold Key for Smooth Motion | Hold Shift for Fast)"
+            "Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis\n\n(Tap to Jog | Hold to Move Smoothly)"
         )
         guide.setAlignment(Qt.AlignCenter)
         guide.setStyleSheet(
@@ -491,7 +490,7 @@ class MovementControlWidget(QWidget):
         settings_grp = QGroupBox("Movement Settings")
         settings_layout = QVBoxLayout()
 
-        # Packet Size (Smaller = Smoother Stop)
+        # Packet Size
         step_row = QHBoxLayout()
         step_row.addWidget(QLabel("Packet Size (mm):"))
         self.step_input = QComboBox()
@@ -542,7 +541,7 @@ class MovementControlWidget(QWidget):
     def handle_key_event(self, event):
         """Called by parent on Key Press"""
         if event.isAutoRepeat():
-            return False  # Ignore auto-repeat spam
+            return False
 
         key = event.key()
 
@@ -570,9 +569,9 @@ class MovementControlWidget(QWidget):
         if key in self.active_keys:
             self.active_keys.remove(key)
 
-    # --- ASYNC LOOP ---
+    # --- HYBRID MOVEMENT LOOP ---
     async def movement_loop(self):
-        self.status_label.setText("Starting Run...")
+        self.status_label.setText("Starting...")
 
         ctl = FlexController.get_instance()
         run_id = await self.get_or_create_run(ctl)
@@ -583,61 +582,50 @@ class MovementControlWidget(QWidget):
             self.status_label.setStyleSheet("color: red;")
             return
 
-        self.status_label.setText("Moving...")
+        # --- PHASE 1: INITIAL TAP (BLOCKING) ---
+        # We process the first move as a blocking call.
+        # This prevents "runaway" queueing on short taps.
+
+        axis, direction, step, speed = self._calculate_move_params()
+        if not axis:
+            self.is_loop_running = False
+            return
+
+        self.status_label.setText(f"Jogging {axis}...")
         self.status_label.setStyleSheet("color: blue;")
 
+        # Send Blocking Command (Wait=True)
+        # This function will hang here until the robot physically finishes the move.
+        await self._send_move_command(
+            ctl, run_id, axis, direction * step, speed, wait=True
+        )
+
+        # --- PHASE 2: CHECK CONTINUATION ---
+        # After the first move finishes, check if key is STILL held.
+        # If released, we exit immediately.
+        if not self.active_keys:
+            self.is_loop_running = False
+            self.status_label.setText("Idle")
+            self.status_label.setStyleSheet("color: green;")
+            return
+
+        # --- PHASE 3: CONTINUOUS STREAM (NON-BLOCKING) ---
+        # Key is held, switch to "Smooth Mode" (Fire-and-Forget)
+        self.status_label.setText(f"Streaming {axis}...")
+
         while self.active_keys:
-            # 1. Check Priority (Z > Y > X)
-            axis = None
-            direction = 0
-
-            # Use last pressed logic or simple priority
-            if Qt.Key_Q in self.active_keys:
-                axis, direction = self.z_axis, 1
-            elif Qt.Key_E in self.active_keys:
-                axis, direction = self.z_axis, -1
-            elif Qt.Key_W in self.active_keys:
-                axis, direction = "y", 1
-            elif Qt.Key_S in self.active_keys:
-                axis, direction = "y", -1
-            elif Qt.Key_A in self.active_keys:
-                axis, direction = "x", -1
-            elif Qt.Key_D in self.active_keys:
-                axis, direction = "x", 1
-
+            # Recalculate params (allows changing speed/direction mid-hold)
+            axis, direction, step, speed = self._calculate_move_params()
             if not axis:
                 break
 
-            # 2. Calculate Parameters
-            current_step = self.step_size
-            current_speed = self.NORMAL_SPEED
-
-            if self.is_shift_held:
-                current_step *= self.FAST_MULTIPLIER
-                current_speed = self.FAST_SPEED
-
-            distance = direction * current_step
-
-            # 3. Fire Command (Wait=False)
-            cmd = {
-                "commandType": "robot/moveAxesRelative",
-                "intent": "setup",
-                "params": {
-                    "axis_map": {axis: float(distance)},
-                    "speed": float(current_speed),
-                },
-            }
-
-            #
-            # Fire-and-forget to keep buffer full
-            await ctl.maintenance_run_management.enqueue_maintenance_command(
-                run_id, cmd, wait_until_complete=False
+            # Send Non-Blocking (Wait=False) to fill buffer
+            await self._send_move_command(
+                ctl, run_id, axis, direction * step, speed, wait=False
             )
 
-            # 4. Pace the loop
-            # Sleep ~80% of the time the move takes to execute.
-            # Time = Dist / Speed
-            move_duration = abs(distance) / current_speed
+            # Pacing: Sleep ~80% of move duration to keep buffer full but responsive
+            move_duration = abs(step) / speed
             sleep_time = max(0.01, move_duration * 0.8)
 
             await asyncio.sleep(sleep_time)
@@ -647,6 +635,47 @@ class MovementControlWidget(QWidget):
         self.status_label.setStyleSheet("color: green;")
 
     # --- HELPERS ---
+    def _calculate_move_params(self):
+        # Priority: Z > Y > X
+        axis = None
+        direction = 0
+
+        if Qt.Key_Q in self.active_keys:
+            axis, direction = self.z_axis, 1
+        elif Qt.Key_E in self.active_keys:
+            axis, direction = self.z_axis, -1
+        elif Qt.Key_W in self.active_keys:
+            axis, direction = "y", 1
+        elif Qt.Key_S in self.active_keys:
+            axis, direction = "y", -1
+        elif Qt.Key_A in self.active_keys:
+            axis, direction = "x", -1
+        elif Qt.Key_D in self.active_keys:
+            axis, direction = "x", 1
+
+        current_step = self.step_size
+        current_speed = self.NORMAL_SPEED
+
+        if self.is_shift_held:
+            current_step *= self.FAST_MULTIPLIER
+            current_speed = self.FAST_SPEED
+
+        return axis, direction, current_step, current_speed
+
+    async def _send_move_command(self, ctl, run_id, axis, distance, speed, wait):
+        cmd = {
+            "commandType": "robot/moveAxesRelative",
+            "intent": "setup",
+            "params": {"axis_map": {axis: float(distance)}, "speed": float(speed)},
+        }
+        #
+        try:
+            await ctl.maintenance_run_management.enqueue_maintenance_command(
+                run_id, cmd, wait_until_complete=wait
+            )
+        except Exception as e:
+            self.log(f"Move Error: {e}")
+
     def _extract_id(self, response):
         data = response
         if isinstance(response, dict):
