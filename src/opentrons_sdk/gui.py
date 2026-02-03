@@ -448,23 +448,31 @@ class ManualControlTab(QWidget):
             self.btn_identify.setEnabled(True)
 
 
-# --- MOVEMENT WIDGET (Smart Load Logic) ---
+# --- MOVEMENT WIDGET (Gantry Control + Shift Speed) ---
 class MovementControlWidget(QWidget):
     """
     Handles WASD (XY) and QE (Z) input.
-    Automatically loads attached pipettes into the Maintenance Run to allow movement.
+    - Standard: Selected Step Size
+    - Shift + Key: 5x Step Size + High Speed (500mm/s)
+    Uses 'robot/moveAxesRelative' (Gantry Command).
     """
 
     def __init__(self, log_callback):
         super().__init__()
         self.log = log_callback
         self.step_size = 10.0
-        self.target_mount = "left"
+        self.z_axis = "leftZ"
+
+        # Configuration
+        self.FAST_MULTIPLIER = 5.0
+        self.FAST_SPEED = 500.0  # mm/s
 
         layout = QVBoxLayout()
 
         # 1. Guide
-        guide = QLabel("Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis")
+        guide = QLabel(
+            "Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis\n\n(Hold SHIFT for Fast Jog)"
+        )
         guide.setAlignment(Qt.AlignCenter)
         guide.setStyleSheet(
             "background: #333; color: #EEE; padding: 10px; border-radius: 5px; font-weight: bold;"
@@ -475,18 +483,18 @@ class MovementControlWidget(QWidget):
         settings_grp = QGroupBox("Movement Settings")
         settings_layout = QVBoxLayout()
 
-        # Step
+        # Step Size
         step_row = QHBoxLayout()
-        step_row.addWidget(QLabel("Step (mm):"))
+        step_row.addWidget(QLabel("Base Step (mm):"))
         self.step_input = QComboBox()
-        self.step_input.addItems(["0.1", "1.0", "10.0", "50.0", "100.0"])
-        self.step_input.setCurrentIndex(2)
+        self.step_input.addItems(["0.1", "1.0", "10.0", "50.0"])
+        self.step_input.setCurrentIndex(2)  # 10.0
         self.step_input.currentTextChanged.connect(self.update_step_size)
         step_row.addWidget(self.step_input)
 
-        # Mount
+        # Mount Selection
         z_row = QHBoxLayout()
-        z_row.addWidget(QLabel("Active Mount:"))
+        z_row.addWidget(QLabel("Active Mount (Z):"))
         self.rb_left = QRadioButton("Left")
         self.rb_right = QRadioButton("Right")
         self.rb_left.setChecked(True)
@@ -520,165 +528,101 @@ class MovementControlWidget(QWidget):
             pass
 
     def update_mount(self):
-        self.target_mount = "left" if self.rb_left.isChecked() else "right"
+        self.z_axis = "leftZ" if self.rb_left.isChecked() else "rightZ"
 
     def handle_key_event(self, event):
         key = event.key()
         axis = None
-        distance = 0
+        base_distance = 0
+
+        # Check for Shift Modifier
+        is_fast = bool(event.modifiers() & Qt.ShiftModifier)
+
+        # Calculate Distance
+        current_step = (
+            self.step_size * self.FAST_MULTIPLIER if is_fast else self.step_size
+        )
+        speed = self.FAST_SPEED if is_fast else None  # None = Default speed
 
         if key == Qt.Key_W:
-            axis, distance = "y", self.step_size
+            axis, base_distance = "y", current_step
         elif key == Qt.Key_S:
-            axis, distance = "y", -self.step_size
+            axis, base_distance = "y", -current_step
         elif key == Qt.Key_A:
-            axis, distance = "x", -self.step_size
+            axis, base_distance = "x", -current_step
         elif key == Qt.Key_D:
-            axis, distance = "x", self.step_size
+            axis, base_distance = "x", current_step
         elif key == Qt.Key_Q:
-            axis, distance = "z", self.step_size
+            axis, base_distance = self.z_axis, current_step
         elif key == Qt.Key_E:
-            axis, distance = "z", -self.step_size
+            axis, base_distance = self.z_axis, -current_step
 
         if axis:
-            asyncio.create_task(self.trigger_move(axis, distance))
+            # Visual Feedback for Fast Mode
+            mode_str = "FAST" if is_fast else "Normal"
+            self.status_label.setText(
+                f"Jogging {axis} {base_distance}mm ({mode_str})..."
+            )
+
+            asyncio.create_task(self.trigger_move(axis, base_distance, speed))
             return True
         return False
 
-    def _extract_data(self, response):
+    def _extract_id(self, response):
+        """Helper to get ID from Pydantic model or Dict."""
+        data = response
         if isinstance(response, dict):
-            return response.get("data", response)
+            data = response.get("data", response)
         elif hasattr(response, "data"):
-            return response.data
-        return response
+            data = response.data
 
-    async def ensure_pipette_loaded(self, run_id):
-        """
-        Checks if a pipette is loaded in the run.
-        If not, checks hardware and loads it.
-        """
-        ctl = FlexController.get_instance()
-
-        # 1. Check what is ALREADY loaded in the run
-        try:
-            #
-            resp = await ctl.maintenance_run_management.get_maintenance_run(run_id)
-            run_data = self._extract_data(resp)
-            loaded_pipettes = (
-                run_data.get("pipettes", [])
-                if isinstance(run_data, dict)
-                else getattr(run_data, "pipettes", [])
-            )
-
-            # If we find one on the correct mount, return its ID
-            for pip in loaded_pipettes:
-                p_mount = (
-                    pip.get("mount")
-                    if isinstance(pip, dict)
-                    else getattr(pip, "mount", "")
-                )
-                if p_mount == self.target_mount:
-                    return (
-                        pip.get("id")
-                        if isinstance(pip, dict)
-                        else getattr(pip, "id", "")
-                    )
-        except Exception:
-            pass
-
-        # 2. If not loaded, check HARDWARE
-        try:
-            hw_resp = await ctl.pipettes.get_pipettes()
-            # Structure: {"left": {"name": "p1000..."}, "right": ...}
-            hw_data = hw_resp if isinstance(hw_resp, dict) else hw_resp.dict()
-
-            mount_data = hw_data.get(self.target_mount, {})
-            pipette_name = mount_data.get("name")
-
-            if not pipette_name:
-                self.log(f"No hardware pipette detected on {self.target_mount} mount.")
-                return None
-
-            # 3. LOAD IT into the run
-            self.log(f"Loading {pipette_name} onto {self.target_mount}...")
-
-            load_cmd = {
-                "commandType": "loadPipette",
-                "intent": "setup",
-                "params": {"pipetteName": pipette_name, "mount": self.target_mount},
-            }
-
-            #
-            cmd_resp = await ctl.maintenance_run_management.enqueue_maintenance_command(
-                run_id, load_cmd, wait_until_complete=True
-            )
-
-            # Extract Result
-            res_data = self._extract_data(cmd_resp)
-            result = res_data.get("result", {})
-            if result and "pipetteId" in result:
-                return result["pipetteId"]
-
-        except Exception as e:
-            self.log(f"Auto-Load Pipette Failed: {e}")
-
+        if isinstance(data, dict):
+            return data.get("id")
+        elif hasattr(data, "id"):
+            return data.id
         return None
 
-    async def get_run_and_pipette(self):
+    async def get_or_create_run(self):
         ctl = FlexController.get_instance()
-        run_id = None
-
-        # A. Find or Create Run
+        # 1. Try existing
         try:
             resp = await ctl.maintenance_run_management.get_current_maintenance_run()
-            data = self._extract_data(resp)
-            if data and (isinstance(data, dict) and data.get("id")):
-                run_id = data.get("id")
+            run_id = self._extract_id(resp)
+            if run_id:
+                return run_id
         except Exception:
             pass
 
-        if not run_id:
-            try:
-                resp = await ctl.maintenance_run_management.create_maintenance_run({})
-                data = self._extract_data(resp)
-                if data and (isinstance(data, dict) and data.get("id")):
-                    run_id = data.get("id")
-            except Exception:
-                return None, None
-
-        if not run_id:
-            return None, None
-
-        # B. Get Pipette ID (Auto-Loading if needed)
-        pipette_id = await self.ensure_pipette_loaded(run_id)
-
-        return run_id, pipette_id
-
-    async def trigger_move(self, axis, distance):
-        self.status_label.setText(f"Moving {axis} {distance}mm...")
-        self.status_label.setStyleSheet("color: blue;")
-
+        # 2. Create new
         try:
-            run_id, pipette_id = await self.get_run_and_pipette()
+            resp = await ctl.maintenance_run_management.create_maintenance_run({})
+            run_id = self._extract_id(resp)
+            if run_id:
+                return run_id
+        except Exception as e:
+            self.log(f"Create Run Failed: {e}")
+            return None
+
+    async def trigger_move(self, axis, distance, speed=None):
+        try:
+            run_id = await self.get_or_create_run()
             if not run_id:
-                self.status_label.setText("No Run")
+                self.status_label.setText("No Run Active")
                 self.status_label.setStyleSheet("color: red;")
                 return
 
-            if not pipette_id:
-                self.status_label.setText(f"No Pipette ({self.target_mount})")
-                self.status_label.setStyleSheet("color: red;")
-                return
+            # Construct 'robot/moveAxesRelative' Command
+            # This directly controls the gantry, bypassing pipette logic
+            params = {"axis_map": {axis: float(distance)}}
 
-            # Construct 'moveRelative' Command
+            # Only add speed if specified (Fast mode)
+            if speed:
+                params["speed"] = float(speed)
+
             cmd = {
-                "commandType": "moveRelative",
+                "commandType": "robot/moveAxesRelative",
                 "intent": "setup",
-                "params": {
-                    "pipetteId": pipette_id,
-                    "axis": axis,
-                    "distance": float(distance),
-                },
+                "params": params,
             }
 
             ctl = FlexController.get_instance()
