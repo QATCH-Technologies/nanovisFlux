@@ -582,10 +582,12 @@ class XYMapWidget(QFrame):
         painter.end()
 
 
-# --- MAIN CONTROL WIDGET ---
 class MovementControlWidget(QWidget):
     """
-    Map-Based Control with Safety Buffers, Gantry Limits, and Slider Speed Control.
+    Map-Based Control.
+    - Map represents GANTRY Position.
+    - Robot Command applies -95mm Y-Offset (Pipette Position = Gantry Y - 95mm).
+    - No Safety Buffer.
     """
 
     def __init__(self, log_callback):
@@ -593,9 +595,9 @@ class MovementControlWidget(QWidget):
         self.log = log_callback
         self.target_mount = "left"
 
-        # Safety Config
-        self.SAFETY_BUFFER = 5.0  # mm from walls
-        self.MAX_Z = 345.0  # Max Gantry Z height
+        # Configuration
+        self.MAX_Z = 345.0
+        self.Y_OFFSET = -95.0  # 9.5cm offset for pipette thickness
 
         # Layouts
         main_layout = QHBoxLayout()
@@ -604,11 +606,14 @@ class MovementControlWidget(QWidget):
 
         # --- LEFT: MAP ---
         self.map_widget = XYMapWidget()
-        self.map_widget.safety_buffer = self.SAFETY_BUFFER
+        # Remove safety buffer ref from map
+        if hasattr(self.map_widget, "safety_buffer"):
+            self.map_widget.safety_buffer = 0.0
+
         self.map_widget.on_target_change = self.sync_inputs_from_map
 
         guide = QLabel(
-            "<b>Map Click / WASD:</b> XY Target<br><b>Vertical Slider / Q/E:</b> Z Target<br><b>Safety Buffer:</b> 5mm"
+            f"<b>Map/WASD:</b> Set Gantry XY<br><b>Offset Applied:</b> Y {self.Y_OFFSET}mm<br><b>Slider:</b> Z Target"
         )
         guide.setStyleSheet("color: #AAA; font-size: 9pt; margin-bottom: 5px;")
 
@@ -647,7 +652,7 @@ class MovementControlWidget(QWidget):
         slider_layout.addWidget(self.z_label)
 
         # 3. Manual Inputs
-        coord_grp = QGroupBox("Target Coordinates")
+        coord_grp = QGroupBox("Gantry Coordinates")
         form_layout = QFormLayout()
 
         self.input_x = QLineEdit("50.0")
@@ -663,7 +668,7 @@ class MovementControlWidget(QWidget):
         form_layout.addRow("Z:", self.input_z)
         coord_grp.setLayout(form_layout)
 
-        # 4. Speed Slider (Horizontal)
+        # 4. Speed Slider
         speed_grp = QGroupBox("Movement Speed")
         speed_layout = QVBoxLayout()
 
@@ -671,7 +676,7 @@ class MovementControlWidget(QWidget):
         self.speed_val_label.setAlignment(Qt.AlignCenter)
 
         self.speed_slider = QSlider(Qt.Horizontal)
-        self.speed_slider.setRange(10, 500)  # 10mm/s to 500mm/s
+        self.speed_slider.setRange(10, 500)
         self.speed_slider.setValue(400)
         self.speed_slider.setTickPosition(QSlider.TicksBelow)
         self.speed_slider.setTickInterval(50)
@@ -688,7 +693,6 @@ class MovementControlWidget(QWidget):
         )
         self.btn_execute.clicked.connect(self.execute_move)
 
-        # Right Column Assembly
         right_layout.addWidget(z_grp)
         right_layout.addLayout(slider_layout)
         right_layout.addWidget(coord_grp)
@@ -765,7 +769,7 @@ class MovementControlWidget(QWidget):
     def handle_key_release(self, event):
         pass
 
-    # --- API HELPERS ---
+    # --- API HELPERS (Unchanged) ---
     def _extract_data(self, response):
         if isinstance(response, dict):
             return response.get("data", response)
@@ -803,7 +807,6 @@ class MovementControlWidget(QWidget):
 
     async def ensure_pipette_loaded(self, run_id):
         ctl = FlexController.get_instance()
-        # 1. Check loaded
         try:
             resp = await ctl.maintenance_run_management.get_maintenance_run(run_id)
             run_data = self._extract_data(resp)
@@ -826,7 +829,6 @@ class MovementControlWidget(QWidget):
         except Exception:
             pass
 
-        # 2. Check HW & Load
         try:
             hw_resp = await ctl.pipettes.get_pipettes(refresh=True)
             mount_obj = (
@@ -882,26 +884,16 @@ class MovementControlWidget(QWidget):
     def execute_move(self):
         self.sync_map_from_inputs()
 
-        # Raw targets
+        # Gantry Targets (Visual Map)
         raw_x = self.map_widget.target_pos.x()
         raw_y = self.map_widget.target_pos.y()
         raw_z = float(self.z_slider.value())
 
-        # --- SAFETY CLAMPING ---
-        safe_x = max(
-            self.SAFETY_BUFFER,
-            min(self.map_widget.GANTRY_X - self.SAFETY_BUFFER, raw_x),
-        )
-        safe_y = max(
-            self.SAFETY_BUFFER,
-            min(self.map_widget.GANTRY_Y - self.SAFETY_BUFFER, raw_y),
-        )
+        # --- APPLY Y-OFFSET (Command = Gantry - 95.0) ---
+        cmd_y = raw_y + self.Y_OFFSET
 
-        if safe_x != raw_x or safe_y != raw_y:
-            self.log(f"Coords clamped for safety buffer ({self.SAFETY_BUFFER}mm)")
-
-        self.log(f"Moving to: ({safe_x:.1f}, {safe_y:.1f}, {raw_z:.1f})")
-        asyncio.create_task(self.async_execute(safe_x, safe_y, raw_z))
+        self.log(f"Gantry: ({raw_x:.1f}, {raw_y:.1f}) -> Command Y: {cmd_y:.1f}")
+        asyncio.create_task(self.async_execute(raw_x, cmd_y, raw_z))
 
     async def async_execute(self, x, y, z):
         self.btn_execute.setEnabled(False)
@@ -917,9 +909,9 @@ class MovementControlWidget(QWidget):
             if not pipette_id:
                 raise Exception(f"No pipette on {self.target_mount}")
 
-            # Get Speed from Slider
             speed = float(self.speed_slider.value())
 
+            # Send Command with Offset Y (passed in as 'y')
             cmd = {
                 "commandType": "moveToCoordinates",
                 "intent": "setup",
@@ -940,7 +932,11 @@ class MovementControlWidget(QWidget):
             r_data = self._extract_data(resp)
             if isinstance(r_data, dict) and r_data.get("status") == "succeeded":
                 self.log("Move Complete.")
-                self.map_widget.set_current_pos(x, y)
+                # Update map to show GANTRY position (Cmd Y + 95.0)
+                # This keeps visual dot in sync with where the gantry actually is
+                # (since 'y' here is the commanded pipette position)
+                visual_y = y - self.Y_OFFSET
+                self.map_widget.set_current_pos(x, visual_y)
             else:
                 err = (
                     r_data.get("error") if isinstance(r_data, dict) else "Unknown Error"
