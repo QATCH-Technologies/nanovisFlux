@@ -451,70 +451,52 @@ class ManualControlTab(QWidget):
             self.btn_identify.setEnabled(True)
 
 
-import asyncio
-
-from flex_controller import FlexController
-from PyQt5.QtCore import QLineF, QPointF, QRectF, Qt, QTimer
-from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPen
-from PyQt5.QtWidgets import (
-    QButtonGroup,
-    QFormLayout,
-    QFrame,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QRadioButton,
-    QSlider,
-    QVBoxLayout,
-    QWidget,
-)
-
-
-# --- CUSTOM MAP WIDGET (Custom Grid 66cm x 43cm) ---
 class XYMapWidget(QFrame):
     """
-    Visual 2D representation of the Robot Deck.
-    Dimensions: 660mm (Width) x 430mm (Depth).
-    Origin (0,0): Front-Left (Slot D1).
+    Visual 2D representation of the Robot Gantry Area.
+    Gantry Dims: 755mm (W) x 520mm (D).
+    Deck Dims (Grid): 660mm x 430mm (drawn relative to origin).
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(660 // 2, 430 // 2)  # Scale down for UI
+        # Scale aspect ratio approx 755:520
+        self.setMinimumSize(755 // 2, 520 // 2)
         self.setStyleSheet("background-color: #222; border: 2px solid #555;")
         self.setFocusPolicy(Qt.StrongFocus)
 
-        # Grid Dimensions (mm)
-        self.MAX_X = 660.0
-        self.MAX_Y = 430.0
+        # Gantry Limits (Travel Max)
+        self.GANTRY_X = 755.0
+        self.GANTRY_Y = 520.0
 
-        # Slot Defs
-        self.cols_x = [0.0, 250.0, 410.0, 660.0]  # Widths: 25, 16, 25 cm
-        self.rows_y = [0.0, 105.0, 210.0, 315.0, 420.0]  # Heights: 10.5 cm
-        self.row_labels = ["D", "C", "B", "A"]  # Front (0) to Back (Max)
+        # Deck Grid Definitions (for visualization)
+        # 660mm x 430mm grid
+        self.deck_cols_x = [0.0, 250.0, 410.0, 660.0]
+        self.deck_rows_y = [0.0, 105.0, 210.0, 315.0, 420.0]
+        self.row_labels = ["D", "C", "B", "A"]
+
+        # Safety Buffer (visual reference)
+        self.safety_buffer = 5.0  # mm
 
         # State
         self.target_pos = QPointF(50.0, 50.0)
         self.current_pos = QPointF(0.0, 0.0)
-        self.on_target_change = None  # Callback
+        self.on_target_change = None
 
     def set_current_pos(self, x, y):
         self.current_pos = QPointF(float(x), float(y))
         self.update()
 
     def set_target_pos(self, x, y):
-        """External setter (e.g. from text boxes)"""
-        new_x = max(0, min(self.MAX_X, float(x)))
-        new_y = max(0, min(self.MAX_Y, float(y)))
+        # Clamp to Gantry
+        new_x = max(0, min(self.GANTRY_X, float(x)))
+        new_y = max(0, min(self.GANTRY_Y, float(y)))
         self.target_pos = QPointF(new_x, new_y)
         self.update()
 
     def move_target(self, dx, dy):
-        """WASD Movement"""
-        new_x = max(0, min(self.MAX_X, self.target_pos.x() + dx))
-        new_y = max(0, min(self.MAX_Y, self.target_pos.y() + dy))
+        new_x = max(0, min(self.GANTRY_X, self.target_pos.x() + dx))
+        new_y = max(0, min(self.GANTRY_Y, self.target_pos.y() + dy))
         self.target_pos = QPointF(new_x, new_y)
         self.update()
         if self.on_target_change:
@@ -525,9 +507,10 @@ class XYMapWidget(QFrame):
         if w == 0 or h == 0:
             return
 
-        click_x = (event.x() / w) * self.MAX_X
-        # Invert Y: Screen 0 is Top, Deck 0 is Bottom (Front)
-        click_y = (1.0 - (event.y() / h)) * self.MAX_Y
+        click_x = (event.x() / w) * self.GANTRY_X
+        # Invert Y: Screen 0 is Top (Max Y in robot space usually, but standard OT is Bottom-Left 0,0)
+        # Assuming standard Cartesian: Bottom-Left is (0,0). Screen 0,0 is Top-Left.
+        click_y = (1.0 - (event.y() / h)) * self.GANTRY_Y
 
         self.target_pos = QPointF(click_x, click_y)
         self.update()
@@ -540,50 +523,57 @@ class XYMapWidget(QFrame):
         painter.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
 
+        # Map Physical MM -> Screen Pixels
         def to_screen(x_mm, y_mm):
-            sx = (x_mm / self.MAX_X) * w
-            sy = (1.0 - (y_mm / self.MAX_Y)) * h
+            sx = (x_mm / self.GANTRY_X) * w
+            sy = (1.0 - (y_mm / self.GANTRY_Y)) * h
             return QPointF(sx, sy)
 
-        # 1. Draw Slots (Rectangles)
-        painter.setPen(QPen(QColor(60, 60, 60), 1))
-        painter.setFont(QFont("Arial", 10, QFont.Bold))
+        # 1. Draw Gantry Bounds (Outer Box)
+        # Using buffer visualization
+        buff = self.safety_buffer
+        p1 = to_screen(buff, buff)
+        p2 = to_screen(self.GANTRY_X - buff, self.GANTRY_Y - buff)
 
-        for c_idx in range(3):  # Cols 1-3
-            for r_idx in range(4):  # Rows D-A
-                # Grid Coordinates
-                x1, x2 = self.cols_x[c_idx], self.cols_x[c_idx + 1]
-                y1, y2 = self.rows_y[r_idx], self.rows_y[r_idx + 1]
+        # Safe Zone (dashed yellow)
+        painter.setPen(QPen(QColor(255, 200, 0, 100), 1, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(p1, p2))
 
-                # Screen Coordinates (Note: y2 is physically 'higher' so 'lower' on screen)
-                pt_bl = to_screen(x1, y1)  # Bottom-Left (Front-Left)
-                pt_tr = to_screen(x2, y2)  # Top-Right (Back-Right)
+        # 2. Draw Deck Grid (Reference Only)
+        painter.setPen(QPen(QColor(80, 80, 80), 1))
+        painter.setFont(QFont("Arial", 8))
 
-                # Draw Rect
+        for c_idx in range(3):
+            for r_idx in range(4):
+                x1, x2 = self.deck_cols_x[c_idx], self.deck_cols_x[c_idx + 1]
+                y1, y2 = self.deck_rows_y[r_idx], self.deck_rows_y[r_idx + 1]
+
+                pt_bl = to_screen(x1, y1)
+                pt_tr = to_screen(x2, y2)
+
                 rect = QRectF(
                     pt_bl.x(), pt_tr.y(), pt_tr.x() - pt_bl.x(), pt_bl.y() - pt_tr.y()
                 )
                 painter.drawRect(rect)
 
-                # Label (e.g., "D1")
                 label = f"{self.row_labels[r_idx]}{c_idx + 1}"
-                painter.setPen(QColor(100, 100, 100))
                 painter.drawText(rect, Qt.AlignCenter, label)
 
-        # 2. Draw Current Position (Blue)
+        # 3. Draw Current Position (Blue)
         cur_scr = to_screen(self.current_pos.x(), self.current_pos.y())
-        painter.setBrush(QBrush(QColor(0, 150, 255, 180)))
+        painter.setBrush(QBrush(QColor(0, 150, 255, 200)))
         painter.setPen(Qt.NoPen)
         painter.drawEllipse(cur_scr, 6, 6)
 
-        # 3. Draw Target (Red Crosshair)
+        # 4. Draw Target (Red Crosshair)
         tgt_scr = to_screen(self.target_pos.x(), self.target_pos.y())
         painter.setPen(QPen(QColor(255, 50, 50), 2))
         tx, ty = tgt_scr.x(), tgt_scr.y()
         painter.drawLine(QLineF(tx - 10, ty, tx + 10, ty))
         painter.drawLine(QLineF(tx, ty - 10, tx, ty + 10))
 
-        # 4. Info Text
+        # 5. Info Text
         painter.setPen(QColor(200, 200, 200))
         painter.setFont(QFont("Arial", 9))
         info = f"Target: ({self.target_pos.x():.1f}, {self.target_pos.y():.1f})"
@@ -595,13 +585,17 @@ class XYMapWidget(QFrame):
 # --- MAIN CONTROL WIDGET ---
 class MovementControlWidget(QWidget):
     """
-    Map-Based Control with Manual Coordinate Entry.
+    Map-Based Control with Safety Buffers, Gantry Limits, and Slider Speed Control.
     """
 
     def __init__(self, log_callback):
         super().__init__()
         self.log = log_callback
         self.target_mount = "left"
+
+        # Safety Config
+        self.SAFETY_BUFFER = 5.0  # mm from walls
+        self.MAX_Z = 345.0  # Max Gantry Z height
 
         # Layouts
         main_layout = QHBoxLayout()
@@ -610,10 +604,11 @@ class MovementControlWidget(QWidget):
 
         # --- LEFT: MAP ---
         self.map_widget = XYMapWidget()
+        self.map_widget.safety_buffer = self.SAFETY_BUFFER
         self.map_widget.on_target_change = self.sync_inputs_from_map
 
         guide = QLabel(
-            "<b>Map Click / WASD:</b> Select XY<br><b>Slider / Q/E:</b> Select Z<br><b>Type Coords:</b> Manual Entry"
+            "<b>Map Click / WASD:</b> XY Target<br><b>Vertical Slider / Q/E:</b> Z Target<br><b>Safety Buffer:</b> 5mm"
         )
         guide.setStyleSheet("color: #AAA; font-size: 9pt; margin-bottom: 5px;")
 
@@ -638,12 +633,12 @@ class MovementControlWidget(QWidget):
 
         # 2. Z Slider
         self.z_slider = QSlider(Qt.Vertical)
-        self.z_slider.setRange(0, 220)
-        self.z_slider.setValue(100)
+        self.z_slider.setRange(0, int(self.MAX_Z))
+        self.z_slider.setValue(150)
         self.z_slider.setTickPosition(QSlider.TicksRight)
         self.z_slider.valueChanged.connect(self.update_z_label)
 
-        self.z_label = QLabel("Z: 100")
+        self.z_label = QLabel("Z: 150")
         self.z_label.setAlignment(Qt.AlignCenter)
         self.z_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: black;")
 
@@ -651,25 +646,42 @@ class MovementControlWidget(QWidget):
         slider_layout.addWidget(self.z_slider)
         slider_layout.addWidget(self.z_label)
 
-        # 3. Manual Coordinate Inputs
-        coord_grp = QGroupBox("Manual Coordinates")
+        # 3. Manual Inputs
+        coord_grp = QGroupBox("Target Coordinates")
         form_layout = QFormLayout()
 
         self.input_x = QLineEdit("50.0")
         self.input_y = QLineEdit("50.0")
-        self.input_z = QLineEdit("100.0")
+        self.input_z = QLineEdit("150.0")
 
-        # Connect inputs to update map/slider
         self.input_x.editingFinished.connect(self.sync_map_from_inputs)
         self.input_y.editingFinished.connect(self.sync_map_from_inputs)
         self.input_z.editingFinished.connect(self.sync_map_from_inputs)
 
-        form_layout.addRow("X (mm):", self.input_x)
-        form_layout.addRow("Y (mm):", self.input_y)
-        form_layout.addRow("Z (mm):", self.input_z)
+        form_layout.addRow("X:", self.input_x)
+        form_layout.addRow("Y:", self.input_y)
+        form_layout.addRow("Z:", self.input_z)
         coord_grp.setLayout(form_layout)
 
-        # 4. Execute Button
+        # 4. Speed Slider (Horizontal)
+        speed_grp = QGroupBox("Movement Speed")
+        speed_layout = QVBoxLayout()
+
+        self.speed_val_label = QLabel("Speed: 400 mm/s")
+        self.speed_val_label.setAlignment(Qt.AlignCenter)
+
+        self.speed_slider = QSlider(Qt.Horizontal)
+        self.speed_slider.setRange(10, 500)  # 10mm/s to 500mm/s
+        self.speed_slider.setValue(400)
+        self.speed_slider.setTickPosition(QSlider.TicksBelow)
+        self.speed_slider.setTickInterval(50)
+        self.speed_slider.valueChanged.connect(self.update_speed_label)
+
+        speed_layout.addWidget(self.speed_val_label)
+        speed_layout.addWidget(self.speed_slider)
+        speed_grp.setLayout(speed_layout)
+
+        # 5. Execute Button
         self.btn_execute = QPushButton("MOVE TO COORDS")
         self.btn_execute.setStyleSheet(
             "background-color: #4CAF50; color: white; font-weight: bold; padding: 10px;"
@@ -680,6 +692,7 @@ class MovementControlWidget(QWidget):
         right_layout.addWidget(z_grp)
         right_layout.addLayout(slider_layout)
         right_layout.addWidget(coord_grp)
+        right_layout.addWidget(speed_grp)
         right_layout.addWidget(self.btn_execute)
         right_layout.addStretch()
 
@@ -687,43 +700,40 @@ class MovementControlWidget(QWidget):
         main_layout.addLayout(right_layout, stretch=1)
         self.setLayout(main_layout)
 
-    # --- SYNC LOGIC ---
+    # --- UI UPDATES ---
+    def update_speed_label(self):
+        val = self.speed_slider.value()
+        self.speed_val_label.setText(f"Speed: {val} mm/s")
+
     def sync_inputs_from_map(self, x, y):
-        """Map/Keys -> Text Boxes"""
         self.input_x.setText(f"{x:.1f}")
         self.input_y.setText(f"{y:.1f}")
 
     def update_z_label(self):
-        """Slider -> Text Box"""
         val = self.z_slider.value()
         self.z_label.setText(f"Z: {val}")
         self.input_z.setText(str(val))
 
     def sync_map_from_inputs(self):
-        """Text Boxes -> Map/Slider"""
         try:
             x = float(self.input_x.text())
             y = float(self.input_y.text())
             z = float(self.input_z.text())
-
-            # Clamp Z
-            z = max(0, min(220, z))
+            z = max(0, min(self.MAX_Z, z))
 
             self.map_widget.set_target_pos(x, y)
             self.z_slider.blockSignals(True)
             self.z_slider.setValue(int(z))
             self.z_slider.blockSignals(False)
             self.z_label.setText(f"Z: {int(z)}")
-
         except ValueError:
-            pass  # Ignore invalid text
+            pass
 
     def update_mount(self):
         self.target_mount = "left" if self.rb_left.isChecked() else "right"
 
     # --- KEY HANDLER ---
     def handle_key_event(self, event):
-        # Ignore keys if user is typing in text boxes
         if (
             self.input_x.hasFocus()
             or self.input_y.hasFocus()
@@ -755,7 +765,7 @@ class MovementControlWidget(QWidget):
     def handle_key_release(self, event):
         pass
 
-    # --- HELPERS ---
+    # --- API HELPERS ---
     def _extract_data(self, response):
         if isinstance(response, dict):
             return response.get("data", response)
@@ -764,25 +774,18 @@ class MovementControlWidget(QWidget):
         return response
 
     async def ensure_run_active(self):
-        """Robustly gets or creates a maintenance run."""
         ctl = FlexController.get_instance()
-
-        # 1. Try to get existing
         try:
             resp = await ctl.maintenance_run_management.get_current_maintenance_run()
             data = self._extract_data(resp)
-
-            # Check for ID in Dict or Object
             run_id = (
                 data.get("id") if isinstance(data, dict) else getattr(data, "id", None)
             )
-
             if run_id:
                 return run_id
         except Exception:
-            pass  # No current run
+            pass
 
-        # 2. Create New
         self.log("Creating new Maintenance Run...")
         try:
             resp = await ctl.maintenance_run_management.create_maintenance_run({})
@@ -790,31 +793,26 @@ class MovementControlWidget(QWidget):
             run_id = (
                 data.get("id") if isinstance(data, dict) else getattr(data, "id", None)
             )
-
             if run_id:
                 return run_id
             else:
-                self.log(f"Create Run Failed (No ID): {data}")
-                return None
+                self.log(f"Create Run Failed: {data}")
         except Exception as e:
-            self.log(f"Create Run Exception: {e}")
-            return None
+            self.log(f"Create Run Error: {e}")
+        return None
 
     async def ensure_pipette_loaded(self, run_id):
         ctl = FlexController.get_instance()
-
-        # 1. Check loaded pipettes
+        # 1. Check loaded
         try:
             resp = await ctl.maintenance_run_management.get_maintenance_run(run_id)
             run_data = self._extract_data(resp)
-
-            pipettes_list = (
+            pipettes = (
                 run_data.get("pipettes", [])
                 if isinstance(run_data, dict)
                 else getattr(run_data, "pipettes", [])
             )
-
-            for pip in pipettes_list:
+            for pip in pipettes:
                 p_mount = (
                     pip.get("mount")
                     if isinstance(pip, dict)
@@ -823,39 +821,38 @@ class MovementControlWidget(QWidget):
                 p_id = (
                     pip.get("id") if isinstance(pip, dict) else getattr(pip, "id", None)
                 )
-
                 if p_mount == self.target_mount and p_id:
                     return p_id
         except Exception:
             pass
 
-        # 2. Check Hardware
+        # 2. Check HW & Load
         try:
             hw_resp = await ctl.pipettes.get_pipettes(refresh=True)
-
-            # Handle API variations (PipettesByMount obj vs Dict)
-            mount_obj = None
-            if hasattr(hw_resp, self.target_mount):
-                mount_obj = getattr(hw_resp, self.target_mount)
-            elif isinstance(hw_resp, dict):
-                mount_obj = hw_resp.get(self.target_mount)
+            mount_obj = (
+                getattr(hw_resp, self.target_mount)
+                if hasattr(hw_resp, self.target_mount)
+                else (
+                    hw_resp.get(self.target_mount)
+                    if isinstance(hw_resp, dict)
+                    else None
+                )
+            )
 
             if not mount_obj:
-                self.log(f"No hardware data for {self.target_mount}")
+                self.log(f"No hardware pipette on {self.target_mount}")
                 return None
 
-            # Extract Name
-            name = None
-            if hasattr(mount_obj, "name"):
-                name = mount_obj.name
-            elif isinstance(mount_obj, dict):
-                name = mount_obj.get("name") or mount_obj.get("pipetteName")
+            name = getattr(mount_obj, "name", None) or (
+                mount_obj.get("name") if isinstance(mount_obj, dict) else None
+            )
+            name = name or (
+                mount_obj.get("pipetteName") if isinstance(mount_obj, dict) else None
+            )
 
             if not name:
-                self.log(f"No pipette attached to {self.target_mount}")
                 return None
 
-            # 3. Load
             self.log(f"Loading {name}...")
             cmd = {
                 "commandType": "loadPipette",
@@ -866,7 +863,6 @@ class MovementControlWidget(QWidget):
                 run_id, cmd, wait_until_complete=True
             )
             r_data = self._extract_data(res)
-
             result = (
                 r_data.get("result")
                 if isinstance(r_data, dict)
@@ -877,25 +873,35 @@ class MovementControlWidget(QWidget):
                 if isinstance(result, dict)
                 else getattr(result, "pipetteId", None)
             )
-
             if pip_id:
                 return pip_id
-
         except Exception as e:
-            self.log(f"Pipette Load Error: {e}")
-
+            self.log(f"Load Error: {e}")
         return None
 
     def execute_move(self):
-        # Force sync from inputs just in case
         self.sync_map_from_inputs()
 
-        x = self.map_widget.target_pos.x()
-        y = self.map_widget.target_pos.y()
-        z = float(self.z_slider.value())
+        # Raw targets
+        raw_x = self.map_widget.target_pos.x()
+        raw_y = self.map_widget.target_pos.y()
+        raw_z = float(self.z_slider.value())
 
-        self.log(f"Moving to: ({x:.1f}, {y:.1f}, {z:.1f})")
-        asyncio.create_task(self.async_execute(x, y, z))
+        # --- SAFETY CLAMPING ---
+        safe_x = max(
+            self.SAFETY_BUFFER,
+            min(self.map_widget.GANTRY_X - self.SAFETY_BUFFER, raw_x),
+        )
+        safe_y = max(
+            self.SAFETY_BUFFER,
+            min(self.map_widget.GANTRY_Y - self.SAFETY_BUFFER, raw_y),
+        )
+
+        if safe_x != raw_x or safe_y != raw_y:
+            self.log(f"Coords clamped for safety buffer ({self.SAFETY_BUFFER}mm)")
+
+        self.log(f"Moving to: ({safe_x:.1f}, {safe_y:.1f}, {raw_z:.1f})")
+        asyncio.create_task(self.async_execute(safe_x, safe_y, raw_z))
 
     async def async_execute(self, x, y, z):
         self.btn_execute.setEnabled(False)
@@ -903,23 +909,24 @@ class MovementControlWidget(QWidget):
         self.btn_execute.setStyleSheet("background-color: #e6b800; color: black;")
 
         try:
-            # 1. Run & Pipette
             run_id = await self.ensure_run_active()
             if not run_id:
-                raise Exception("Failed to get active run")
+                raise Exception("No Active Run")
 
             pipette_id = await self.ensure_pipette_loaded(run_id)
             if not pipette_id:
-                raise Exception(f"No pipette found on {self.target_mount}")
+                raise Exception(f"No pipette on {self.target_mount}")
 
-            # 2. Command
+            # Get Speed from Slider
+            speed = float(self.speed_slider.value())
+
             cmd = {
                 "commandType": "moveToCoordinates",
                 "intent": "setup",
                 "params": {
                     "pipetteId": pipette_id,
                     "coordinates": {"x": float(x), "y": float(y), "z": float(z)},
-                    "speed": 400.0,
+                    "speed": speed,
                     "forceDirect": True,
                     "minimumZHeight": 5.0,
                 },
@@ -930,22 +937,13 @@ class MovementControlWidget(QWidget):
                 run_id, cmd, wait_until_complete=True
             )
 
-            # 3. Check Status
             r_data = self._extract_data(resp)
-            status = (
-                r_data.get("status")
-                if isinstance(r_data, dict)
-                else getattr(r_data, "status", None)
-            )
-
-            if status == "succeeded":
+            if isinstance(r_data, dict) and r_data.get("status") == "succeeded":
                 self.log("Move Complete.")
                 self.map_widget.set_current_pos(x, y)
             else:
                 err = (
-                    r_data.get("error")
-                    if isinstance(r_data, dict)
-                    else getattr(r_data, "error", None)
+                    r_data.get("error") if isinstance(r_data, dict) else "Unknown Error"
                 )
                 self.log(f"Move Failed: {err}")
 
