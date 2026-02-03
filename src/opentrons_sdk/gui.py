@@ -359,7 +359,7 @@ class CameraWidget(QWidget):
 # --- UPDATED MANUAL CONTROL TAB ---
 class ManualControlTab(QWidget):
     """
-    Corresponds to 'ControlService', Movement, and Camera.
+    Wrapper tab. FIX: Added handle_key_event and handle_key_release.
     """
 
     def __init__(self, log_callback):
@@ -369,8 +369,9 @@ class ManualControlTab(QWidget):
 
         # Left: Movement
         self.movement_widget = MovementControlWidget(log_callback)
-        self.is_shift_held = False
-        # Center: Camera
+
+        # Center: Camera (Assuming CameraWidget exists in your file)
+        # Re-using previous CameraWidget if you have it, otherwise standard placeholder
         self.camera_widget = CameraWidget(log_callback)
 
         # Right: Actions
@@ -381,7 +382,6 @@ class ManualControlTab(QWidget):
         self.btn_lights_on = QPushButton("Lights ON")
         self.btn_lights_off = QPushButton("Lights OFF")
         self.btn_identify = QPushButton("Identify (Blink)")
-        self.btn_disengage = QPushButton("Disengage Motors")
 
         self.btn_home.clicked.connect(lambda: self.safe_async(self.handle_home()))
         self.btn_lights_on.clicked.connect(
@@ -393,15 +393,11 @@ class ManualControlTab(QWidget):
         self.btn_identify.clicked.connect(
             lambda: self.safe_async(self.handle_identify())
         )
-        self.btn_disengage.clicked.connect(
-            lambda: self.log("Action: Disengage not available.")
-        )
 
         actions_layout.addWidget(self.btn_home)
         actions_layout.addWidget(self.btn_lights_on)
         actions_layout.addWidget(self.btn_lights_off)
         actions_layout.addWidget(self.btn_identify)
-        actions_layout.addWidget(self.btn_disengage)
         actions_layout.addStretch()
         actions_group.setLayout(actions_layout)
 
@@ -410,6 +406,13 @@ class ManualControlTab(QWidget):
         layout.addWidget(actions_group, stretch=1)
 
         self.setLayout(layout)
+
+    def handle_key_event(self, event):
+        return self.movement_widget.handle_key_event(event)
+
+    def handle_key_release(self, event):
+        if hasattr(self.movement_widget, "handle_key_release"):
+            self.movement_widget.handle_key_release(event)
 
     def safe_async(self, coroutine):
         asyncio.create_task(coroutine)
@@ -444,41 +447,14 @@ class ManualControlTab(QWidget):
             await asyncio.sleep(1.0)
             self.btn_identify.setEnabled(True)
 
-    def handle_key_event(self, event):
-        if event.isAutoRepeat():
-            return False  # Ignore auto-repeated press events
-
-        key = event.key()
-        # Add Shift tracking
-        if key == Qt.Key_Shift:
-            self.is_shift_held = True  # You need to define this in __init__
-
-        if key in [Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D, Qt.Key_Q, Qt.Key_E]:
-            self.active_keys.add(key)
-            if not self.is_loop_running:
-                self.is_loop_running = True
-                asyncio.create_task(self.movement_loop())
-            return True
-        return False
-
-    def handle_key_release(self, event):
-        if event.isAutoRepeat():
-            return False  # Ignore auto-repeated release events
-
-        key = event.key()
-        if key == Qt.Key_Shift:
-            self.is_shift_held = False
-
-        if key in self.active_keys:
-            self.active_keys.remove(key)
-
 
 # --- MOVEMENT WIDGET (Smooth "Hold-to-Move" Logic) ---
 class MovementControlWidget(QWidget):
     """
     Handles WASD (XY) and QE (Z) input.
-    - Uses 'Fire-and-Forget' (wait_until_complete=False) to stack commands.
-    - Creates smooth motion by keeping the robot's command buffer populated.
+    - Queue Stuffing: Feeds commands continuously while key is held.
+    - Shift Key: Increases speed (300mm/s) and step size.
+    - Smooth Stop: Uses key release events to stop the feed loop.
     """
 
     def __init__(self, log_callback):
@@ -486,23 +462,24 @@ class MovementControlWidget(QWidget):
         self.log = log_callback
 
         # Configuration
-        self.step_size = 10.0  # Default mm per packet
+        self.step_size = 10.0
         self.z_axis = "leftZ"
 
         # State Tracking
         self.active_keys = set()
         self.is_loop_running = False
+        self.is_shift_held = False
 
-        # Speed Settings
+        # Speed Constants
         self.NORMAL_SPEED = 50.0  # mm/s
-        self.FAST_SPEED = 300.0  # mm/s (Shift held)
-        self.FAST_MULTIPLIER = 3.0  # Increase step size for fast mode
+        self.FAST_SPEED = 400.0  # mm/s
+        self.FAST_MULTIPLIER = 4.0  # Multiplier for step distance
 
         layout = QVBoxLayout()
 
         # 1. Guide
         guide = QLabel(
-            "Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis\n\n(Hold Key to Move Smoothly | Shift = Fast)"
+            "Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis\n\n(Hold Key for Smooth Motion | Hold Shift for Fast)"
         )
         guide.setAlignment(Qt.AlignCenter)
         guide.setStyleSheet(
@@ -514,12 +491,12 @@ class MovementControlWidget(QWidget):
         settings_grp = QGroupBox("Movement Settings")
         settings_layout = QVBoxLayout()
 
-        # Packet Size (Smaller = Smoother Stop, Larger = Smoother Move)
+        # Packet Size (Smaller = Smoother Stop)
         step_row = QHBoxLayout()
         step_row.addWidget(QLabel("Packet Size (mm):"))
         self.step_input = QComboBox()
         self.step_input.addItems(["1.0", "5.0", "10.0", "20.0"])
-        self.step_input.setCurrentIndex(2)  # 10.0mm is a good balance
+        self.step_input.setCurrentIndex(2)  # 10.0mm default
         self.step_input.currentTextChanged.connect(self.update_step_size)
         step_row.addWidget(self.step_input)
 
@@ -561,37 +538,41 @@ class MovementControlWidget(QWidget):
     def update_mount(self):
         self.z_axis = "leftZ" if self.rb_left.isChecked() else "rightZ"
 
-    # --- KEY EVENTS ---
+    # --- EVENT HANDLERS ---
     def handle_key_event(self, event):
+        """Called by parent on Key Press"""
+        if event.isAutoRepeat():
+            return False  # Ignore auto-repeat spam
+
         key = event.key()
 
-        # Filter relevant keys
+        if key == Qt.Key_Shift:
+            self.is_shift_held = True
+
         if key in [Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D, Qt.Key_Q, Qt.Key_E]:
             self.active_keys.add(key)
-
-            # Start the feed loop if not already running
             if not self.is_loop_running:
                 self.is_loop_running = True
                 asyncio.create_task(self.movement_loop())
             return True
         return False
 
-    def keyReleaseEvent(self, event):
-        # Note: This requires the parent widget to forward keyRelease events too
-        # If your MainWindow doesn't forward release, this won't work.
-        # Assuming you hook this up similarly to keyPress.
+    def handle_key_release(self, event):
+        """Called by parent on Key Release"""
+        if event.isAutoRepeat():
+            return False
+
         key = event.key()
+
+        if key == Qt.Key_Shift:
+            self.is_shift_held = False
+
         if key in self.active_keys:
             self.active_keys.remove(key)
-        super().keyReleaseEvent(event)
 
-    # --- ASYNC FEED LOOP ---
+    # --- ASYNC LOOP ---
     async def movement_loop(self):
-        """
-        Continuously feeds commands to the robot while keys are held.
-        """
-        self.status_label.setText("Moving...")
-        self.status_label.setStyleSheet("color: blue;")
+        self.status_label.setText("Starting Run...")
 
         ctl = FlexController.get_instance()
         run_id = await self.get_or_create_run(ctl)
@@ -599,76 +580,65 @@ class MovementControlWidget(QWidget):
         if not run_id:
             self.is_loop_running = False
             self.status_label.setText("Run Error")
+            self.status_label.setStyleSheet("color: red;")
             return
 
+        self.status_label.setText("Moving...")
+        self.status_label.setStyleSheet("color: blue;")
+
         while self.active_keys:
-            # 1. Determine Axis & Direction based on last pressed key logic
-            # (Simple priority: Z > Y > X)
+            # 1. Check Priority (Z > Y > X)
             axis = None
-            dist = 0
+            direction = 0
 
-            # Check modifiers inside the loop to allow dynamic speed changing
-            modifiers = asyncio.get_event_loop_policy().get_event_loop()
-            # Note: Checking modifiers purely async is hard, we assume state from last event
-            # For simplicity, we assume Shift is held if we want fast (or track it)
-            # We'll use a simplified speed toggle based on step size for now.
-
-            # Check keys
+            # Use last pressed logic or simple priority
             if Qt.Key_Q in self.active_keys:
-                axis, dist = self.z_axis, 1
+                axis, direction = self.z_axis, 1
             elif Qt.Key_E in self.active_keys:
-                axis, dist = self.z_axis, -1
+                axis, direction = self.z_axis, -1
             elif Qt.Key_W in self.active_keys:
-                axis, dist = "y", 1
+                axis, direction = "y", 1
             elif Qt.Key_S in self.active_keys:
-                axis, dist = "y", -1
+                axis, direction = "y", -1
             elif Qt.Key_A in self.active_keys:
-                axis, dist = "x", -1
+                axis, direction = "x", -1
             elif Qt.Key_D in self.active_keys:
-                axis, dist = "x", 1
+                axis, direction = "x", 1
 
             if not axis:
                 break
 
-            # 2. Apply Speed/Step Logic
-            # Check standard Qt keyboard modifiers
-            modifiers = (
-                Qt.ShiftModifier
-            )  # Placeholder, detecting async modifiers is tricky.
-            # Ideally, pass 'event' state to this loop.
-            # For this example, we'll assume Normal Speed unless we track Shift separately.
-
-            # Let's check Shift via a hack or assume Normal for smoothness first.
+            # 2. Calculate Parameters
             current_step = self.step_size
             current_speed = self.NORMAL_SPEED
 
-            # If user holds Shift (we'd need to track Qt.Key_Shift in active_keys)
-            # You should add Qt.Key_Shift to your key press handler if you want this.
+            if self.is_shift_held:
+                current_step *= self.FAST_MULTIPLIER
+                current_speed = self.FAST_SPEED
 
-            # 3. Send "Fire and Forget" Command
-            #
+            distance = direction * current_step
+
+            # 3. Fire Command (Wait=False)
             cmd = {
                 "commandType": "robot/moveAxesRelative",
                 "intent": "setup",
                 "params": {
-                    "axis_map": {axis: float(dist * current_step)},
+                    "axis_map": {axis: float(distance)},
                     "speed": float(current_speed),
                 },
             }
 
-            # wait_until_complete=False prevents blocking
+            #
+            # Fire-and-forget to keep buffer full
             await ctl.maintenance_run_management.enqueue_maintenance_command(
                 run_id, cmd, wait_until_complete=False
             )
 
-            # 4. Pacing Sleep
-            # We want to sleep just slightly LESS than the time the move takes
-            # Time = Distance / Speed
-            move_duration = abs(current_step) / current_speed
-
-            # Buffer Factor: 0.8 means we send the next command when the previous is 80% done.
-            # This ensures the robot never hits velocity=0.
-            sleep_time = max(0.05, move_duration * 0.8)
+            # 4. Pace the loop
+            # Sleep ~80% of the time the move takes to execute.
+            # Time = Dist / Speed
+            move_duration = abs(distance) / current_speed
+            sleep_time = max(0.01, move_duration * 0.8)
 
             await asyncio.sleep(sleep_time)
 
