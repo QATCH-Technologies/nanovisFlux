@@ -16,6 +16,7 @@ from PyQt5.QtGui import (  # <--- Ensure this is imported
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -34,10 +35,12 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
     QSpacerItem,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,  # <--- Added QComboBox
@@ -246,75 +249,13 @@ class ConnectionHeader(QFrame):
         self.lbl_sys.setText("Sys: -")
 
 
-from PyQt5.QtGui import QColor, QPainter
-from PyQt5.QtWidgets import QCheckBox, QFrame, QSizePolicy, QSlider
-
-
 # --- CUSTOM DISPLAY WIDGET (Fixed Rendering) ---
-class VideoDisplay(QLabel):
-    """
-    Custom Label that strictly clears the background before drawing
-    to prevent image stacking/dimming artifacts.
-    """
-
-    def __init__(self, text=""):
-        super().__init__(text)
-        self.brightness_level = 0
-        self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet(
-            "background: black; color: #888; border: 2px solid #555; font-weight: bold;"
-        )
-        self.setMinimumSize(400, 300)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._pixmap = None
-
-    def setPixmap(self, pixmap):
-        self._pixmap = pixmap
-        self.update()
-
-    def set_brightness(self, value):
-        self.brightness_level = int((value / 100) * 150)
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-
-        # 1. Force Clear Background (Fixes persistent ghosting)
-        painter.fillRect(self.rect(), Qt.black)
-
-        # 2. Draw Text if no image
-        if not self._pixmap or self._pixmap.isNull():
-            super().paintEvent(event)
-            return
-
-        # 3. Draw Camera Image
-        # Scale to fit
-        w = self.width()
-        h = self.height()
-        scaled = self._pixmap.scaled(w, h, Qt.KeepAspectRatio)
-
-        # Center coordinates
-        x = (w - scaled.width()) // 2
-        y = (h - scaled.height()) // 2
-
-        painter.drawPixmap(x, y, scaled)
-
-        # 4. Apply Brightness Boost (if needed)
-        if self.brightness_level > 0:
-            painter.setCompositionMode(QPainter.CompositionMode_Screen)
-            painter.fillRect(
-                x,
-                y,
-                scaled.width(),
-                scaled.height(),
-                QColor(255, 255, 255, self.brightness_level),
-            )
-
-        painter.end()
-
-
-# --- UPDATED CAMERA WIDGET ---
 class CameraWidget(QWidget):
+    """
+    High-performance camera viewer.
+    Polls the robot camera as fast as network/hardware permits.
+    """
+
     def __init__(self, log_callback):
         super().__init__()
         self.log = log_callback
@@ -322,8 +263,15 @@ class CameraWidget(QWidget):
 
         layout = QVBoxLayout()
 
-        # 1. Display
-        self.image_label = VideoDisplay("Camera Feed Off")
+        # 1. Standard Hardware-Accelerated Display
+        self.image_label = QLabel("Camera Feed Off")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        # Dark background provides better contrast
+        self.image_label.setStyleSheet(
+            "background: black; color: #555; border: 2px solid #333; font-weight: bold;"
+        )
+        self.image_label.setMinimumSize(400, 300)
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # 2. Controls
         btn_layout = QHBoxLayout()
@@ -331,38 +279,20 @@ class CameraWidget(QWidget):
         self.btn_toggle = QPushButton("Start Feed")
         self.btn_toggle.clicked.connect(self.toggle_stream)
 
-        self.chk_lights = QCheckBox("Auto-Lights")
-        self.chk_lights.setChecked(True)
-
         self.fps_combo = QComboBox()
-        # "Stable Max" forces a tiny delay to let AE settle
+        # "Max" now means literally 0ms delay between requests
         self.fps_combo.addItems(
-            ["Low (2 FPS)", "Med (10 FPS)", "High (20 FPS)", "Stable Max (30 FPS)"]
+            ["Low (2 FPS)", "Med (10 FPS)", "High (20 FPS)", "Max (Uncapped)"]
         )
-        self.fps_combo.setCurrentIndex(1)
+        self.fps_combo.setCurrentIndex(3)  # Default to Max since you are on Ethernet
 
         btn_layout.addWidget(self.btn_toggle)
-        btn_layout.addWidget(self.chk_lights)
-        btn_layout.addWidget(QLabel("FPS Limit:"))
+        btn_layout.addWidget(QLabel("Target FPS:"))
         btn_layout.addWidget(self.fps_combo)
-
-        # 3. Brightness Slider
-        bright_layout = QHBoxLayout()
-        self.slider_bright = QSlider(Qt.Horizontal)
-        self.slider_bright.setRange(0, 100)
-        self.slider_bright.setValue(0)
-        self.slider_bright.valueChanged.connect(self.update_brightness)
-
-        bright_layout.addWidget(QLabel("Brightness Boost:"))
-        bright_layout.addWidget(self.slider_bright)
 
         layout.addWidget(self.image_label)
         layout.addLayout(btn_layout)
-        layout.addLayout(bright_layout)
         self.setLayout(layout)
-
-    def update_brightness(self, val):
-        self.image_label.set_brightness(val)
 
     def toggle_stream(self):
         if self.is_streaming:
@@ -375,10 +305,6 @@ class CameraWidget(QWidget):
         self.btn_toggle.setText("Stop Feed")
         self.btn_toggle.setStyleSheet("background-color: #ffcccb; color: black;")
         self.log("Camera stream started.")
-
-        if self.chk_lights.isChecked():
-            asyncio.create_task(self.force_lights_on())
-
         asyncio.create_task(self.stream_loop())
 
     def stop_stream(self):
@@ -386,41 +312,34 @@ class CameraWidget(QWidget):
         self.btn_toggle.setText("Start Feed")
         self.btn_toggle.setStyleSheet("")
         self.image_label.setText("Camera Feed Off")
-        self.image_label.setPixmap(QPixmap())
+        self.image_label.clear()
         self.log("Camera stream stopped.")
 
-    async def force_lights_on(self):
-        try:
-            ctl = FlexController.get_instance()
-            await ctl.control.set_lights({"on": True})
-        except Exception:
-            pass
-
     async def stream_loop(self):
-        # We enforce a mandatory minimum delay to allow Auto-Exposure to converge
-        MIN_IO_DELAY = 0.03  # 30ms (~33 FPS max) prevents the AE "dimming spiral"
-
         while self.is_streaming:
             start_time = time.time()
+
             try:
                 ctl = FlexController.get_instance()
-
-                # Fetch
                 img_bytes = await ctl.camera.take_picture()
-
                 image = QImage.fromData(img_bytes)
                 if not image.isNull():
                     pixmap = QPixmap.fromImage(image)
-                    self.image_label.setPixmap(pixmap)
+                    w = self.image_label.width()
+                    h = self.image_label.height()
+                    if w > 0 and h > 0:
+                        self.image_label.setPixmap(
+                            pixmap.scaled(
+                                w, h, Qt.KeepAspectRatio, Qt.FastTransformation
+                            )
+                        )
 
             except Exception as e:
                 self.log(f"Cam Error: {e}")
                 self.stop_stream()
                 break
-
-            # FPS Logic
             fps_text = self.fps_combo.currentText()
-            target_delay = 0.1
+            target_delay = 0.0
 
             if "2 FPS" in fps_text:
                 target_delay = 0.5
@@ -428,16 +347,16 @@ class CameraWidget(QWidget):
                 target_delay = 0.1
             elif "20 FPS" in fps_text:
                 target_delay = 0.05
-            elif "Stable Max" in fps_text:
-                # Use the hardware safe limit
-                target_delay = MIN_IO_DELAY
 
             elapsed = time.time() - start_time
-            sleep_time = max(0.001, target_delay - elapsed)
+            sleep_time = max(0.0, target_delay - elapsed)
+            if sleep_time == 0:
+                await asyncio.sleep(0.001)
+            else:
+                await asyncio.sleep(sleep_time)
 
-            await asyncio.sleep(sleep_time)
 
-
+# --- UPDATED MANUAL CONTROL TAB ---
 class ManualControlTab(QWidget):
     """
     Corresponds to 'ControlService', Movement, and Camera.
@@ -448,13 +367,13 @@ class ManualControlTab(QWidget):
         self.log = log_callback
         layout = QHBoxLayout()
 
-        # --- Col 1: Movement Controls (Left) ---
+        # Left: Movement
         self.movement_widget = MovementControlWidget(log_callback)
 
-        # --- Col 2: Live Camera Feed (Center) ---
+        # Center: Camera
         self.camera_widget = CameraWidget(log_callback)
 
-        # --- Col 3: Robot Actions (Right) ---
+        # Right: Actions
         actions_group = QGroupBox("Robot Actions")
         actions_layout = QVBoxLayout()
 
@@ -498,7 +417,6 @@ class ManualControlTab(QWidget):
     def safe_async(self, coroutine):
         asyncio.create_task(coroutine)
 
-    # --- ACTIONS ---
     async def handle_home(self):
         self.log("Homing Robot...")
         self.btn_home.setEnabled(False)
@@ -532,34 +450,64 @@ class ManualControlTab(QWidget):
 
 class MovementControlWidget(QWidget):
     """
-    Handles WASD (XY) and QE (Z) input. (Preserved from original)
+    Handles WASD (XY) and QE (Z) input via Maintenance Run Commands.
+    Robustly handles 'No Current Run' 404 errors.
     """
 
     def __init__(self, log_callback):
         super().__init__()
         self.log = log_callback
         self.step_size = 10.0
+        self.active_run_id = None
+        self.z_axis = "leftZ"  # Default to left mount
 
         layout = QVBoxLayout()
 
-        # Visual Aid
-        guide = QLabel("Controls:\n" "W/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis")
+        # 1. Visual Guide
+        guide = QLabel("Controls:\nW/S: Y-Axis | A/D: X-Axis | Q/E: Z-Axis")
         guide.setAlignment(Qt.AlignCenter)
-        guide.setStyleSheet("background: #eee; padding: 10px; border-radius: 5px;")
+        guide.setStyleSheet(
+            "background: #333; color: #EEE; padding: 10px; border-radius: 5px; font-weight: bold;"
+        )
         layout.addWidget(guide)
 
-        # Controls
-        controls_layout = QHBoxLayout()
-        controls_layout.addWidget(QLabel("Step (mm):"))
+        # 2. Settings (Step Size & Z-Axis)
+        settings_grp = QGroupBox("Movement Settings")
+        settings_layout = QVBoxLayout()
+
+        # Step Size
+        step_row = QHBoxLayout()
+        step_row.addWidget(QLabel("Step (mm):"))
         self.step_input = QComboBox()
         self.step_input.addItems(["0.1", "1.0", "10.0", "50.0", "100.0"])
-        self.step_input.setCurrentIndex(2)
+        self.step_input.setCurrentIndex(2)  # 10.0
         self.step_input.currentTextChanged.connect(self.update_step_size)
-        controls_layout.addWidget(self.step_input)
-        layout.addLayout(controls_layout)
+        step_row.addWidget(self.step_input)
 
+        # Z-Axis Selection (Flex has two Zs)
+        z_row = QHBoxLayout()
+        z_row.addWidget(QLabel("Active Mount (Z):"))
+        self.rb_left = QRadioButton("Left")
+        self.rb_right = QRadioButton("Right")
+        self.rb_left.setChecked(True)
+        self.rb_left.toggled.connect(self.update_z_axis)
+
+        bg = QButtonGroup(self)
+        bg.addButton(self.rb_left)
+        bg.addButton(self.rb_right)
+
+        z_row.addWidget(self.rb_left)
+        z_row.addWidget(self.rb_right)
+
+        settings_layout.addLayout(step_row)
+        settings_layout.addLayout(z_row)
+        settings_grp.setLayout(settings_layout)
+        layout.addWidget(settings_grp)
+
+        # 3. Status
         self.status_label = QLabel("Status: Idle")
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("font-size: 10pt; color: gray;")
         layout.addWidget(self.status_label)
 
         layout.addStretch()
@@ -571,10 +519,17 @@ class MovementControlWidget(QWidget):
         except ValueError:
             pass
 
+    def update_z_axis(self):
+        if self.rb_left.isChecked():
+            self.z_axis = "leftZ"
+        else:
+            self.z_axis = "rightZ"
+
     def handle_key_event(self, event):
         key = event.key()
         axis = None
         distance = 0
+
         if key == Qt.Key_W:
             axis, distance = "y", self.step_size
         elif key == Qt.Key_S:
@@ -584,26 +539,93 @@ class MovementControlWidget(QWidget):
         elif key == Qt.Key_D:
             axis, distance = "x", self.step_size
         elif key == Qt.Key_Q:
-            axis, distance = "z", self.step_size
+            axis, distance = self.z_axis, self.step_size  # Up
         elif key == Qt.Key_E:
-            axis, distance = "z", -self.step_size
+            axis, distance = self.z_axis, -self.step_size  # Down
 
         if axis:
             asyncio.create_task(self.trigger_move(axis, distance))
             return True
         return False
 
-    async def trigger_move(self, axis, distance):
+    async def get_or_create_run(self):
+        """
+        Ensures a maintenance run exists.
+        Handles the expected 404 if no run is currently active.
+        """
+        ctl = FlexController.get_instance()
+
+        # 1. Try to get existing run
         try:
-            ctl = FlexController.get_instance()
-            self.status_label.setText(f"Moving {axis.upper()} {distance}mm")
-            # await ctl.motors.move_relative(axis=axis, distance=distance) # MOCK
-            self.log(f"CMD: Move {axis} {distance}")
-            self.status_label.setText("Idle")
-        except RuntimeError:
-            self.log("Error: Not Connected")
+            resp = await ctl.maintenance_run_management.get_current_maintenance_run()
+
+            # If successful, parse ID
+            data = (
+                resp.get("data")
+                if isinstance(resp, dict)
+                else getattr(resp, "data", None)
+            )
+            if data and isinstance(data, dict) and data.get("id"):
+                return data.get("id")
+
+        except Exception:
+            # This logic block catches the 404 "No current run found" error.
+            # This is normal; it just means we need to create one.
+            pass
+
+        # 2. Create new run if none found
+        # self.log("No active run found. Creating new Maintenance Run...")
+        try:
+            # Create a blank run (payload={} -> data={})
+            resp = await ctl.maintenance_run_management.create_maintenance_run({})
+            data = (
+                resp.get("data")
+                if isinstance(resp, dict)
+                else getattr(resp, "data", None)
+            )
+
+            if data and data.get("id"):
+                run_id = data.get("id")
+                self.log(f"Created new Maintenance Run: {run_id}")
+                return run_id
+
         except Exception as e:
-            self.log(f"Error: {e}")
+            self.status_label.setText("Error: Robot Busy?")
+            self.status_label.setStyleSheet("color: red;")
+            self.log(f"Failed to create run (Robot likely busy): {e}")
+            return None
+
+        return None
+
+    async def trigger_move(self, axis, distance):
+        self.status_label.setText(f"Moving {axis} {distance}mm...")
+        self.status_label.setStyleSheet("color: blue;")
+
+        try:
+            run_id = await self.get_or_create_run()
+            if not run_id:
+                return  # Error logged in helper
+
+            # Use moveAxesRelative (Jogging)
+            cmd = {
+                "commandType": "moveAxesRelative",
+                "params": {"axis": axis, "distance": distance},
+            }
+
+            ctl = FlexController.get_instance()
+            #
+            await ctl.maintenance_run_management.enqueue_maintenance_command(
+                run_id, cmd, wait_until_complete=True
+            )
+
+            self.status_label.setText("Idle")
+            self.status_label.setStyleSheet("color: green;")
+            self.log(f"Moved {axis} {distance}mm")
+
+        except Exception as e:
+            self.log(f"Move Error: {e}")
+            self.status_label.setText("Move Failed")
+            self.status_label.setStyleSheet("color: red;")
 
 
 class DataFilesWidget(QWidget):
@@ -1545,7 +1567,7 @@ class CalibrationTab(QWidget):
 
 class SystemTab(QWidget):
     """
-    Corresponds to 'Networking', 'Logs', 'SystemSettings', 'ClientData', and 'ErrorRecovery'.
+    Corresponds to 'Logs', 'SystemSettings', 'ClientData', 'ErrorRecovery'.
     """
 
     def __init__(self, log_callback):
@@ -1553,7 +1575,56 @@ class SystemTab(QWidget):
         self.log = log_callback
         layout = QVBoxLayout()
 
-        # --- 1. Error Recovery ---
+        # --- 1. System Logs (NEW) ---
+        log_group = QGroupBox("System Logs")
+        log_layout = QVBoxLayout()
+
+        # Controls Row
+        ctrl_layout = QHBoxLayout()
+
+        self.log_selector = QComboBox()
+        self.log_selector.addItems(
+            [
+                "api.log",
+                "serial.log",
+                "can_bus.log",
+                "server.log",
+                "combined_api_server.log",
+                "update_server.log",
+                "touchscreen.log",
+            ]
+        )
+
+        self.record_count = QSpinBox()
+        self.record_count.setRange(100, 50000)
+        self.record_count.setValue(2000)
+        self.record_count.setSingleStep(500)
+        self.record_count.setSuffix(" lines")
+
+        self.btn_fetch_log = QPushButton("Fetch Log")
+        self.btn_fetch_log.clicked.connect(self.handle_fetch_log)
+
+        ctrl_layout.addWidget(QLabel("File:"))
+        ctrl_layout.addWidget(self.log_selector)
+        ctrl_layout.addWidget(QLabel("Limit:"))
+        ctrl_layout.addWidget(self.record_count)
+        ctrl_layout.addWidget(self.btn_fetch_log)
+
+        # Display Area
+        self.log_display = QTextEdit()
+        self.log_display.setReadOnly(True)
+        self.log_display.setPlaceholderText(
+            "Select a log file and click 'Fetch Log' to view contents..."
+        )
+        self.log_display.setStyleSheet(
+            "font-family: Consolas, monospace; font-size: 10pt;"
+        )
+
+        log_layout.addLayout(ctrl_layout)
+        log_layout.addWidget(self.log_display)
+        log_group.setLayout(log_layout)
+
+        # --- 2. Error Recovery ---
         rec_group = QGroupBox("Error Recovery Settings")
         rec_layout = QHBoxLayout()
 
@@ -1579,30 +1650,25 @@ class SystemTab(QWidget):
         rec_layout.addWidget(btn_rec_refresh)
         rec_group.setLayout(rec_layout)
 
-        # --- 2. Client Data (Ephemeral) ---
+        # --- 3. Client Data ---
         data_group = QGroupBox("Client Data (Ephemeral)")
         data_layout = QVBoxLayout()
 
-        # Row 1: Key Input
         key_layout = QHBoxLayout()
         self.data_key_input = QLineEdit()
-        self.data_key_input.setPlaceholderText("Enter Key (e.g., 'sample_offset')")
+        self.data_key_input.setPlaceholderText("Key (e.g. 'offset')")
         key_layout.addWidget(QLabel("Key:"))
         key_layout.addWidget(self.data_key_input)
 
-        # Row 2: Value Input (JSON)
         self.data_val_input = QTextEdit()
-        self.data_val_input.setPlaceholderText(
-            '{"x": 10, "y": 20} - Enter valid JSON to SET'
-        )
-        self.data_val_input.setMaximumHeight(60)
+        self.data_val_input.setPlaceholderText('{"x": 10} - JSON Value')
+        self.data_val_input.setMaximumHeight(50)
 
-        # Row 3: Buttons
         btn_layout = QHBoxLayout()
         self.btn_get_data = QPushButton("GET")
         self.btn_set_data = QPushButton("SET")
-        self.btn_del_data = QPushButton("DELETE")
-        self.btn_clr_data = QPushButton("DELETE ALL")
+        self.btn_del_data = QPushButton("DEL")
+        self.btn_clr_data = QPushButton("CLR ALL")
 
         self.btn_get_data.clicked.connect(self.handle_get_data)
         self.btn_set_data.clicked.connect(self.handle_set_data)
@@ -1615,36 +1681,57 @@ class SystemTab(QWidget):
         btn_layout.addWidget(self.btn_clr_data)
 
         data_layout.addLayout(key_layout)
-        data_layout.addWidget(QLabel("Value (JSON):"))
         data_layout.addWidget(self.data_val_input)
         data_layout.addLayout(btn_layout)
         data_group.setLayout(data_layout)
 
-        # --- 3. Networking & Logs ---
-        net_group = QGroupBox("System Status")
-        net_layout = QHBoxLayout()
-        net_layout.addWidget(QLabel("WiFi: QATCH_Guest (85%)"))
-        btn_download_logs = QPushButton("Download Logs")
-        btn_update = QPushButton("System Update")
-        net_layout.addWidget(btn_download_logs)
-        net_layout.addWidget(btn_update)
-        net_group.setLayout(net_layout)
-
-        # Add groups
+        # Layout
+        layout.addWidget(log_group, stretch=2)  # Give logs more space
         layout.addWidget(rec_group)
         layout.addWidget(data_group)
-        layout.addWidget(net_group)
-        layout.addStretch()
         self.setLayout(layout)
 
-        # --- FIX: Schedule initial refresh ONLY after the loop starts ---
-        QTimer.singleShot(0, self.handle_get_recovery)
+        # Initial Refresh
+        QTimer.singleShot(1000, self.handle_get_recovery)
 
     # --- HELPERS ---
     def _get_val(self, item, attr, default=None):
         if isinstance(item, dict):
             return item.get(attr, default)
         return getattr(item, attr, default)
+
+    # --- LOG HANDLERS ---
+    def handle_fetch_log(self):
+        filename = self.log_selector.currentText()
+        count = self.record_count.value()
+        asyncio.create_task(self.async_fetch_logs(filename, count))
+
+    async def async_fetch_logs(self, filename, count):
+        self.log(f"Fetching {count} lines from {filename}...")
+        self.log_display.setText("Loading...")
+        self.btn_fetch_log.setEnabled(False)
+        try:
+            ctl = FlexController.get_instance()
+            #
+            # Calls GET /logs/{identifier}
+            log_content = await ctl.logs.get_logs(
+                log_identifier=filename, format="text", records=count
+            )
+
+            # The API might return a huge string or a JSON object depending on the client parser.
+            # We assume text for now.
+            if isinstance(log_content, dict):
+                self.log_display.setText(json.dumps(log_content, indent=2))
+            else:
+                self.log_display.setText(str(log_content))
+
+            self.log(f"Loaded {len(str(log_content))} bytes.")
+
+        except Exception as e:
+            self.log_display.setText(f"Error fetching logs:\n{e}")
+            self.log(f"Log Fetch Error: {e}")
+        finally:
+            self.btn_fetch_log.setEnabled(True)
 
     # --- ERROR RECOVERY HANDLERS ---
 
