@@ -10,6 +10,7 @@ async def main():
 
     try:
         bot_health = await bot.health.get_health()
+        await bot.pipettes.get_pipettes()
         print(bot_health)
     except Exception as e:
         print(f"Error: {e}")
