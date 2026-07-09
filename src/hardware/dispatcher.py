@@ -77,9 +77,3 @@ class Dispatcher:
     @staticmethod
     def build_position_query() -> str:
         return "M114"
-
-    @staticmethod
-    def dwell(milliseconds: int) -> str:
-        if milliseconds < 0:
-            raise ValueError("Dwell time cannot be negative.")
-        return f"G4 P{milliseconds}"
