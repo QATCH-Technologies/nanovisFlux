@@ -27,7 +27,7 @@ def setup_logger() -> None:
         colorize=True,
         enqueue=True,
     )
-    log_file = LOG_DIR / "ot2_hardware_{time:YYYY-MM-DD}.log"
+    log_file = LOG_DIR / "{time:YYYY-MM-DD}.log"
     logger.add(
         str(log_file),
         format=FILE_FORMAT,

@@ -1,0 +1,25 @@
+{
+  "connection": {
+    "default_port": "COM3",
+    "baudrate": 115200
+  },
+  "gantry": {
+    "safe_z_height": 100,
+    "default_travel_speed": 4000.0,
+    "default_plunge_speed": 2000.0
+  },
+  "mounts": {
+    "left": {
+      "type": "pipette",
+      "mount_axis": "Z",
+      "plunger_axis": "B",
+      "max_volume": 300.0,
+      "steps_per_ul": 100,
+      "blowout_distance": 100
+    },
+    "right": {
+      "type": "touch_sensor",
+      "mount_axis": "A"
+    }
+  }
+}
