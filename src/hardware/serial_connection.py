@@ -45,6 +45,10 @@ class SerialConnection(BaseConnection):
                 return self._wait_for_response()
             return ""
 
+    def reset_input_buffer(self) -> None:
+        if self.serial and self.serial.is_open:
+            self.serial.reset_input_buffer()
+
     def _wait_for_response(self) -> str:
         response_lines = []
         while True and self.serial is not None:

@@ -155,11 +155,6 @@ class Dispatcher:
         return "M114"
 
     @staticmethod
-    def build_endstop_query_command() -> str:
-        # NOTE: Retained from original script. Not explicitly in protocol.md, but standard for Marlin/CNC.
-        return "M119"
-
-    @staticmethod
     def build_debug_info_command(pin: str) -> str:
         gcode = f"M411 READ {pin}"
         logger.debug(f"Built debug info command: {gcode}")

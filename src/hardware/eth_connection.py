@@ -47,6 +47,18 @@ class ETHConnection(BaseConnection):
                 raise
             return ""
 
+    def reset_input_buffer(self) -> None:
+        if not self.socket:
+            return
+        self.socket.settimeout(0)
+        try:
+            while self.socket.recv(1024):
+                pass
+        except (socket.error, BlockingIOError):
+            pass
+        finally:
+            self.socket.settimeout(self.timeout)
+
     def _wait_for_response(self) -> str:
         response_lines = []
         buffer = ""

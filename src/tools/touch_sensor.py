@@ -1,23 +1,25 @@
 from typing import Optional
 
 from src.core.motion import MotionController
-from src.hardware.dispatcher import Dispatcher
 from src.utils.logger import logger
+
+# Digital pin wired to the touch probe (PROBE_TOUCH) on the OT2 stepper
+# controller firmware. Queried via the M411 debug-read command.
+DEFAULT_PROBE_PIN = 35
 
 
 class TouchSensor:
-    def __init__(self, mount_axis: str, motion: MotionController):
+    def __init__(self, mount_axis: str, motion: MotionController, probe_pin: int = DEFAULT_PROBE_PIN):
         self.mount_axis = mount_axis.upper()
         self.motion = motion
+        self.probe_pin = probe_pin
 
     def probe(self, target_depth: int, speed: float = 100.0) -> Optional[float]:
         logger.info(f"Probing on axis {self.mount_axis} towards {target_depth}...")
-        self.motion._set_absolute_mode()
 
-        probe_cmd = Dispatcher.build_probe_command(self.mount_axis, target_depth, speed)
-        response = self.motion.connection.send_command(probe_cmd)
+        response = self.motion.probe(self.mount_axis, target_depth, speed, probe_type="38.2")
 
-        if "error" in response.lower():
+        if "not ok" in response.lower():
             logger.error(f"Probe failed to find surface before reaching {target_depth}.")
             return None
 
@@ -27,9 +29,8 @@ class TouchSensor:
         return self.motion.current_position[self.mount_axis]
 
     def is_active(self) -> bool:
-        query_cmd = Dispatcher.build_endstop_query_command()
-        response = self.motion.connection.send_command(query_cmd)
-        is_active = "triggered" in response.lower()
+        response = self.motion.query_debug_info(str(self.probe_pin))
+        is_active = "high" in response.lower()
         state_str = "TRIGGERED" if is_active else "OPEN"
         logger.debug(f"Sensor state on {self.mount_axis}: {state_str}")
         return is_active

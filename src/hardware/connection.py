@@ -38,3 +38,6 @@ class Connection:
 
     def send_command(self, command: str, wait_for_ok: bool = True) -> str:
         return self._strategy.send_command(command, wait_for_ok)
+
+    def reset_input_buffer(self) -> None:
+        self._strategy.reset_input_buffer()

@@ -27,3 +27,7 @@ class BaseConnection(ABC):
     @abstractmethod
     def send_command(self, command: str, wait_for_ok: bool = True) -> str:
         pass
+
+    @abstractmethod
+    def reset_input_buffer(self) -> None:
+        pass

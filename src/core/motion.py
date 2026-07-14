@@ -48,6 +48,19 @@ class MotionController:
 
         logger.info(f"Absolute move complete. New position: {self.current_position}")
 
+    def rapid_move(self, positions: Dict[str, float]) -> None:
+        self._check_homed_state(positions.keys())
+
+        if not self._is_absolute_mode:
+            self._set_absolute_mode()
+
+        command = Dispatcher.build_rapid_move_command(positions)
+        self.connection.send_command(command)
+        for axis, value in positions.items():
+            self.current_position[axis.upper()] = value
+
+        logger.info(f"Rapid move complete. New position: {self.current_position}")
+
     def move_relative(self, offsets: Dict[str, int], speed: Optional[float] = None) -> None:
         self._check_homed_state(offsets.keys())
 
@@ -75,8 +88,7 @@ class MotionController:
     def stop_continuous_jog(self) -> None:
         halt_cmd = Dispatcher.build_quick_stop()
         self.connection.send_command(halt_cmd, wait_for_ok=False)
-        if self.connection.serial:
-            self.connection.serial.reset_input_buffer()
+        self.connection.reset_input_buffer()
 
         self.sync_position()
 
@@ -90,6 +102,71 @@ class MotionController:
                 self.current_position[matched_axis] = float(val_str)
 
         logger.debug(f"Position synced after interrupt: {self.current_position}")
+
+    def probe(
+        self, axis: str, target: int, speed: float, probe_type: str = "38.2"
+    ) -> str:
+        self._check_homed_state([axis])
+
+        if not self._is_absolute_mode:
+            self._set_absolute_mode()
+
+        command = Dispatcher.build_probe_command(axis, target, speed, probe_type)
+        response = self.connection.send_command(command)
+
+        # Firmware only reports X/Y/A in [PRB:...]; re-query to get the
+        # authoritative position for every axis instead of parsing it.
+        self.sync_position()
+        logger.info(f"Probe on axis {axis.upper()} complete: {response}")
+        return response
+
+    def emergency_stop(self) -> None:
+        command = Dispatcher.build_emergency_stop()
+        self.connection.send_command(command, wait_for_ok=False)
+        self.connection.reset_input_buffer()
+        self.current_position = {axis: None for axis in AXES}
+        logger.warning("Emergency stop triggered. Machine must be re-homed before further motion.")
+
+    def reset_controller(self) -> None:
+        command = Dispatcher.build_reset_controller_command()
+        self.connection.send_command(command)
+        self.current_position = {axis: None for axis in AXES}
+        self._is_absolute_mode = True
+        logger.warning("Controller reset to firmware defaults. Machine must be re-homed.")
+
+    def disable_blocking_limits(self) -> None:
+        command = Dispatcher.build_disable_blocking_limits_command()
+        self.connection.send_command(command)
+        logger.warning("Firmware blocking limits disabled.")
+
+    def set_hard_limits(self, limits: Dict[str, int]) -> None:
+        command = Dispatcher.build_set_hard_limits_command(limits)
+        self.connection.send_command(command)
+        logger.info(f"Hard limits set: {limits}")
+
+    def set_accelerations(self, accels: Dict[str, int]) -> None:
+        command = Dispatcher.build_set_accelerations_command(accels)
+        self.connection.send_command(command)
+        logger.info(f"Accelerations set: {accels}")
+
+    def set_homing_speeds(self, speeds: Dict[str, int]) -> None:
+        command = Dispatcher.build_set_homing_speeds_command(speeds)
+        self.connection.send_command(command)
+        logger.info(f"Homing speeds set: {speeds}")
+
+    def set_travel_speeds(self, speeds: Dict[str, int]) -> None:
+        command = Dispatcher.build_set_travel_speeds_command(speeds)
+        self.connection.send_command(command)
+        logger.info(f"Travel speeds set: {speeds}")
+
+    def set_homing_retraction(self, distances: Dict[str, int]) -> None:
+        command = Dispatcher.build_set_homing_retraction_command(distances)
+        self.connection.send_command(command)
+        logger.info(f"Homing retraction distances set: {distances}")
+
+    def query_debug_info(self, pin: str) -> str:
+        command = Dispatcher.build_debug_info_command(pin)
+        return self.connection.send_command(command)
 
     def _check_homed_state(self, requested_axes: iter) -> None:
         unhomed = [axis for axis in requested_axes if self.current_position[axis.upper()] is None]

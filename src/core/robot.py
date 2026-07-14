@@ -20,13 +20,18 @@ class Robot:
     ):
         self.config = {}
         self._load_config(config_path)
-        self.port = port or self.config.get("connection", {}).get("default_port")
-        baudrate = self.config.get("connection", {}).get("baudrate", 115200)
+        conn_config = self.config.get("connection", {})
+        self.port = port or conn_config.get("default_port")
+        baudrate = conn_config.get("baudrate", 115200)
+        timeout = conn_config.get("timeout", 1.0)
+        protocol = conn_config.get("protocol", "auto")
 
         if connection_override is not None:
             self._connection = connection_override
         else:
-            self._connection = Connection(port=self.port, baudrate=baudrate)
+            self._connection = Connection(
+                target=self.port, port_or_baud=baudrate, timeout=timeout, protocol=protocol
+            )
 
         self.motion = MotionController(self._connection)
 
@@ -56,7 +61,10 @@ class Robot:
             )
 
         elif tool_type == "touch_sensor":
-            return TouchSensor(mount_axis=mount_axis, motion=self.motion)
+            kwargs = {"mount_axis": mount_axis, "motion": self.motion}
+            if "probe_pin" in tool_data:
+                kwargs["probe_pin"] = tool_data["probe_pin"]
+            return TouchSensor(**kwargs)
 
         else:
             logger.warning(f"Unknown tool type '{tool_type}' on {side} mount.")
@@ -85,6 +93,12 @@ class Robot:
 
     def home(self, axes: Optional[List[str]] = None) -> None:
         self.motion.home(axes)
+
+    def emergency_stop(self) -> None:
+        self.motion.emergency_stop()
+
+    def reset(self) -> None:
+        self.motion.reset_controller()
 
     def get_tool(self, side: Literal["left", "right"]) -> Pipette | TouchSensor:
         tool = self.left_tool if side == "left" else self.right_tool
