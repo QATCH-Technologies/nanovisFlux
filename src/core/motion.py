@@ -25,12 +25,15 @@ class MotionController:
 
     def home(self, axes: Optional[List[str]] = None) -> None:
         command = Dispatcher.build_home_command(axes)
-        self.connection.send_command(command)
-        axes_to_update = axes if axes else AXES
-        for axis in axes_to_update:
-            self.current_position[axis.upper()] = 0.0
+        response = self.connection.send_command(command)
 
-        logger.info(f"Homed axes: {axes_to_update}. Current position reset to 0.")
+        requested_axes = [axis.upper() for axis in axes] if axes else None
+        homed_axes = Dispatcher.validate_home_response(response, requested_axes)
+
+        for axis in homed_axes:
+            self.current_position[axis] = 0.0
+
+        logger.info(f"Homed axes: {homed_axes}. Current position reset to 0.")
 
         # Always revert to absolute mode after a homing cycle
         self._set_absolute_mode()
@@ -42,7 +45,8 @@ class MotionController:
             self._set_absolute_mode()
 
         command = Dispatcher.build_move_command(positions, speed)
-        self.connection.send_command(command)
+        response = self.connection.send_command(command)
+        Dispatcher.validate_response(response, command)
         for axis, value in positions.items():
             self.current_position[axis.upper()] = value
 
@@ -55,7 +59,8 @@ class MotionController:
             self._set_absolute_mode()
 
         command = Dispatcher.build_rapid_move_command(positions)
-        self.connection.send_command(command)
+        response = self.connection.send_command(command)
+        Dispatcher.validate_response(response, command)
         for axis, value in positions.items():
             self.current_position[axis.upper()] = value
 
@@ -68,7 +73,8 @@ class MotionController:
             self._set_relative_mode()
 
         command = Dispatcher.build_move_command(offsets, speed)
-        self.connection.send_command(command)
+        response = self.connection.send_command(command)
+        Dispatcher.validate_response(response, command)
         for axis, offset in offsets.items():
             current_val = self.current_position[axis.upper()]
             if current_val is not None:

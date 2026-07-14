@@ -15,11 +15,11 @@ class GamepadTeleop:
         self.current_speed = 20_000
         self.max_speed = 100_000
         self.speed_increment = 1_000
-        self.volume_step = 1_000
 
         self.is_running = True
         self.deadzone = 0.2  # Ignore slight stick drift
-        self.axis_states = {"X": 0, "Y": 0, "Z": 0}  # Tracks active direction
+        self.axis_states = {"X": 0, "Y": 0, "Z": 0, "A": 0}  # Tracks active direction
+        self._active_pipette_jog = None  # (tool, axis, start_position) while Aspirate/Dispense is held
 
         # Initialize Pygame and Joystick
         pygame.init()
@@ -41,7 +41,7 @@ class GamepadTeleop:
         logger.info(" [X/Y Gantry]    Left Analog Stick")
         logger.info(" [Active Z]      Right Analog Stick (Up/Down)")
         logger.info(" [Mount Switch]  LB / L1 (Left), RB / R1 (Right)")
-        logger.info(" [Fluidic]       X / Square (Aspirate), B / Circle (Dispense)")
+        logger.info(" [Fluidic]       X / Square (Aspirate, hold), B / Circle (Dispense, hold)")
         logger.info("-" * 60)
         logger.info(" [Speed Control] D-Pad Up (Increase), D-Pad Down (Decrease)")
         logger.info(" [Step Size]     D-Pad Right (Larger), D-Pad Left (Smaller)")
@@ -53,12 +53,7 @@ class GamepadTeleop:
         logger.info("=" * 60 + "\n")
 
     def _get_active_mount_axis(self) -> str:
-        # Matches original behavior
-        if self.active_mount == "left":
-            return "Z"
-        elif self.active_mount == "right":
-            return "Z"
-        return "Z"
+        return self.robot.get_mount_axis(self.active_mount)
 
     def _handle_axis_motion(
         self, axis: str, value: float, positive_dir: float, negative_dir: float
@@ -76,21 +71,38 @@ class GamepadTeleop:
                 self.robot.motion.start_continuous_jog(axis, direction, self.current_speed)
                 self.axis_states[axis] = direction
 
+    def _sync_pipette_jog_volume(self) -> None:
+        """Reconciles Pipette.current_volume after a continuous Aspirate/Dispense hold stops."""
+        if self._active_pipette_jog is None:
+            return
+
+        tool, axis, start_position = self._active_pipette_jog
+        self._active_pipette_jog = None
+
+        end_position = self.robot.motion.current_position.get(axis)
+        if start_position is None or end_position is None or not tool.steps_per_ul:
+            return
+
+        delta_volume = (end_position - start_position) / tool.steps_per_ul
+        tool.current_volume = max(0.0, min(tool.max_volume, tool.current_volume + delta_volume))
+
     def _process_events(self) -> None:
         for event in pygame.event.get():
             try:
-                # --- BUTTON PRESSES (One-shot actions) ---
+                # --- BUTTON PRESSES ---
                 if event.type == pygame.JOYBUTTONDOWN:
                     # Emergency Stop (Start Button - usually button 7)
                     if event.button == 7:
                         self.robot.motion.stop_continuous_jog()
+                        self._sync_pipette_jog_volume()
                         self.is_running = False
                         logger.info("Emergency Stop Triggered. Exiting...")
 
                     # Quick Stop (Back/Select Button - usually button 6)
                     elif event.button == 6:
                         self.robot.motion.stop_continuous_jog()
-                        self.axis_states = {"X": 0, "Y": 0, "Z": 0}
+                        self._sync_pipette_jog_volume()
+                        self.axis_states = {"X": 0, "Y": 0, "Z": 0, "A": 0}
                         logger.info("Quick Stop Triggered.")
 
                     # Log Position (A Button - usually button 0)
@@ -109,16 +121,25 @@ class GamepadTeleop:
                         self.active_mount = "right"
                         logger.info(f"Switched to {self.active_mount.upper()} mount.")
 
-                    # Fluidics (X = 2 for Aspirate, B = 1 for Dispense)
+                    # Fluidics (X = 2 for Aspirate, B = 1 for Dispense; continuous while held)
                     elif event.button in (1, 2):
                         tool = self.robot.get_tool(self.active_mount)
                         if hasattr(tool, "aspirate"):
-                            if event.button == 2:
-                                tool.aspirate(self.volume_step)
-                                logger.info(f"Aspirated {self.volume_step}")
-                            elif event.button == 1:
-                                tool.dispense(self.volume_step)
-                                logger.info(f"Dispensed {self.volume_step}")
+                            axis = tool.axis
+                            direction = 1.0 if event.button == 2 else -1.0
+                            self._active_pipette_jog = (
+                                tool,
+                                axis,
+                                self.robot.motion.current_position[axis],
+                            )
+                            self.robot.motion.start_continuous_jog(axis, direction, self.current_speed)
+
+                # --- BUTTON RELEASES (Interrupt continuous actions) ---
+                elif event.type == pygame.JOYBUTTONUP:
+                    # Fluidics release (X = 2 for Aspirate, B = 1 for Dispense)
+                    if event.button in (1, 2):
+                        self.robot.motion.stop_continuous_jog()
+                        self._sync_pipette_jog_volume()
 
                 # --- D-PAD / HATS (Settings Configuration) ---
                 elif event.type == pygame.JOYHATMOTION:
@@ -182,6 +203,7 @@ class GamepadTeleop:
                 time.sleep(0.02)  # 50Hz polling rate to prevent CPU maxing
         except KeyboardInterrupt:
             self.robot.motion.stop_continuous_jog()
+            self._sync_pipette_jog_volume()
             logger.info("Teleop interrupted by user.")
         finally:
             pygame.quit()

@@ -57,7 +57,12 @@ class SerialConnection(BaseConnection):
             if line:
                 response_lines.append(line)
                 logger.debug(f"Received: {line}")
-                if line.lower().startswith("ok") or line.lower().startswith("error"):
+                line_lower = line.lower()
+                if (
+                    line_lower == "ok"
+                    or line_lower.startswith("not ok")
+                    or line_lower.startswith("error")
+                ):
                     break
             else:
                 logger.warning(f"Timeout waiting for response from OT-2 on {self.port}.")

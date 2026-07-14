@@ -13,10 +13,10 @@ class KeyboardTeleop:
         self.current_speed = 20_000
         self.max_speed = 100_000
         self.speed_increment = 1_000
-        self.volume_step = 1_000
         self.active_axes = {}
         self.pressed_keys = set()
         self.is_running = True
+        self._active_pipette_jog = None  # (tool, axis, start_position) while R/F is held
         self._print_legend()
 
     def _print_legend(self) -> None:
@@ -25,7 +25,7 @@ class KeyboardTeleop:
         logger.info(" [X/Y Gantry]    A (+X), D (-X), W (-Y), S (+Y)")
         logger.info(" [Mount Switch]  1 (Left), 2 (Right)")
         logger.info(" [Active Z]      Q (+Z), E (-Z)")
-        logger.info(" [Fluidic]       R (Aspirate), F (Dispense)")
+        logger.info(" [Fluidic]       R (Aspirate, hold), F (Dispense, hold)")
         logger.info("-" * 50)
         logger.info(" [Speed Control] Left (Decrease Speed), Right (Increase Speed)")
         logger.info(" [Step Size]     [ (Smaller Step), ] (Larger Step)")
@@ -37,11 +37,7 @@ class KeyboardTeleop:
         logger.info("=" * 50 + "\n")
 
     def _get_active_mount_axis(self) -> str:
-        if self.active_mount == "left":
-            return "Z"
-        elif self.active_mount == "right":
-            return "Z"
-        return "Z"
+        return self.robot.get_mount_axis(self.active_mount)
 
     def on_press(self, key) -> bool:
         if key in self.pressed_keys:
@@ -51,10 +47,12 @@ class KeyboardTeleop:
         try:
             if key == keyboard.Key.esc:
                 self.robot.motion.stop_continuous_jog()
+                self._sync_pipette_jog_volume()
                 self.is_running = False
                 return False
             if key == keyboard.Key.space:
                 self.robot.motion.stop_continuous_jog()
+                self._sync_pipette_jog_volume()
                 self.active_axes.clear()
                 return True
             if key == keyboard.Key.enter:
@@ -93,14 +91,14 @@ class KeyboardTeleop:
                 elif char == "h":
                     self.robot.home()
 
-                # Fluidics (One-shot actions)
+                # Fluidics (Continuous, interrupted on key release)
                 elif char in ("r", "f"):
                     tool = self.robot.get_tool(self.active_mount)
                     if hasattr(tool, "aspirate"):
-                        if char == "r":
-                            tool.aspirate(self.volume_step)
-                        else:
-                            tool.dispense(self.volume_step)
+                        axis = tool.axis
+                        direction = 1.0 if char == "r" else -1.0
+                        self._active_pipette_jog = (tool, axis, self.robot.motion.current_position[axis])
+                        self.robot.motion.start_continuous_jog(axis, direction, self.current_speed)
 
                 elif hasattr(key, "char"):
                     char = key.char.lower()
@@ -134,9 +132,25 @@ class KeyboardTeleop:
 
         if hasattr(key, "char"):
             char = key.char.lower()
-            if char in ("a", "d", "w", "s", "q", "e"):
+            if char in ("a", "d", "w", "s", "q", "e", "r", "f"):
                 self.robot.motion.stop_continuous_jog()
+                self._sync_pipette_jog_volume()
         return True
+
+    def _sync_pipette_jog_volume(self) -> None:
+        """Reconciles Pipette.current_volume after a continuous R/F jog stops."""
+        if self._active_pipette_jog is None:
+            return
+
+        tool, axis, start_position = self._active_pipette_jog
+        self._active_pipette_jog = None
+
+        end_position = self.robot.motion.current_position.get(axis)
+        if start_position is None or end_position is None or not tool.steps_per_ul:
+            return
+
+        delta_volume = (end_position - start_position) / tool.steps_per_ul
+        tool.current_volume = max(0.0, min(tool.max_volume, tool.current_volume + delta_volume))
 
     def start(self) -> None:
         with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:

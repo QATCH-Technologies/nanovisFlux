@@ -108,6 +108,14 @@ class Robot:
 
         return tool
 
+    def get_mount_axis(self, side: Literal["left", "right"]) -> str:
+        mount_axis = self.config.get("mounts", {}).get(side, {}).get("mount_axis")
+
+        if not mount_axis:
+            raise RuntimeError(f"No mount_axis configured for the {side} mount.")
+
+        return mount_axis.upper()
+
     def move_to(
         self,
         x: Optional[float] = None,

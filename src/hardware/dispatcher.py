@@ -1,3 +1,4 @@
+import re
 from typing import Dict, List, Optional
 
 from src.utils.logger import logger
@@ -10,6 +11,12 @@ AXES = {
     "B",
     "C",  # Added C as protocol.md lists it in the coordinate system
 }
+
+_HOMED_AXIS_RE = re.compile(r"(?i)Homed\s+([A-Z])\.")
+
+
+class CommandError(Exception):
+    """Raised when the controller reports a failed or malformed response to a command."""
 
 
 class Dispatcher:
@@ -159,6 +166,59 @@ class Dispatcher:
         gcode = f"M411 READ {pin}"
         logger.debug(f"Built debug info command: {gcode}")
         return gcode
+
+    # --- Response Validation ---
+
+    @staticmethod
+    def validate_response(response: str, command: str = "") -> str:
+        """
+        Validates a raw device response against the OT2 serial protocol, which
+        always terminates a command with a final 'ok' or 'NOT ok' line.
+        Raises CommandError if the command failed or the response was
+        truncated (e.g. by a read timeout) before a terminal line arrived.
+        """
+        lines = [line.strip() for line in response.strip().splitlines() if line.strip()]
+        if not lines:
+            raise CommandError(
+                f"No response received for command '{command}'. The device may be "
+                "unreachable, or the read timed out before 'ok' was received."
+            )
+
+        last_line = lines[-1].lower()
+        if last_line.startswith("not ok"):
+            raise CommandError(f"Command '{command}' failed: {lines[-1]}")
+        if last_line != "ok":
+            raise CommandError(
+                f"Command '{command}' did not terminate with 'ok'. The response may "
+                f"have been truncated by a read timeout. Received: {response!r}"
+            )
+
+        return response
+
+    @staticmethod
+    def validate_home_response(response: str, requested_axes: Optional[List[str]] = None) -> List[str]:
+        """
+        Validates a G28 response and returns the axes the firmware actually
+        confirmed via 'Homed <axis>.' lines.
+
+        If requested_axes is given (an explicit subset was homed), every
+        requested axis must be confirmed or a CommandError is raised. If
+        requested_axes is None (a full 'home all' was issued), whatever the
+        firmware confirms is accepted as-is, since not every axis necessarily
+        has homing hardware.
+        """
+        Dispatcher.validate_response(response, "G28")
+
+        homed_axes = sorted({axis.upper() for axis in _HOMED_AXIS_RE.findall(response)})
+
+        if requested_axes:
+            missing = [axis for axis in requested_axes if axis.upper() not in homed_axes]
+            if missing:
+                raise CommandError(
+                    f"Homing did not confirm axes {missing}. Device reported: {response!r}"
+                )
+
+        return homed_axes
 
     # --- Emergency and Control Commands ---
 
