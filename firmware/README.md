@@ -60,12 +60,9 @@ firmware/
 │   ├── DualHBridgeStepper.h
 │   ├── OT2-stepper-controller.ino
 |
+├── CHANGELOG.md
 ├── README.md
 ├── LICENSE
-├── CHANGELOG.md
-│
-└── images/
-    └── block-diagram.png
 ```
 
 ---
