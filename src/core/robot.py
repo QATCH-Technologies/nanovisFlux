@@ -3,14 +3,11 @@ from pathlib import Path
 from typing import List, Literal, Optional, Union
 
 from src.core.motion import MotionController
-from src.core.pipette import Pipette
-from src.core.touch_sensor import TouchSensor
 from src.hardware.connection import Connection
+from src.tools import Pipette, TouchSensor
 from src.utils.logger import logger
 
-DEFAULT_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "config" / "ot2_config.json"
-)
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "ot2_config.json"
 
 
 class Robot:
