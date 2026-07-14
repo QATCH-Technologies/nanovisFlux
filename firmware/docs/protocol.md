@@ -593,9 +593,9 @@ When enabled:
 * Multiple axes may move simultaneously during homing.
 * Intended for development, troubleshooting, and recovery.
 
-> Warning:
->
-> This command bypasses normal motion safety protections. Use only when the operator understands the consequences.
+> **Warning:**
+> This command bypasses normal motion safety protections. <br/>
+> Use only when the operator understands the consequences.
 
 ---
 

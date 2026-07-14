@@ -10,9 +10,9 @@ https://semver.org/
 
 ---
 
-# Project: OpenFlux OT-2 Stepper Controller
-# Author: Alexander Ross (@ajross4)
-# Company: QATCH Technologies LLC
+>### Project: OpenFlux OT-2 Stepper Controller
+>### Author: Alexander Ross (@ajross4)
+>### Company: QATCH Technologies LLC
 
 ---
 
