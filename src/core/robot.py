@@ -8,7 +8,9 @@ from src.core.touch_sensor import TouchSensor
 from src.hardware.connection import Connection
 from src.utils.logger import logger
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "ot2_config.json"
+DEFAULT_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "config" / "ot2_config.json"
+)
 
 
 class Robot:
@@ -28,6 +30,7 @@ class Robot:
             self._connection = connection_override
         else:
             self._connection = Connection(port=self.port, baudrate=baudrate)
+
         self.motion = MotionController(self._connection)
 
         self.left_tool = self._init_tool("left")

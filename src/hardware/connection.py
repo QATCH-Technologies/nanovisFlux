@@ -14,13 +14,16 @@ class Connection:
         self.timeout = timeout
         self.serial: Optional[serial.Serial] = None
         self.lock = threading.Lock()
+        self.connect()
 
     def connect(self) -> None:
         try:
             self.serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
             time.sleep(2.0)
             self.serial.reset_input_buffer()
-            logger.info(f"Connected to OT-2 on port {self.port} at {self.baudrate} baud.")
+            logger.info(
+                f"Connected to OT-2 on port {self.port} at {self.baudrate} baud."
+            )
 
         except serial.SerialException as e:
             logger.error(f"Failed to connect to OT-2 on {self.port}: {e}")
@@ -56,6 +59,8 @@ class Connection:
                 if line.lower().startswith("ok") or line.lower().startswith("error"):
                     break
             else:
-                logger.warning(f"Timeout waiting for response from OT-2 on {self.port}.")
+                logger.warning(
+                    f"Timeout waiting for response from OT-2 on {self.port}."
+                )
                 break
         return "\n".join(response_lines)

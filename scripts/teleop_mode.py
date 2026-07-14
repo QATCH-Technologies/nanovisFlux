@@ -3,7 +3,7 @@ from src.interfaces.keyboard_teleop import KeyboardTeleop
 from src.utils.logger import logger
 from tests.mock_connection import MockConnection
 
-SESION_TYPE = "real"
+SESION_TYPE = "real"  # ddwads mock or real
 
 
 def run_mock_session():
@@ -12,7 +12,7 @@ def run_mock_session():
     logger.info("Starting Mock Teleop Session")
 
     try:
-        robot.connect()
+        # robot.connect()
         teleop = KeyboardTeleop(robot)
         teleop.start()
     except Exception as e:
@@ -26,7 +26,7 @@ def run_session():
     logger.info("Starting Teleop Session")
 
     try:
-        robot.connect()
+        # robot.connect()
         teleop = KeyboardTeleop(robot)
         teleop.start()
     except Exception as e:

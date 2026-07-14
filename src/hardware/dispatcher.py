@@ -2,12 +2,20 @@ from typing import Dict, List, Optional
 
 from src.utils.logger import logger
 
-AXES = {"X", "Y", "Z", "A", "B", "C"}
+AXES = {
+    "X",
+    "Y",
+    "Z",
+    "A",
+    "B",
+}
 
 
 class Dispatcher:
     @staticmethod
-    def build_move_command(positions: Dict[str, int], speed: Optional[float] = None) -> str:
+    def build_move_command(
+        positions: Dict[str, int], speed: Optional[float] = None
+    ) -> str:
         if not positions:
             raise ValueError("Move command requires at least one axis position.")
 
@@ -40,6 +48,7 @@ class Dispatcher:
             if axis_upper not in AXES:
                 raise ValueError(f"Invalid axis '{axis_upper}' for homing.")
             command_parts.append(axis_upper)
+        command_parts.append("\n")
 
         gcode = " ".join(command_parts)
         logger.debug(f"Built home command: {gcode}")

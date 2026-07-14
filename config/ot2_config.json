@@ -1,6 +1,6 @@
 {
   "connection": {
-    "default_port": "COM3",
+    "default_port": "COM6",
     "baudrate": 115200
   },
   "gantry": {
