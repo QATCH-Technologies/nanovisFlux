@@ -7,6 +7,13 @@ from src.utils.logger import logger
 
 
 class MotionController:
+    # Homing is fully blocking on the firmware side and streams one
+    # 'Homed <axis>.' line at a time as each axis reaches its endstop, so the
+    # gap between lines can be many seconds (esp. for the long-travel Z/A
+    # axes). This overrides the connection's short default read timeout only
+    # for the duration of a home() call.
+    HOME_READ_TIMEOUT = 30.0
+
     def __init__(self, connection: Connection):
         self.connection = connection
         self.current_position: Dict[str, Optional[float]] = {axis: None for axis in AXES}
@@ -25,7 +32,7 @@ class MotionController:
 
     def home(self, axes: Optional[List[str]] = None) -> None:
         command = Dispatcher.build_home_command(axes)
-        response = self.connection.send_command(command)
+        response = self.connection.send_command(command, timeout=self.HOME_READ_TIMEOUT)
 
         requested_axes = [axis.upper() for axis in axes] if axes else None
         homed_axes = Dispatcher.validate_home_response(response, requested_axes)

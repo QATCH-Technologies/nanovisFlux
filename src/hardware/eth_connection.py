@@ -30,7 +30,9 @@ class ETHConnection(BaseConnection):
             self.socket.close()
             logger.info(f"Disconnected from OT-2 at {self.host}:{self.port}.")
 
-    def send_command(self, command: str, wait_for_ok: bool = True) -> str:
+    def send_command(
+        self, command: str, wait_for_ok: bool = True, timeout: Optional[float] = None
+    ) -> str:
         if not self.socket:
             raise RuntimeError(f"Cannot send command. Connection to {self.host} is closed.")
 
@@ -41,7 +43,7 @@ class ETHConnection(BaseConnection):
                 self.socket.sendall(formatted_command)
                 logger.debug(f"Sent: {command.strip()}")
                 if wait_for_ok:
-                    return self._wait_for_response()
+                    return self._wait_for_response(timeout)
             except socket.error as e:
                 logger.error(f"Socket error while sending command: {e}")
                 raise
@@ -59,38 +61,44 @@ class ETHConnection(BaseConnection):
         finally:
             self.socket.settimeout(self.timeout)
 
-    def _wait_for_response(self) -> str:
+    def _wait_for_response(self, timeout: Optional[float] = None) -> str:
         response_lines = []
         buffer = ""
+        previous_timeout = self.socket.gettimeout()
+        if timeout is not None:
+            self.socket.settimeout(timeout)
 
-        while True and self.socket is not None:
-            try:
-                data = self.socket.recv(1024).decode("utf-8")
-                if not data:
-                    logger.warning(f"Connection closed by server at {self.host}.")
+        try:
+            while True and self.socket is not None:
+                try:
+                    data = self.socket.recv(1024).decode("utf-8")
+                    if not data:
+                        logger.warning(f"Connection closed by server at {self.host}.")
+                        break
+
+                    buffer += data
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+
+                        if line:
+                            response_lines.append(line)
+                            logger.debug(f"Received: {line}")
+                            line_lower = line.lower()
+                            if (
+                                line_lower == "ok"
+                                or line_lower.startswith("not ok")
+                                or line_lower.startswith("error")
+                            ):
+                                return "\n".join(response_lines)
+
+                except socket.timeout:
+                    logger.warning(f"Timeout waiting for response from OT-2 at {self.host}.")
                     break
-
-                buffer += data
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-
-                    if line:
-                        response_lines.append(line)
-                        logger.debug(f"Received: {line}")
-                        line_lower = line.lower()
-                        if (
-                            line_lower == "ok"
-                            or line_lower.startswith("not ok")
-                            or line_lower.startswith("error")
-                        ):
-                            return "\n".join(response_lines)
-
-            except socket.timeout:
-                logger.warning(f"Timeout waiting for response from OT-2 at {self.host}.")
-                break
-            except socket.error as e:
-                logger.error(f"Socket error reading response: {e}")
-                break
+                except socket.error as e:
+                    logger.error(f"Socket error reading response: {e}")
+                    break
+        finally:
+            self.socket.settimeout(previous_timeout)
 
         return "\n".join(response_lines)

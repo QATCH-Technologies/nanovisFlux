@@ -1,3 +1,5 @@
+from typing import Optional
+
 from src.hardware.base_connection import BaseConnection
 from src.hardware.eth_connection import ETHConnection
 from src.hardware.serial_connection import SerialConnection
@@ -36,8 +38,10 @@ class Connection:
     def disconnect(self) -> None:
         self._strategy.disconnect()
 
-    def send_command(self, command: str, wait_for_ok: bool = True) -> str:
-        return self._strategy.send_command(command, wait_for_ok)
+    def send_command(
+        self, command: str, wait_for_ok: bool = True, timeout: Optional[float] = None
+    ) -> str:
+        return self._strategy.send_command(command, wait_for_ok, timeout)
 
     def reset_input_buffer(self) -> None:
         self._strategy.reset_input_buffer()
