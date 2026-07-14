@@ -1,6 +1,58 @@
 # OT2 Stepper Controller Serial Protocol
 
-## Overview
+<!-- TOC -->
+
+## Table of Contents
+
+- [Command Reference](#command-reference)
+- [Protocol Overview](#protocol-overview)
+- [Serial Response Format](#serial-response-format)
+- [Units and Motion Conventions](#units-and-motion-conventions)
+- [Coordinate System](#coordinate-system)
+- [Default Coordinate Space](#default-coordinate-space)
+- [Positioning Modes](#positioning-modes)
+- [Motion Commands](#motion-commands)
+- [Homing Commands](#homing-commands)
+- [Probe Commands](#probe-commands)
+- [Configuration Commands](#configuration-commands)
+- [Status Commands](#status-commands)
+- [Emergency and Control Commands](#emergency-and-control-commands)
+- [Future Development](#future-development)
+
+<!-- /TOC -->
+
+---
+
+# Command Reference
+
+Quick links to supported commands:
+
+| Command | Description |
+|---------|-------------|
+| [G0](#g0--rapid-move) | Rapid movement |
+| [G1](#g1--linear-move) | Linear movement with configurable feed rate |
+| [G28](#g28--home-axes) | Home one or more axes |
+| [G38.2](#g382--probe-toward-error-on-failure) | Probe toward surface with error on failure |
+| [G38.3](#g383--probe-toward-no-error) | Probe toward surface without error on failure |
+| [G38.4](#g384--probe-away-error-on-failure) | Probe away from surface with error on failure |
+| [G38.5](#g385--probe-away-no-error) | Probe away from surface without error on failure |
+| [G90](#g90--absolute-positioning) | Set absolute coordinate mode |
+| [G91](#g91--relative-positioning) | Set relative coordinate mode |
+| [M30](#m30--reset-controller) | Reset controller to firmware defaults |
+| [M112](#m112--emergency-stop--kill) | Emergency motor shutdown |
+| [M114](#m114--report-current-position) | Report current position |
+| [M201](#m201--set-hard-limits) | Configure axis travel limits |
+| [M204](#m204--set-accelerations) | Configure acceleration values |
+| [M210](#m210--set-homing-speeds) | Configure homing speeds |
+| [M220](#m220--set-travel-speeds) | Configure travel speeds |
+| [M410](#m410--quick-stop) | Stop motion while preserving position |
+| [M411](#m411--query-debug-information) | Query debug information |
+| [M421](#m421--set-homing-retraction-distance) | Configure homing retract distance |
+| [M911](#m911--disable-blocking-limits) | Disable firmware motion limits |
+
+---
+
+# Protocol Overview
 
 The OT2 Stepper Controller communicates using a serial **G-code** protocol inspired by common CNC and motion-control firmware.
 

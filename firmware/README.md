@@ -102,31 +102,35 @@ No additional third-party libraries are required.
 
 Detailed build instructions are available in:
 
-```
-docs/building.md
-```
+[Building Instructions](docs/building.md).
 
 ### Quick Start
 
 1. Clone this repository.
 
 ```bash
-git clone https://github.com/<your-username>/OT2-stepper-controller.git
+git clone https://github.com/QATCH-Technologies/nanovisFlux.git
 ```
 
-2. Open `OT2-stepper-controller.ino` in the Arduino IDE.
+2. Switch to the development branch `open-flux`.
 
-3. Select:
+3. Open `OT2-stepper-controller.ino` in the Arduino IDE.
+
+4. Select:
 
 * **Board:** Teensy 4.1
 * **USB Type:** Serial
 * **COM Port:** Your connected Teensy
 
-4. Install the AccelStepper library if prompted.
+5. Install the AccelStepper library if prompted.
 
-5. Click **Verify**.
+6. Click **Verify**.
 
-6. Upload the firmware.
+7. Upload the firmware.
+
+8. Open COM serial port.
+
+9. Send G-code commands (see [Communication Protocol](#communication-protocol)).
 
 ---
 
@@ -136,9 +140,7 @@ The controller communicates using a serial G-code interface.
 
 A complete reference, including supported commands, responses, examples, and error codes, is available in:
 
-```
-docs/protocol.md
-```
+[Serial Protocol Documentation](docs/protocol.md)
 
 ---
 
@@ -146,9 +148,7 @@ docs/protocol.md
 
 Hardware compatibility, connector information, electrical interfaces, and wiring notes are documented in:
 
-```
-docs/hardware.md
-```
+[Hardware Documentation](docs/hardware.md)
 
 This project maintains compatibility with the original OT-2 connector layout to simplify installation and integration.
 
@@ -169,13 +169,12 @@ The primary goals of this project are:
 
 ## Documentation
 
-| Document           | Description                       |
-| ------------------ | --------------------------------- |
-| `README.md`        | Project overview                  |
-| `docs/building.md` | Build and upload instructions     |
-| `docs/hardware.md` | Hardware compatibility and wiring |
-| `docs/protocol.md` | Serial G-code protocol reference  |
-| `CHANGELOG.md`     | Release history                   |
+| Document | Description |
+|----------|-------------|
+| [Building Instructions](docs/building.md) | Build and upload instructions |
+| [Hardware Documentation](docs/hardware.md) | Hardware compatibility and wiring |
+| [Serial Protocol Documentation](docs/protocol.md) | G-code command reference |
+| [Changelog](CHANGELOG.md) | Release history |
 
 ---
 
@@ -203,4 +202,4 @@ Bug reports, feature requests, documentation improvements, and pull requests are
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
-See the `LICENSE` file for the complete license text.
+See the [LICENSE](LICENSE) file for the complete license text.
