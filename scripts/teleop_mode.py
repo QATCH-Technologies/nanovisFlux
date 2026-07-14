@@ -3,7 +3,7 @@ from src.interfaces.keyboard_teleop import KeyboardTeleop
 from src.utils.logger import logger
 from tests.mock_connection import MockConnection
 
-SESION_TYPE = "real"  # ddwads mock or real
+SESION_TYPE = "mock"  # mock or real
 
 
 def run_mock_session():
