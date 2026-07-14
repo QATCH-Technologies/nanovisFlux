@@ -1,9 +1,11 @@
 from src.core.robot import Robot
+from src.interfaces.gamepad_teleop import GamepadTeleop
 from src.interfaces.keyboard_teleop import KeyboardTeleop
 from src.utils.logger import logger
 from tests.mock_connection import MockConnection
 
 SESION_TYPE = "mock"  # mock or real
+SCHEME = "gamepad"  # keyboard or gamepad
 
 
 def run_mock_session():
@@ -12,8 +14,10 @@ def run_mock_session():
     logger.info("Starting Mock Teleop Session")
 
     try:
-        # robot.connect()
-        teleop = KeyboardTeleop(robot)
+        if SCHEME == "gamepad":
+            teleop = GamepadTeleop(robot)
+        else:
+            teleop = KeyboardTeleop(robot)
         teleop.start()
     except Exception as e:
         logger.error(f"Session crashed: {e}")
@@ -26,8 +30,10 @@ def run_session():
     logger.info("Starting Teleop Session")
 
     try:
-        # robot.connect()
-        teleop = KeyboardTeleop(robot)
+        if SCHEME == "gamepad":
+            teleop = GamepadTeleop(robot)
+        else:
+            teleop = KeyboardTeleop(robot)
         teleop.start()
     except Exception as e:
         logger.error(f"Session crashed: {e}")

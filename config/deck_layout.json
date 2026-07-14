@@ -1,0 +1,7 @@
+{
+  "slots": {
+    "1": { "x_offset_mm": 0.0,   "y_offset_mm": 0.0, "z_offset_mm": 0.0, "width_mm": 128.0, "depth_mm": 86.0 },
+    "2": { "x_offset_mm": 132.0, "y_offset_mm": 0.0, "z_offset_mm": 0.0, "width_mm": 128.0, "depth_mm": 86.0 },
+    "3": { "x_offset_mm": 264.0, "y_offset_mm": 0.0, "z_offset_mm": 0.0, "width_mm": 128.0, "depth_mm": 86.0 }
+  }
+}

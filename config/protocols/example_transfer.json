@@ -1,0 +1,19 @@
+{
+  "name": "transfer_100ul_slot1_to_slot2",
+  "instructions": [
+    {
+      "name": "aspirate from slot 1",
+      "tool_side": "left",
+      "action": "aspirate",
+      "location": { "slot_id": "1", "x_mm": 10.0, "y_mm": 10.0, "z_mm": 5.0 },
+      "params": { "volume": 100.0, "speed": 300.0 }
+    },
+    {
+      "name": "dispense at slot 2",
+      "tool_side": "left",
+      "action": "dispense",
+      "location": { "slot_id": "2", "x_mm": 10.0, "y_mm": 10.0, "z_mm": 5.0 },
+      "params": { "volume": 100.0, "speed": 300.0 }
+    }
+  ]
+}

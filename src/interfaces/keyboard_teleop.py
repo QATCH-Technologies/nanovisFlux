@@ -26,6 +26,7 @@ class KeyboardTeleop:
         logger.info(" [Mount Switch]  1 (Left), 2 (Right)")
         logger.info(" [Active Z]      Q (+Z), E (-Z)")
         logger.info(" [Fluidic]       R (Aspirate, hold), F (Dispense, hold)")
+        logger.info(" [Tip]           T (Pickup), G (Drop)")
         logger.info("-" * 50)
         logger.info(" [Speed Control] Left (Decrease Speed), Right (Increase Speed)")
         logger.info(" [Step Size]     [ (Smaller Step), ] (Larger Step)")
@@ -99,6 +100,22 @@ class KeyboardTeleop:
                         direction = 1.0 if char == "r" else -1.0
                         self._active_pipette_jog = (tool, axis, self.robot.motion.current_position[axis])
                         self.robot.motion.start_continuous_jog(axis, direction, self.current_speed)
+
+                # Tip handling (single press, not held)
+                elif char in ("t", "g"):
+                    self.robot.motion.stop_continuous_jog()
+                    self._sync_pipette_jog_volume()
+                    tool = self.robot.get_tool(self.active_mount)
+                    if char == "t":
+                        if hasattr(tool, "pick_up_tip"):
+                            tool.pick_up_tip()
+                        else:
+                            logger.warning(f"{self.active_mount.upper()} tool has no pick_up_tip().")
+                    else:
+                        if hasattr(tool, "drop_tip"):
+                            tool.drop_tip()
+                        else:
+                            logger.warning(f"{self.active_mount.upper()} tool has no drop_tip().")
 
                 elif hasattr(key, "char"):
                     char = key.char.lower()

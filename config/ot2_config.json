@@ -8,6 +8,12 @@
     "default_travel_speed": 4000.0,
     "default_plunge_speed": 2000.0
   },
+  "calibration": {
+    "X": { "steps_per_mm": 160.0, "home_offset_mm": 0.0 },
+    "Y": { "steps_per_mm": 160.0, "home_offset_mm": 0.0 },
+    "Z": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 },
+    "A": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 }
+  },
   "mounts": {
     "left": {
       "type": "pipette",
@@ -15,7 +21,11 @@
       "plunger_axis": "B",
       "max_volume": 300.0,
       "steps_per_ul": 100,
-      "blowout_distance": 100
+      "blowout_distance": 100,
+      "plunger_max_steps": 20000,
+      "tip_pickup_presses": 3,
+      "tip_pickup_press_depth": 300,
+      "tip_pickup_press_speed": 300
     },
     "right": {
       "type": "touch_sensor",

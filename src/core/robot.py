@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 from typing import List, Literal, Optional, Union
 
+from src.core.calibration import Calibration
+from src.core.deck import DEFAULT_DECK_LAYOUT_PATH, Deck, DeckLocation
 from src.core.motion import MotionController
 from src.hardware.connection import Connection
-from src.tools import Pipette, TouchSensor
+from src.tools import Tool, create_tool
 from src.utils.logger import logger
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "ot2_config.json"
@@ -16,6 +18,7 @@ class Robot:
         self,
         port: str | None = None,
         config_path: str | Path = DEFAULT_CONFIG_PATH,
+        deck_layout_path: str | Path = DEFAULT_DECK_LAYOUT_PATH,
         connection_override=None,
     ):
         self.config = {}
@@ -38,10 +41,13 @@ class Robot:
         self.left_tool = self._init_tool("left")
         self.right_tool = self._init_tool("right")
 
+        self.calibration = self._load_calibration()
+        self.deck = self._load_deck(deck_layout_path)
+
         self.safe_z = self.config.get("gantry", {}).get("safe_z_height", 100)
         self.home()
 
-    def _init_tool(self, side: str) -> Union[Pipette, TouchSensor, None]:
+    def _init_tool(self, side: str) -> Optional[Tool]:
         tool_data: dict = self.config.get("mounts", {}).get(side)
 
         if not tool_data:
@@ -49,24 +55,10 @@ class Robot:
             return None
 
         tool_type = tool_data.get("type", "")
-        mount_axis = tool_data.get("mount_axis", "")
 
-        if tool_type == "pipette":
-            return Pipette(
-                axis=tool_data.get("plunger_axis", ""),
-                max_volume=tool_data.get("max_volume", 0.0),
-                steps_per_ul=tool_data.get("steps_per_ul", 0),
-                blowout_distance=tool_data.get("blowout_distance", 0),
-                motion=self.motion,
-            )
-
-        elif tool_type == "touch_sensor":
-            kwargs = {"mount_axis": mount_axis, "motion": self.motion}
-            if "probe_pin" in tool_data:
-                kwargs["probe_pin"] = tool_data["probe_pin"]
-            return TouchSensor(**kwargs)
-
-        else:
+        try:
+            return create_tool(tool_type, tool_data, self.motion)
+        except ValueError:
             logger.warning(f"Unknown tool type '{tool_type}' on {side} mount.")
             return None
 
@@ -81,6 +73,20 @@ class Robot:
             )
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON formatting in {config_path}: {e}")
+
+    def _load_calibration(self) -> Optional[Calibration]:
+        calibration_data = self.config.get("calibration")
+        if not calibration_data:
+            logger.info("No calibration configuration found. mm-based motion is unavailable.")
+            return None
+        return Calibration.from_config(calibration_data)
+
+    def _load_deck(self, deck_layout_path: Union[str, Path]) -> Optional[Deck]:
+        try:
+            return Deck.load(deck_layout_path)
+        except FileNotFoundError:
+            logger.info(f"No deck layout found at {deck_layout_path}. Deck moves are unavailable.")
+            return None
 
     def connect(self) -> None:
         logger.info(f"Initializing Robot on {self.port}...")
@@ -100,7 +106,7 @@ class Robot:
     def reset(self) -> None:
         self.motion.reset_controller()
 
-    def get_tool(self, side: Literal["left", "right"]) -> Pipette | TouchSensor:
+    def get_tool(self, side: Literal["left", "right"]) -> Tool:
         tool = self.left_tool if side == "left" else self.right_tool
 
         if tool is None:
@@ -145,3 +151,14 @@ class Robot:
 
         if offsets:
             self.motion.move_relative(offsets, speed=speed)
+
+    def move_to_location(self, location: DeckLocation, speed: Optional[float] = None) -> None:
+        if self.deck is None:
+            raise RuntimeError("No deck layout loaded. Cannot move to a deck location.")
+        if self.calibration is None:
+            raise RuntimeError("No calibration loaded. Cannot convert mm to steps.")
+
+        positions_mm = self.deck.resolve_mm(location)
+        positions_steps = self.calibration.mm_to_steps(positions_mm)
+        travel_speed = speed or self.config.get("gantry", {}).get("default_travel_speed")
+        self.motion.move_absolute(positions_steps, speed=travel_speed)
