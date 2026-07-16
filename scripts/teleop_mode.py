@@ -4,7 +4,7 @@ from src.interfaces.keyboard_teleop import KeyboardTeleop
 from src.utils.logger import logger
 from tests.mock_connection import MockConnection
 
-SESION_TYPE = "mock"  # mock or real
+SESION_TYPE = "real"  # mock or real
 SCHEME = "gamepad"  # keyboard or gamepad
 
 

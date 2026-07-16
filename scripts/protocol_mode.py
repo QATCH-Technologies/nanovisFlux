@@ -9,13 +9,15 @@ def protocol_runner():
     logger.info("Starting Protocol Session")
 
     try:
-        loc = DeckLocation(slot_id="11", x_mm=100, y_mm=100, z_mm=100)
-        robot.move_to_location(location=loc, mount="left", speed=2000.0)
+        loc = DeckLocation(
+            slot_id="1",
+        )
+        robot.move_to_location(location=loc, mount="left", speed=3000.0)
     except Exception as e:
         logger.error(f"Session crashed: {e}")
     finally:
         robot.disconnect()
 
 
-if __name__ == "__init__":
+if __name__ == "__main__":
     protocol_runner()
