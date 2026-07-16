@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional, Union
 
 from src.core.calibration import Calibration
-from src.core.coordinate_system import MountOffsets, PhysicalEnvelope
+from src.core.coordinate_system import DeckCalibration, MountOffsets, PhysicalEnvelope
 from src.core.deck import DEFAULT_DECK_LAYOUT_PATH, Deck, DeckLocation
 from src.core.motion import MotionController
 from src.hardware.connection import Connection
@@ -46,6 +46,7 @@ class Robot:
         self.deck = self._load_deck(deck_layout_path)
         self.physical_envelope = self._load_physical_envelope()
         self.mount_offsets = self._load_mount_offsets()
+        self.deck_calibration = self._load_deck_calibration()
 
         self.safe_z = self.config.get("gantry", {}).get("safe_z_height", 100)
         self.home()
@@ -104,6 +105,13 @@ class Robot:
             logger.info("No mount offsets configured. Deck moves will target the gantry frame directly.")
             return None
         return MountOffsets.from_config(offsets)
+
+    def _load_deck_calibration(self) -> Optional[DeckCalibration]:
+        data = self.config.get("deck_calibration")
+        if not data:
+            logger.info("No deck calibration configured. Deck X/Y moves are unavailable.")
+            return None
+        return DeckCalibration.from_config(data)
 
     def connect(self) -> None:
         logger.info(f"Initializing Robot on {self.port}...")
@@ -177,11 +185,14 @@ class Robot:
     ) -> None:
         if self.deck is None:
             raise RuntimeError("No deck layout loaded. Cannot move to a deck location.")
+        if self.deck_calibration is None:
+            raise RuntimeError("No deck calibration loaded. Cannot convert deck X/Y to steps.")
         if self.calibration is None:
-            raise RuntimeError("No calibration loaded. Cannot convert mm to steps.")
+            raise RuntimeError("No calibration loaded. Cannot convert Z mm to steps.")
 
         positions_mm = self.deck.resolve_mm(location)
-        positions_steps = self.calibration.mm_to_steps(positions_mm)
+        positions_steps = self.deck_calibration.mm_to_steps(positions_mm["X"], positions_mm["Y"])
+        positions_steps.update(self.calibration.mm_to_steps({"Z": positions_mm["Z"]}))
 
         if mount is not None:
             positions_steps = self._to_mount_frame(mount, positions_steps)

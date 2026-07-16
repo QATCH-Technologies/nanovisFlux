@@ -11,9 +11,14 @@ MINIMAL_CONFIG = {
     "connection": {"default_port": "COM6", "baudrate": 115200},
     "gantry": {"safe_z_height": 100, "default_travel_speed": 4000.0},
     "calibration": {
-        "X": {"steps_per_mm": 160.0, "home_offset_mm": 0.0},
-        "Y": {"steps_per_mm": 160.0, "home_offset_mm": 0.0},
         "Z": {"steps_per_mm": 400.0, "home_offset_mm": 0.0},
+    },
+    "deck_calibration": {
+        "origin_steps": {"X": 0.0, "Y": 0.0},
+        "x_reference_steps": {"X": 160.0},
+        "x_reference_mm": 1.0,
+        "y_reference_steps": {"Y": 160.0},
+        "y_reference_mm": 1.0,
     },
     "mounts": {
         "left": {
@@ -75,6 +80,7 @@ def test_calibration_and_deck_populate(config_path, deck_layout_path):
     robot = _make_robot(config_path, deck_layout_path)
     assert robot.calibration is not None
     assert robot.deck is not None
+    assert robot.deck_calibration is not None
 
 
 def test_move_to_location_resolves_expected_steps(config_path, deck_layout_path):
@@ -141,3 +147,13 @@ def test_move_to_location_raises_outside_physical_envelope(
     with pytest.raises(RuntimeError):
         # Z steps = 500 * 400 = 200000, beyond the calibrated 0-160000 envelope.
         robot.move_to_location(DeckLocation(slot_id="1", x_mm=0.0, y_mm=0.0, z_mm=500.0))
+
+
+def test_move_to_location_raises_without_deck_calibration(tmp_path, deck_layout_path):
+    config = {k: v for k, v in MINIMAL_CONFIG.items() if k != "deck_calibration"}
+    path = tmp_path / "ot2_config_no_deck_cal.json"
+    path.write_text(json.dumps(config))
+    robot = _make_robot(path, deck_layout_path)
+    assert robot.deck_calibration is None
+    with pytest.raises(RuntimeError):
+        robot.move_to_location(DeckLocation(slot_id="1"))

@@ -1,6 +1,6 @@
 from typing import Dict, List, Tuple
 
-from src.core.config_schema import MountOffsetsSchema, PhysicalEnvelopeSchema
+from src.core.config_schema import DeckCalibrationSchema, MountOffsetsSchema, PhysicalEnvelopeSchema
 from src.utils.logger import logger
 
 
@@ -100,3 +100,77 @@ class MountOffsets:
         back into the shared gantry frame."""
         offset = self._get(mount)
         return {axis: value - offset.get(axis.upper(), 0.0) for axis, value in steps.items()}
+
+
+class DeckCalibration:
+    """Fixes the deck plane's origin, orientation, and scale in raw steps
+    from three calibration readings: an origin (the step position at deck
+    mm (0, 0)) and one reading offset purely along each deck axis -- e.g.
+    the centers of two slot separators, one column and one row apart. Every
+    other deck mm position is then a straight linear interpolation between
+    these three points.
+
+    Unlike a pair of independent per-axis steps_per_mm values, this is a
+    full 2D affine map: each deck axis can project onto both raw machine
+    axes, so any skew between the deck's X/Y and the gantry's own X/Y is
+    captured rather than assumed away. No home_offset_mm is needed -- the
+    origin reading already is the absolute step position of the deck's
+    (0, 0), with nothing further to add.
+    """
+
+    def __init__(
+        self,
+        origin_steps: Dict[str, float],
+        x_vector: Dict[str, float],
+        y_vector: Dict[str, float],
+    ):
+        self._origin = {axis.upper(): value for axis, value in origin_steps.items()}
+        self._x_vector = {axis.upper(): value for axis, value in x_vector.items()}
+        self._y_vector = {axis.upper(): value for axis, value in y_vector.items()}
+
+    @classmethod
+    def from_three_points(
+        cls,
+        origin_steps: Dict[str, float],
+        x_reference_steps: Dict[str, float],
+        x_reference_mm: float,
+        y_reference_steps: Dict[str, float],
+        y_reference_mm: float,
+    ) -> "DeckCalibration":
+        if x_reference_mm == 0 or y_reference_mm == 0:
+            raise ValueError("Reference points must be offset from the origin.")
+        axes = set(origin_steps) | set(x_reference_steps) | set(y_reference_steps)
+        x_vector = {
+            axis: (x_reference_steps.get(axis, 0.0) - origin_steps.get(axis, 0.0)) / x_reference_mm
+            for axis in axes
+        }
+        y_vector = {
+            axis: (y_reference_steps.get(axis, 0.0) - origin_steps.get(axis, 0.0)) / y_reference_mm
+            for axis in axes
+        }
+        calibration = cls(origin_steps, x_vector, y_vector)
+        logger.debug(
+            f"Derived deck calibration: origin={calibration._origin}, "
+            f"x_vector={calibration._x_vector}, y_vector={calibration._y_vector}"
+        )
+        return calibration
+
+    @classmethod
+    def from_config(cls, data: dict) -> "DeckCalibration":
+        validated = DeckCalibrationSchema.model_validate(data)
+        return cls.from_three_points(
+            origin_steps=validated.origin_steps,
+            x_reference_steps=validated.x_reference_steps,
+            x_reference_mm=validated.x_reference_mm,
+            y_reference_steps=validated.y_reference_steps,
+            y_reference_mm=validated.y_reference_mm,
+        )
+
+    def mm_to_steps(self, x_mm: float, y_mm: float) -> Dict[str, float]:
+        axes = set(self._origin) | set(self._x_vector) | set(self._y_vector)
+        return {
+            axis: self._origin.get(axis, 0.0)
+            + x_mm * self._x_vector.get(axis, 0.0)
+            + y_mm * self._y_vector.get(axis, 0.0)
+            for axis in axes
+        }

@@ -1,6 +1,6 @@
 import pytest
 
-from src.core.coordinate_system import MountOffsets, PhysicalEnvelope
+from src.core.coordinate_system import DeckCalibration, MountOffsets, PhysicalEnvelope
 
 CORNERS = [
     {"X": 0.0, "Y": 0.0, "Z": 0.0, "A": 0.0},
@@ -93,3 +93,91 @@ def test_mount_offsets_unknown_mount_raises():
 def test_mount_offsets_rejects_unknown_axis():
     with pytest.raises(ValueError):
         MountOffsets.from_config({"left": {"Q": 1.0}})
+
+
+DECK_CALIBRATION_CONFIG = {
+    "origin_steps": {"X": 0.0, "Y": 0.0},
+    "x_reference_steps": {"X": 21320.0},
+    "x_reference_mm": 123.0,
+    "y_reference_steps": {"Y": 14478.0},
+    "y_reference_mm": 81.0,
+}
+
+
+def test_deck_calibration_scales_from_origin():
+    deck_cal = DeckCalibration.from_config(DECK_CALIBRATION_CONFIG)
+    steps = deck_cal.mm_to_steps(0.0, 0.0)
+    assert steps["X"] == pytest.approx(0.0)
+    assert steps["Y"] == pytest.approx(0.0)
+
+
+def test_deck_calibration_matches_reference_points():
+    deck_cal = DeckCalibration.from_config(DECK_CALIBRATION_CONFIG)
+    assert deck_cal.mm_to_steps(123.0, 0.0)["X"] == pytest.approx(21320.0)
+    assert deck_cal.mm_to_steps(0.0, 81.0)["Y"] == pytest.approx(14478.0)
+
+
+def test_deck_calibration_no_home_offset_field():
+    # DeckCalibration has no home_offset_mm concept -- the origin reading is
+    # the absolute answer, nothing further is added.
+    deck_cal = DeckCalibration.from_config(DECK_CALIBRATION_CONFIG)
+    assert not hasattr(deck_cal, "home_offset_mm")
+
+
+def test_deck_calibration_interpolates_linearly():
+    deck_cal = DeckCalibration.from_config(DECK_CALIBRATION_CONFIG)
+    steps = deck_cal.mm_to_steps(61.5, 40.5)
+    assert steps["X"] == pytest.approx(21320.0 / 2)
+    assert steps["Y"] == pytest.approx(14478.0 / 2)
+
+
+def test_deck_calibration_captures_skew_when_reference_has_cross_axis_component():
+    # If the X-reference point also shifted a bit in Y (deck not perfectly
+    # aligned with the gantry), that skew should carry into every deck-X move.
+    skewed_config = {
+        "origin_steps": {"X": 0.0, "Y": 0.0},
+        "x_reference_steps": {"X": 21320.0, "Y": 100.0},
+        "x_reference_mm": 123.0,
+        "y_reference_steps": {"Y": 14478.0},
+        "y_reference_mm": 81.0,
+    }
+    deck_cal = DeckCalibration.from_config(skewed_config)
+    steps = deck_cal.mm_to_steps(123.0, 0.0)
+    assert steps["Y"] == pytest.approx(100.0)
+
+
+def test_deck_calibration_nonzero_origin():
+    config = {
+        "origin_steps": {"X": 500.0, "Y": 250.0},
+        "x_reference_steps": {"X": 21820.0, "Y": 250.0},
+        "x_reference_mm": 123.0,
+        "y_reference_steps": {"X": 500.0, "Y": 14728.0},
+        "y_reference_mm": 81.0,
+    }
+    deck_cal = DeckCalibration.from_config(config)
+    steps = deck_cal.mm_to_steps(0.0, 0.0)
+    assert steps == {"X": 500.0, "Y": 250.0}
+
+
+def test_deck_calibration_rejects_zero_mm_reference():
+    with pytest.raises(ValueError):
+        DeckCalibration.from_three_points(
+            origin_steps={"X": 0.0, "Y": 0.0},
+            x_reference_steps={"X": 100.0},
+            x_reference_mm=0.0,
+            y_reference_steps={"Y": 100.0},
+            y_reference_mm=81.0,
+        )
+
+
+def test_deck_calibration_rejects_unknown_axis():
+    with pytest.raises(ValueError):
+        DeckCalibration.from_config(
+            {
+                "origin_steps": {"Q": 0.0},
+                "x_reference_steps": {"X": 100.0},
+                "x_reference_mm": 10.0,
+                "y_reference_steps": {"Y": 100.0},
+                "y_reference_mm": 10.0,
+            }
+        )

@@ -72,3 +72,23 @@ class MountOffsetSchema(RootModel[Dict[str, float]]):
 
 class MountOffsetsSchema(RootModel[Dict[str, MountOffsetSchema]]):
     pass
+
+
+class DeckCalibrationSchema(BaseModel):
+    """Three calibration readings that fix the deck plane's origin,
+    orientation, and scale in raw steps: an origin (steps at deck mm
+    (0, 0)) and one reading offset purely along each deck axis."""
+
+    model_config = ConfigDict(frozen=True)
+
+    origin_steps: Dict[str, float]
+    x_reference_steps: Dict[str, float]
+    x_reference_mm: float = Field(gt=0)
+    y_reference_steps: Dict[str, float]
+    y_reference_mm: float = Field(gt=0)
+
+    @field_validator("origin_steps", "x_reference_steps", "y_reference_steps")
+    @classmethod
+    def _validate_axes(cls, value: Dict[str, float]) -> Dict[str, float]:
+        _reject_unknown_axes(value)
+        return value

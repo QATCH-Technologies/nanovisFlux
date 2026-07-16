@@ -9,12 +9,17 @@
     "default_plunge_speed": 2000.0
   },
   "calibration": {
-    "X": { "steps_per_mm": 173.33333333333334, "home_offset_mm": 0.0 },
-    "Y": { "steps_per_mm": 178.74074074074073, "home_offset_mm": 0.0 },
     "Z": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 },
     "A": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 },
     "B": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 },
     "C": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 }
+  },
+  "deck_calibration": {
+    "origin_steps": { "X": 0.0, "Y": 0.0 },
+    "x_reference_steps": { "X": 21320.0 },
+    "x_reference_mm": 123.0,
+    "y_reference_steps": { "Y": 14478.0 },
+    "y_reference_mm": 81.0
   },
   "physical_envelope": [
     { "X": 0.0,     "Y": 0.0,     "Z": 0.0,      "A": 0.0, "B": 0.0, "C": -1.0 },
