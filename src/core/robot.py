@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 from src.core.calibration import Calibration
+from src.core.coordinate_system import MountOffsets, PhysicalEnvelope
 from src.core.deck import DEFAULT_DECK_LAYOUT_PATH, Deck, DeckLocation
 from src.core.motion import MotionController
 from src.hardware.connection import Connection
@@ -43,6 +44,8 @@ class Robot:
 
         self.calibration = self._load_calibration()
         self.deck = self._load_deck(deck_layout_path)
+        self.physical_envelope = self._load_physical_envelope()
+        self.mount_offsets = self._load_mount_offsets()
 
         self.safe_z = self.config.get("gantry", {}).get("safe_z_height", 100)
         self.home()
@@ -87,6 +90,20 @@ class Robot:
         except FileNotFoundError:
             logger.info(f"No deck layout found at {deck_layout_path}. Deck moves are unavailable.")
             return None
+
+    def _load_physical_envelope(self) -> Optional[PhysicalEnvelope]:
+        corners = self.config.get("physical_envelope")
+        if not corners:
+            logger.info("No physical envelope configured. Travel-limit checking is unavailable.")
+            return None
+        return PhysicalEnvelope.from_corners(corners)
+
+    def _load_mount_offsets(self) -> Optional[MountOffsets]:
+        offsets = self.config.get("mount_offsets")
+        if not offsets:
+            logger.info("No mount offsets configured. Deck moves will target the gantry frame directly.")
+            return None
+        return MountOffsets.from_config(offsets)
 
     def connect(self) -> None:
         logger.info(f"Initializing Robot on {self.port}...")
@@ -152,7 +169,12 @@ class Robot:
         if offsets:
             self.motion.move_relative(offsets, speed=speed)
 
-    def move_to_location(self, location: DeckLocation, speed: Optional[float] = None) -> None:
+    def move_to_location(
+        self,
+        location: DeckLocation,
+        mount: Optional[Literal["left", "right"]] = None,
+        speed: Optional[float] = None,
+    ) -> None:
         if self.deck is None:
             raise RuntimeError("No deck layout loaded. Cannot move to a deck location.")
         if self.calibration is None:
@@ -160,5 +182,30 @@ class Robot:
 
         positions_mm = self.deck.resolve_mm(location)
         positions_steps = self.calibration.mm_to_steps(positions_mm)
+
+        if mount is not None:
+            positions_steps = self._to_mount_frame(mount, positions_steps)
+
+        if self.physical_envelope is not None:
+            violations = self.physical_envelope.violations(positions_steps)
+            if violations:
+                raise RuntimeError(
+                    f"Target {positions_steps} for slot '{location.slot_id}' exceeds the "
+                    f"calibrated physical envelope: {violations}"
+                )
+
         travel_speed = speed or self.config.get("gantry", {}).get("default_travel_speed")
         self.motion.move_absolute(positions_steps, speed=travel_speed)
+
+    def _to_mount_frame(
+        self, mount: Literal["left", "right"], gantry_steps: Dict[str, float]
+    ) -> Dict[str, float]:
+        """Reframes a nominal gantry-space step target for a specific mount:
+        swaps the generic 'Z' key for that mount's own vertical axis (Z or A)
+        and applies its fixed mounting offset."""
+        steps = dict(gantry_steps)
+        if "Z" in steps:
+            steps[self.get_mount_axis(mount)] = steps.pop("Z")
+        if self.mount_offsets is not None:
+            steps = self.mount_offsets.apply(mount, steps)
+        return steps

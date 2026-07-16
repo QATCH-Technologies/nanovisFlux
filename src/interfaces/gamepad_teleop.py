@@ -286,7 +286,7 @@ class GamepadTeleop:
                     elif event.axis == AXIS_RIGHT_STICK_Y:
                         axis_name = self._get_active_mount_axis()
                         self._handle_axis_motion(
-                            axis_name, event.value, positive_dir=-1.0, negative_dir=1.0
+                            axis_name, event.value, positive_dir=1.0, negative_dir=-1.0
                         )
                     elif event.axis == AXIS_LEFT_TRIGGER:
                         self._handle_trigger_motion(is_left=True, raw_value=event.value)

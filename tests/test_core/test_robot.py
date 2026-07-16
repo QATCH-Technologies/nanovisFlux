@@ -83,3 +83,61 @@ def test_move_to_location_resolves_expected_steps(config_path, deck_layout_path)
     assert robot.motion.current_position["X"] == pytest.approx(142.0 * 160.0)
     assert robot.motion.current_position["Y"] == pytest.approx(10.0 * 160.0)
     assert robot.motion.current_position["Z"] == pytest.approx(5.0 * 400.0)
+
+
+CONFIG_WITH_COORDINATE_SYSTEM = {
+    **MINIMAL_CONFIG,
+    "physical_envelope": [
+        {"X": 0.0, "Y": 0.0, "Z": 0.0},
+        {"X": 60000.0, "Y": 52000.0, "Z": 160000.0},
+    ],
+    "mount_offsets": {
+        "left": {"X": 100.0, "Y": 200.0, "Z": 300.0},
+        "right": {"X": 400.0, "Y": 500.0, "A": 600.0},
+    },
+}
+
+
+@pytest.fixture
+def coordinate_config_path(tmp_path):
+    path = tmp_path / "ot2_config_coords.json"
+    path.write_text(json.dumps(CONFIG_WITH_COORDINATE_SYSTEM))
+    return path
+
+
+def test_physical_envelope_and_mount_offsets_populate(coordinate_config_path, deck_layout_path):
+    robot = _make_robot(coordinate_config_path, deck_layout_path)
+    assert robot.physical_envelope is not None
+    assert robot.mount_offsets is not None
+
+
+def test_move_to_location_applies_mount_offset_for_right_mount(
+    coordinate_config_path, deck_layout_path
+):
+    robot = _make_robot(coordinate_config_path, deck_layout_path)
+    robot.move_to_location(DeckLocation(slot_id="1", x_mm=0.0, y_mm=0.0, z_mm=0.0), mount="right")
+    # Z target is reframed onto the right mount's own vertical axis (A), offset applied.
+    assert robot.motion.current_position["A"] == pytest.approx(600.0)
+    assert robot.motion.current_position["X"] == pytest.approx(400.0)
+    assert robot.motion.current_position["Y"] == pytest.approx(500.0)
+    # Z itself was never part of this command -- still sitting at its homed value.
+    assert robot.motion.current_position["Z"] == pytest.approx(0.0)
+
+
+def test_move_to_location_applies_mount_offset_for_left_mount(
+    coordinate_config_path, deck_layout_path
+):
+    robot = _make_robot(coordinate_config_path, deck_layout_path)
+    robot.move_to_location(DeckLocation(slot_id="1", x_mm=0.0, y_mm=0.0, z_mm=0.0), mount="left")
+    assert robot.motion.current_position["X"] == pytest.approx(100.0)
+    assert robot.motion.current_position["Y"] == pytest.approx(200.0)
+    assert robot.motion.current_position["Z"] == pytest.approx(300.0)
+
+
+def test_move_to_location_raises_outside_physical_envelope(
+    coordinate_config_path, deck_layout_path
+):
+    robot = _make_robot(coordinate_config_path, deck_layout_path)
+    with pytest.raises(RuntimeError):
+        # Z steps = 500 * 400 = 200000, beyond the calibrated 0-160000 envelope.
+        robot.move_to_location(DeckLocation(slot_id="1", x_mm=0.0, y_mm=0.0, z_mm=500.0))
