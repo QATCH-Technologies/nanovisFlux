@@ -106,3 +106,29 @@ class DeckCalibrationSchema(BaseModel):
     x_reference_mm: float = Field(gt=0)
     y_reference_steps: PhysicalCoordinateSchema
     y_reference_mm: float = Field(gt=0)
+
+
+class DeckCalibrationPointsSchema(BaseModel):
+    """Three raw-step readings taken during the standard deck-calibration
+    jog -- cal_point_1 at the corner defining the deck origin, cal_point_2
+    offset purely along deck +X, cal_point_3 offset purely along deck +Y --
+    each a full physical coordinate (x, y, z, a, b, c).
+
+    Unlike DeckCalibrationSchema, no mm distances are given here: they're
+    derived from the deck's own slot geometry (see Deck.calibrate_from_config),
+    using the slot/corner each point corresponds to. Defaults match the
+    standard 11-slot/trash deck: slot 1's outer front-left corner (origin),
+    slot 3's outer front-right corner (+X), slot 10's outer back-left corner
+    (+Y)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    cal_point_1: PhysicalCoordinateSchema
+    cal_point_2: PhysicalCoordinateSchema
+    cal_point_3: PhysicalCoordinateSchema
+    origin_slot_id: str = "1"
+    x_reference_slot_id: str = "3"
+    y_reference_slot_id: str = "10"
+    origin_corner: str = "front_left"
+    x_reference_corner: str = "front_right"
+    y_reference_corner: str = "back_left"

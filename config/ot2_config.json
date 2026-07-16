@@ -17,11 +17,9 @@
     "C": { "steps_per_mm": 400.0, "home_offset_mm": 0.0 }
   },
   "deck_calibration": {
-    "origin_steps": { "x": 41346.0, "y": 41586.0 },
-    "x_reference_steps": { "x": 21320.0 },
-    "x_reference_mm": 123.0,
-    "y_reference_steps": { "y": 14478.0 },
-    "y_reference_mm": 81.0
+    "cal_point_1": { "x": 41346.0, "y": 41586.0 },
+    "cal_point_2": { "x": 104439.3333212 },
+    "cal_point_3": { "y": 98604.2962833 }
   },
   "physical_envelope": [
     { "X": 0.0,     "Y": 0.0,     "Z": 0.0,      "A": 0.0, "B": 0.0, "C": -1.0 },

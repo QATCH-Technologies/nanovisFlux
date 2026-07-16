@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-from src.core.config_schema import DeckLayoutSchema, SlotSchema
+from src.core.config_schema import DeckCalibrationPointsSchema, DeckLayoutSchema, SlotSchema
 from src.core.coordinate import PhysicalCoordinate
 from src.core.coordinate_system import DeckCalibration
 from src.core.slot import Slot
@@ -183,4 +183,24 @@ class Deck:
             x_reference_mm=x_reference_mm,
             y_reference_steps=y_reference.as_steps(),
             y_reference_mm=y_reference_mm,
+        )
+
+    def calibrate_from_config(self, data: dict) -> DeckCalibration:
+        """Builds a DeckCalibration from three named calibration-point
+        readings (cal_point_1/2/3, each a raw physical coordinate across
+        x, y, z, a, b, c) plus which slot/corner each one corresponds to --
+        this deck's own geometry supplies the mm distances, so none need be
+        specified by hand. See DeckCalibrationPointsSchema for the config
+        shape and its defaults."""
+        validated = DeckCalibrationPointsSchema.model_validate(data)
+        return self.calibrate(
+            origin_slot_id=validated.origin_slot_id,
+            origin=PhysicalCoordinate.from_steps(validated.cal_point_1.as_steps()),
+            x_reference_slot_id=validated.x_reference_slot_id,
+            x_reference=PhysicalCoordinate.from_steps(validated.cal_point_2.as_steps()),
+            y_reference_slot_id=validated.y_reference_slot_id,
+            y_reference=PhysicalCoordinate.from_steps(validated.cal_point_3.as_steps()),
+            origin_corner=validated.origin_corner,
+            x_reference_corner=validated.x_reference_corner,
+            y_reference_corner=validated.y_reference_corner,
         )

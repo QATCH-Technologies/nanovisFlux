@@ -127,7 +127,13 @@ class Robot:
         if not data:
             logger.info("No deck calibration configured. Deck X/Y moves are unavailable.")
             return None
-        return DeckCalibration.from_config(data)
+        if self.deck is None:
+            logger.warning(
+                "Deck calibration configured but no deck layout loaded; skipping. Deck "
+                "calibration is derived from the deck's own slot geometry."
+            )
+            return None
+        return self.deck.calibrate_from_config(data)
 
     def connect(self) -> None:
         logger.info(f"Initializing Robot on {self.port}...")

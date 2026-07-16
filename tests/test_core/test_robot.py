@@ -14,11 +14,11 @@ MINIMAL_CONFIG = {
         "Z": {"steps_per_mm": 400.0, "home_offset_mm": 0.0},
     },
     "deck_calibration": {
-        "origin_steps": {"x": 0.0, "y": 0.0},
-        "x_reference_steps": {"x": 160.0},
-        "x_reference_mm": 1.0,
-        "y_reference_steps": {"y": 160.0},
-        "y_reference_mm": 1.0,
+        "cal_point_1": {"x": 0.0, "y": 0.0},
+        "cal_point_2": {"x": 160.0},
+        "cal_point_3": {"y": 160.0},
+        "x_reference_slot_id": "calx",
+        "y_reference_slot_id": "caly",
     },
     "mounts": {
         "left": {
@@ -37,6 +37,10 @@ MINIMAL_DECK_LAYOUT = {
     "slots": {
         "1": {"x_offset_mm": 0.0, "y_offset_mm": 0.0, "z_offset_mm": 0.0},
         "2": {"x_offset_mm": 132.0, "y_offset_mm": 0.0, "z_offset_mm": 0.0},
+        # Synthetic zero-footprint slots purely so deck_calibration has a
+        # clean +1mm-along-X and +1mm-along-Y reference to calibrate from.
+        "calx": {"x_offset_mm": 1.0, "y_offset_mm": 0.0},
+        "caly": {"x_offset_mm": 0.0, "y_offset_mm": 1.0},
     }
 }
 

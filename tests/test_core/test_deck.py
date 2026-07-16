@@ -193,3 +193,52 @@ def test_calibrate_rejects_y_reference_outside_origin_column():
             y_reference_slot_id="3",
             y_reference=PhysicalCoordinate(y=100.0),
         )
+
+
+def test_calibrate_from_config_uses_default_slots_1_3_10():
+    deck = Deck.from_config(CALIBRATION_LAYOUT)
+    deck_calibration = deck.calibrate_from_config(
+        {
+            "cal_point_1": {"x": 41346.0, "y": 41586.0},
+            "cal_point_2": {"x": 41346.0 + 364.0 * 173.3333333},
+            "cal_point_3": {"y": 41586.0 + 319.0 * 178.7407407},
+        }
+    )
+    steps = deck_calibration.mm_to_steps(0.0, 0.0)
+    assert steps["X"] == pytest.approx(41346.0)
+    assert steps["Y"] == pytest.approx(41586.0)
+
+
+def test_calibrate_from_config_supports_slot_and_corner_overrides():
+    layout = {
+        "slots": {
+            "1": {"x_offset_mm": 0.0, "y_offset_mm": 0.0},
+            "calx": {"x_offset_mm": 1.0, "y_offset_mm": 0.0},
+            "caly": {"x_offset_mm": 0.0, "y_offset_mm": 1.0},
+        }
+    }
+    deck = Deck.from_config(layout)
+    deck_calibration = deck.calibrate_from_config(
+        {
+            "cal_point_1": {"x": 0.0, "y": 0.0},
+            "cal_point_2": {"x": 160.0},
+            "cal_point_3": {"y": 160.0},
+            "x_reference_slot_id": "calx",
+            "y_reference_slot_id": "caly",
+        }
+    )
+    steps = deck_calibration.mm_to_steps(1.0, 1.0)
+    assert steps["X"] == pytest.approx(160.0)
+    assert steps["Y"] == pytest.approx(160.0)
+
+
+def test_calibrate_from_config_rejects_extra_axes_in_cal_point():
+    deck = Deck.from_config(CALIBRATION_LAYOUT)
+    with pytest.raises(ValueError):
+        deck.calibrate_from_config(
+            {
+                "cal_point_1": {"x": 0.0, "y": 0.0, "q": 1.0},
+                "cal_point_2": {"x": 100.0},
+                "cal_point_3": {"y": 100.0},
+            }
+        )
