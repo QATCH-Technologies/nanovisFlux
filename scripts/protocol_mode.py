@@ -1,5 +1,5 @@
+from src.common.robot import Robot
 from src.core.deck import DeckLocation
-from src.core.robot import Robot
 from src.utils.logger import logger
 
 

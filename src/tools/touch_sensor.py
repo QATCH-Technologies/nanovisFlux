@@ -1,6 +1,6 @@
 from typing import Optional
 
-from src.core.motion import MotionController
+from src.common.motion import MotionController
 from src.tools.base import Tool, register_tool
 from src.utils.logger import logger
 

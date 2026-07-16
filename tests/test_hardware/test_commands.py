@@ -1,6 +1,6 @@
 import pytest
 
-from src.hardware.commands import (
+from src.backend.commands import (
     AxisCommand,
     Command,
     DebugInfoCommand,

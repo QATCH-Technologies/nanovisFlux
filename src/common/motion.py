@@ -1,9 +1,9 @@
 import re
 from typing import Dict, List, Optional
 
-from src.hardware.commands import Command
-from src.hardware.connection import Connection
-from src.hardware.dispatcher import AXES, Dispatcher
+from src.backend.commands import Command
+from src.backend.dispatcher import AXES, Dispatcher
+from src.coms.connection import Connection
 from src.utils.logger import logger
 
 
@@ -120,9 +120,7 @@ class MotionController:
 
         logger.debug(f"Position synced after interrupt: {self.current_position}")
 
-    def probe(
-        self, axis: str, target: int, speed: float, probe_type: str = "38.2"
-    ) -> str:
+    def probe(self, axis: str, target: int, speed: float, probe_type: str = "38.2") -> str:
         self._check_homed_state([axis])
 
         if not self._is_absolute_mode:

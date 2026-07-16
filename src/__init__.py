@@ -1,5 +1,5 @@
-from .core import MotionController, Robot
-from .hardware import Connection
+from .common import MotionController, Robot
+from .coms import Connection
 from .interfaces import KeyboardTeleop
 from .utils import logger
 

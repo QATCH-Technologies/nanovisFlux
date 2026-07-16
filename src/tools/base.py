@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import Callable, Dict, Type
 
-from src.core.motion import MotionController
+from src.common.motion import MotionController
 from src.utils.logger import logger
 
 

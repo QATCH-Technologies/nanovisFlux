@@ -1,6 +1,6 @@
 import pytest
 
-from src.core.calibration import Calibration, derive_axis_calibration
+from src.common.calibration import Calibration, derive_axis_calibration
 
 CONFIG = {
     "X": {"steps_per_mm": 160.0, "home_offset_mm": 0.0},
@@ -45,7 +45,9 @@ def test_unknown_axis_in_config_rejected():
 
 
 def test_derive_axis_calibration_steps_per_mm():
-    cal = derive_axis_calibration(reference_mm=0.0, reference_steps=0.0, target_mm=100.0, target_steps=16000.0)
+    cal = derive_axis_calibration(
+        reference_mm=0.0, reference_steps=0.0, target_mm=100.0, target_steps=16000.0
+    )
     assert cal.steps_per_mm == pytest.approx(160.0)
     assert cal.home_offset_mm == pytest.approx(0.0)
 
@@ -68,4 +70,6 @@ def test_derive_axis_calibration_usable_directly_in_calibration():
 
 def test_derive_axis_calibration_rejects_zero_mm_delta():
     with pytest.raises(ValueError):
-        derive_axis_calibration(reference_mm=5.0, reference_steps=0.0, target_mm=5.0, target_steps=100.0)
+        derive_axis_calibration(
+            reference_mm=5.0, reference_steps=0.0, target_mm=5.0, target_steps=100.0
+        )

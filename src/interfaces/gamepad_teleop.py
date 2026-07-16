@@ -3,7 +3,7 @@ from typing import Dict, Tuple
 
 import pygame
 
-from src.core.robot import Robot
+from src.common.robot import Robot
 from src.utils.logger import logger
 
 # Axis indices for this controller/driver, as observed on real hardware: this
@@ -40,7 +40,11 @@ def trigger_pressed_fraction(raw_value: float) -> float:
 
 
 def should_reissue(
-    prev_direction: float, prev_speed: float, new_direction: float, new_speed: float, threshold_speed: float
+    prev_direction: float,
+    prev_speed: float,
+    new_direction: float,
+    new_speed: float,
+    threshold_speed: float,
 ) -> bool:
     """Whether a continuous jog command should be re-sent: direction changed, or
     speed changed by at least threshold_speed (avoids flooding on stick jitter)."""
@@ -92,7 +96,9 @@ class GamepadTeleop:
         logger.info(f" GAMEPAD TELEOP CONTROLS - {self.controller.get_name().upper()} ")
         logger.info(" [X/Y Gantry]    Left Analog Stick (proportional speed)")
         logger.info(" [Active Z]      Right Analog Stick, Up/Down (proportional speed)")
-        logger.info(" [Fluidic]       Left Trigger (Aspirate), Right Trigger (Dispense) - proportional")
+        logger.info(
+            " [Fluidic]       Left Trigger (Aspirate), Right Trigger (Dispense) - proportional"
+        )
         logger.info(" [Mount Switch]  Y")
         logger.info(" [Tip]           LB (Pickup), RB (Drop)")
         logger.info("-" * 60)
@@ -168,7 +174,11 @@ class GamepadTeleop:
         threshold = self.speed_reissue_threshold_fraction * self.current_speed
         if should_reissue(prev_direction, prev_speed, direction, speed, threshold):
             if prev_direction == 0:
-                self._active_pipette_jog = (tool, axis, self.robot.motion.current_position.get(axis))
+                self._active_pipette_jog = (
+                    tool,
+                    axis,
+                    self.robot.motion.current_position.get(axis),
+                )
             self.robot.motion.start_continuous_jog(axis, direction, speed)
             self._fluidics_state = (direction, speed)
 

@@ -1,7 +1,7 @@
 import re
 from typing import Dict, List, Optional
 
-from src.hardware.commands import (
+from src.backend.commands import (
     AXES,
     AxisCommand,
     DebugInfoCommand,

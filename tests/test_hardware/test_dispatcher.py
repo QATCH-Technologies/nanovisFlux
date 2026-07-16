@@ -1,7 +1,13 @@
 import pytest
 
-from src.hardware.commands import AxisCommand, DebugInfoCommand, HomeCommand, ProbeCommand, SimpleCommand
-from src.hardware.dispatcher import Dispatcher
+from src.backend.commands import (
+    AxisCommand,
+    DebugInfoCommand,
+    HomeCommand,
+    ProbeCommand,
+    SimpleCommand,
+)
+from src.backend.dispatcher import Dispatcher
 
 
 def test_build_rapid_move_command():

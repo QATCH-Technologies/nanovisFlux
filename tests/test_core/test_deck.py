@@ -1,5 +1,6 @@
 import pytest
 
+from src.core.coordinate import PhysicalCoordinate
 from src.core.deck import Deck, DeckLocation, build_grid_layout
 
 LAYOUT = {
@@ -122,3 +123,73 @@ def test_build_grid_layout_trash_defaults_to_standard_footprint():
     slots = build_grid_layout(rows=2, cols=2, slot_width_mm=100.0, slot_depth_mm=80.0)
     assert slots["trash"].width_mm == 100.0
     assert slots["trash"].depth_mm == 80.0
+
+
+CALIBRATION_LAYOUT = {
+    "slots": {
+        "1": {"x_offset_mm": 0.0, "y_offset_mm": 0.0, "width_mm": 118.0, "depth_mm": 76.0},
+        "2": {"x_offset_mm": 123.0, "y_offset_mm": 0.0, "width_mm": 118.0, "depth_mm": 76.0},
+        "3": {"x_offset_mm": 246.0, "y_offset_mm": 0.0, "width_mm": 118.0, "depth_mm": 76.0},
+        "10": {"x_offset_mm": 0.0, "y_offset_mm": 243.0, "width_mm": 118.0, "depth_mm": 76.0},
+    }
+}
+
+
+def test_calibrate_derives_deck_calibration_from_slot_corners():
+    deck = Deck.from_config(CALIBRATION_LAYOUT)
+    deck_calibration = deck.calibrate(
+        origin_slot_id="1",
+        origin=PhysicalCoordinate(x=41346.0, y=41586.0),
+        x_reference_slot_id="3",
+        x_reference=PhysicalCoordinate(x=41346.0 + 364.0 * 173.3333333),
+        y_reference_slot_id="10",
+        y_reference=PhysicalCoordinate(y=41586.0 + 319.0 * 178.7407407),
+    )
+    steps = deck_calibration.mm_to_steps(0.0, 0.0)
+    assert steps["X"] == pytest.approx(41346.0)
+    assert steps["Y"] == pytest.approx(41586.0)
+
+    x_steps = deck_calibration.mm_to_steps(364.0, 0.0)
+    assert x_steps["X"] == pytest.approx(41346.0 + 364.0 * 173.3333333)
+
+    y_steps = deck_calibration.mm_to_steps(0.0, 319.0)
+    assert y_steps["Y"] == pytest.approx(41586.0 + 319.0 * 178.7407407)
+
+
+def test_calibrate_rejects_origin_slot_not_at_deck_zero():
+    deck = Deck.from_config(CALIBRATION_LAYOUT)
+    with pytest.raises(ValueError):
+        deck.calibrate(
+            origin_slot_id="2",
+            origin=PhysicalCoordinate(x=0.0, y=0.0),
+            x_reference_slot_id="3",
+            x_reference=PhysicalCoordinate(x=100.0),
+            y_reference_slot_id="10",
+            y_reference=PhysicalCoordinate(y=100.0),
+        )
+
+
+def test_calibrate_rejects_x_reference_outside_origin_row():
+    deck = Deck.from_config(CALIBRATION_LAYOUT)
+    with pytest.raises(ValueError):
+        deck.calibrate(
+            origin_slot_id="1",
+            origin=PhysicalCoordinate(x=0.0, y=0.0),
+            x_reference_slot_id="10",
+            x_reference=PhysicalCoordinate(x=100.0),
+            y_reference_slot_id="10",
+            y_reference=PhysicalCoordinate(y=100.0),
+        )
+
+
+def test_calibrate_rejects_y_reference_outside_origin_column():
+    deck = Deck.from_config(CALIBRATION_LAYOUT)
+    with pytest.raises(ValueError):
+        deck.calibrate(
+            origin_slot_id="1",
+            origin=PhysicalCoordinate(x=0.0, y=0.0),
+            x_reference_slot_id="3",
+            x_reference=PhysicalCoordinate(x=100.0),
+            y_reference_slot_id="3",
+            y_reference=PhysicalCoordinate(y=100.0),
+        )

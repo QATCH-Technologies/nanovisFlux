@@ -1,4 +1,4 @@
-from src.core.robot import Robot
+from src.common.robot import Robot
 from src.protocol.instruction import Instruction
 from src.protocol.protocol import Protocol
 from src.utils.logger import logger

@@ -1,67 +1,14 @@
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
-from src.core.config_schema import DeckCalibrationSchema, MountOffsetsSchema, PhysicalEnvelopeSchema
+from src.core.config_schema import DeckCalibrationSchema, MountOffsetsSchema
+from src.core.physical_envelope import PhysicalEnvelope
 from src.utils.logger import logger
 
-
-class PhysicalEnvelope:
-    """The reachable bounding box in raw motor steps, derived from a set of
-    axis readings taken at the physical travel extremes (e.g. jogging the
-    gantry to each corner of the deck volume).
-
-    An axis held constant across every corner reading (span == 0) was not
-    actually swept during calibration -- e.g. a mount's vertical axis that
-    happened to sit at its rest position throughout an X/Y/Z sweep -- so it
-    is excluded from bounds-checking rather than treated as a real limit.
-    """
-
-    def __init__(self, bounds: Dict[str, Tuple[float, float]]):
-        self._bounds = {
-            axis: bounds_ for axis, bounds_ in bounds.items() if bounds_[1] > bounds_[0]
-        }
-
-    @classmethod
-    def from_corners(cls, corners: List[Dict[str, float]]) -> "PhysicalEnvelope":
-        validated = PhysicalEnvelopeSchema.model_validate(corners).root
-        bounds: Dict[str, Tuple[float, float]] = {}
-        for corner in validated:
-            for axis, value in corner.items():
-                axis = axis.upper()
-                low, high = bounds.get(axis, (value, value))
-                bounds[axis] = (min(low, value), max(high, value))
-        envelope = cls(bounds)
-        logger.debug(f"Derived physical envelope: {envelope._bounds}")
-        return envelope
-
-    def known_axes(self) -> set:
-        return set(self._bounds.keys())
-
-    def axis_range(self, axis: str) -> Tuple[float, float]:
-        axis = axis.upper()
-        if axis not in self._bounds:
-            raise KeyError(f"No calibrated envelope bounds for axis '{axis}'.")
-        return self._bounds[axis]
-
-    def span(self, axis: str) -> float:
-        low, high = self.axis_range(axis)
-        return high - low
-
-    def violations(self, steps: Dict[str, float]) -> Dict[str, Tuple[float, Tuple[float, float]]]:
-        """Axes in `steps` that fall outside their calibrated bounds, mapped
-        to (requested_value, (low, high)). Axes with no calibrated bounds are
-        skipped rather than flagged."""
-        bad = {}
-        for axis, value in steps.items():
-            axis = axis.upper()
-            if axis not in self._bounds:
-                continue
-            low, high = self._bounds[axis]
-            if value < low or value > high:
-                bad[axis] = (value, (low, high))
-        return bad
-
-    def contains(self, steps: Dict[str, float]) -> bool:
-        return not self.violations(steps)
+# PhysicalEnvelope now lives in src.core.physical_envelope (bounds are stored
+# directly on PhysicalAxis, see src.core.axes) -- re-exported here since this
+# is where callers already look for it, alongside the other coordinate-space
+# machinery.
+__all__ = ["PhysicalEnvelope", "MountOffsets", "DeckCalibration"]
 
 
 class MountOffsets:
@@ -159,10 +106,10 @@ class DeckCalibration:
     def from_config(cls, data: dict) -> "DeckCalibration":
         validated = DeckCalibrationSchema.model_validate(data)
         return cls.from_three_points(
-            origin_steps=validated.origin_steps,
-            x_reference_steps=validated.x_reference_steps,
+            origin_steps=validated.origin_steps.as_steps(),
+            x_reference_steps=validated.x_reference_steps.as_steps(),
             x_reference_mm=validated.x_reference_mm,
-            y_reference_steps=validated.y_reference_steps,
+            y_reference_steps=validated.y_reference_steps.as_steps(),
             y_reference_mm=validated.y_reference_mm,
         )
 
@@ -174,3 +121,25 @@ class DeckCalibration:
             + y_mm * self._y_vector.get(axis, 0.0)
             for axis in axes
         }
+
+    def steps_to_mm(self, steps: Dict[str, float]) -> Tuple[float, float]:
+        """Inverts mm_to_steps for the deck plane: given raw X/Y axis step
+        readings, solves the 2x2 linear system for the (x_mm, y_mm) that
+        would have produced them, using only the X and Y axis components of
+        the calibration vectors -- the two equations needed for the two
+        unknowns."""
+        if "X" not in steps or "Y" not in steps:
+            raise KeyError("steps_to_mm requires both 'X' and 'Y' step readings.")
+
+        dx = steps["X"] - self._origin.get("X", 0.0)
+        dy = steps["Y"] - self._origin.get("Y", 0.0)
+        a, b = self._x_vector.get("X", 0.0), self._y_vector.get("X", 0.0)
+        c, d = self._x_vector.get("Y", 0.0), self._y_vector.get("Y", 0.0)
+
+        determinant = a * d - b * c
+        if determinant == 0:
+            raise ValueError("Deck calibration matrix is singular; cannot invert steps to mm.")
+
+        x_mm = (dx * d - b * dy) / determinant
+        y_mm = (a * dy - dx * c) / determinant
+        return x_mm, y_mm

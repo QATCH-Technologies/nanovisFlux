@@ -1,8 +1,8 @@
 from typing import Optional
 
-from src.hardware.base_connection import BaseConnection
-from src.hardware.eth_connection import ETHConnection
-from src.hardware.serial_connection import SerialConnection
+from src.coms.base_connection import BaseConnection
+from src.coms.eth_connection import ETHConnection
+from src.coms.serial_connection import SerialConnection
 
 
 class Connection:

@@ -3,7 +3,7 @@ import json
 import pytest
 from pynput.keyboard import KeyCode
 
-from src.core.robot import Robot
+from src.common.robot import Robot
 from src.interfaces.keyboard_teleop import KeyboardTeleop
 from tests.mock_connection import MockConnection
 

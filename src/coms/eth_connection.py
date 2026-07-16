@@ -1,7 +1,7 @@
 import socket
 from typing import Optional
 
-from src.hardware.base_connection import BaseConnection
+from src.coms.base_connection import BaseConnection
 from src.utils.logger import logger
 
 

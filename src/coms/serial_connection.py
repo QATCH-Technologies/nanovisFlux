@@ -3,7 +3,7 @@ from typing import Optional
 
 import serial
 
-from src.hardware.base_connection import BaseConnection
+from src.coms.base_connection import BaseConnection
 from src.utils.logger import logger
 
 

@@ -1,4 +1,4 @@
-from src.core.robot import Robot
+from src.common.robot import Robot
 from src.interfaces.gamepad_teleop import GamepadTeleop
 from src.interfaces.keyboard_teleop import KeyboardTeleop
 from src.utils.logger import logger

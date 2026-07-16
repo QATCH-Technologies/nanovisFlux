@@ -96,10 +96,10 @@ def test_mount_offsets_rejects_unknown_axis():
 
 
 DECK_CALIBRATION_CONFIG = {
-    "origin_steps": {"X": 0.0, "Y": 0.0},
-    "x_reference_steps": {"X": 21320.0},
+    "origin_steps": {"x": 0.0, "y": 0.0},
+    "x_reference_steps": {"x": 21320.0},
     "x_reference_mm": 123.0,
-    "y_reference_steps": {"Y": 14478.0},
+    "y_reference_steps": {"y": 14478.0},
     "y_reference_mm": 81.0,
 }
 
@@ -135,10 +135,10 @@ def test_deck_calibration_captures_skew_when_reference_has_cross_axis_component(
     # If the X-reference point also shifted a bit in Y (deck not perfectly
     # aligned with the gantry), that skew should carry into every deck-X move.
     skewed_config = {
-        "origin_steps": {"X": 0.0, "Y": 0.0},
-        "x_reference_steps": {"X": 21320.0, "Y": 100.0},
+        "origin_steps": {"x": 0.0, "y": 0.0},
+        "x_reference_steps": {"x": 21320.0, "y": 100.0},
         "x_reference_mm": 123.0,
-        "y_reference_steps": {"Y": 14478.0},
+        "y_reference_steps": {"y": 14478.0},
         "y_reference_mm": 81.0,
     }
     deck_cal = DeckCalibration.from_config(skewed_config)
@@ -148,10 +148,10 @@ def test_deck_calibration_captures_skew_when_reference_has_cross_axis_component(
 
 def test_deck_calibration_nonzero_origin():
     config = {
-        "origin_steps": {"X": 500.0, "Y": 250.0},
-        "x_reference_steps": {"X": 21820.0, "Y": 250.0},
+        "origin_steps": {"x": 500.0, "y": 250.0},
+        "x_reference_steps": {"x": 21820.0, "y": 250.0},
         "x_reference_mm": 123.0,
-        "y_reference_steps": {"X": 500.0, "Y": 14728.0},
+        "y_reference_steps": {"x": 500.0, "y": 14728.0},
         "y_reference_mm": 81.0,
     }
     deck_cal = DeckCalibration.from_config(config)
@@ -174,10 +174,10 @@ def test_deck_calibration_rejects_unknown_axis():
     with pytest.raises(ValueError):
         DeckCalibration.from_config(
             {
-                "origin_steps": {"Q": 0.0},
-                "x_reference_steps": {"X": 100.0},
+                "origin_steps": {"q": 0.0},
+                "x_reference_steps": {"x": 100.0},
                 "x_reference_mm": 10.0,
-                "y_reference_steps": {"Y": 100.0},
+                "y_reference_steps": {"y": 100.0},
                 "y_reference_mm": 10.0,
             }
         )

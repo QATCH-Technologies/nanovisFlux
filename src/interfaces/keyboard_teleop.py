@@ -1,6 +1,6 @@
 from pynput import keyboard
 
-from src.core.robot import Robot
+from src.common.robot import Robot
 from src.utils.logger import logger
 
 
@@ -98,7 +98,11 @@ class KeyboardTeleop:
                     if hasattr(tool, "aspirate"):
                         axis = tool.axis
                         direction = 1.0 if char == "r" else -1.0
-                        self._active_pipette_jog = (tool, axis, self.robot.motion.current_position[axis])
+                        self._active_pipette_jog = (
+                            tool,
+                            axis,
+                            self.robot.motion.current_position[axis],
+                        )
                         self.robot.motion.start_continuous_jog(axis, direction, self.current_speed)
 
                 # Tip handling (single press, not held)
@@ -110,7 +114,9 @@ class KeyboardTeleop:
                         if hasattr(tool, "pick_up_tip"):
                             tool.pick_up_tip()
                         else:
-                            logger.warning(f"{self.active_mount.upper()} tool has no pick_up_tip().")
+                            logger.warning(
+                                f"{self.active_mount.upper()} tool has no pick_up_tip()."
+                            )
                     else:
                         if hasattr(tool, "drop_tip"):
                             tool.drop_tip()

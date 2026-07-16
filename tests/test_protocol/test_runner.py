@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from src.core.robot import Robot
+from src.common.robot import Robot
 from src.protocol import Instruction, Protocol, ProtocolRunner
 from tests.mock_connection import MockConnection
 
@@ -13,6 +13,13 @@ CONFIG = {
         "X": {"steps_per_mm": 160.0, "home_offset_mm": 0.0},
         "Y": {"steps_per_mm": 160.0, "home_offset_mm": 0.0},
         "Z": {"steps_per_mm": 400.0, "home_offset_mm": 0.0},
+    },
+    "deck_calibration": {
+        "origin_steps": {"x": 0.0, "y": 0.0},
+        "x_reference_steps": {"x": 160.0},
+        "x_reference_mm": 1.0,
+        "y_reference_steps": {"y": 160.0},
+        "y_reference_mm": 1.0,
     },
     "mounts": {
         "left": {

@@ -9,7 +9,7 @@ class Instruction(BaseModel):
     """
     One high-level protocol entry. Deliberately named Instruction, not
     'Step' -- 'step'/'microstep' already means motor step throughout this
-    codebase (see src.hardware.dispatcher).
+    codebase (see src.backend.dispatcher).
     """
 
     name: str = ""

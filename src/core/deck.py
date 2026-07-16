@@ -1,18 +1,27 @@
+"""
+class Deck:
+    lays out the slots
+"""
+
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel
-
 from src.core.config_schema import DeckLayoutSchema, SlotSchema
+from src.core.coordinate import PhysicalCoordinate
+from src.core.coordinate_system import DeckCalibration
+from src.core.slot import Slot
 from src.utils.logger import logger
 
-DEFAULT_DECK_LAYOUT_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "config" / "deck_layout.json"
-)
+DEFAULT_DECK_LAYOUT_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "deck_layout.json"
 
 
-class DeckLocation(BaseModel):
+@dataclass(frozen=True)
+class DeckLocation:
+    """A position to move to, expressed as an offset in mm from the origin
+    of a named deck slot."""
+
     slot_id: str
     x_mm: float = 0.0
     y_mm: float = 0.0
@@ -24,83 +33,85 @@ def build_grid_layout(
     cols: int,
     slot_width_mm: float,
     slot_depth_mm: float,
-    gap_mm: float = 0.0,
     x_pitch_mm: Optional[float] = None,
     y_pitch_mm: Optional[float] = None,
-    origin_x_mm: float = 0.0,
-    origin_y_mm: float = 0.0,
+    gap_mm: float = 0.0,
     trash_position: Optional[Tuple[int, int]] = None,
-    trash_slot_id: str = "trash",
     trash_width_mm: Optional[float] = None,
     trash_depth_mm: Optional[float] = None,
 ) -> Dict[str, SlotSchema]:
-    """Lays out `rows` x `cols` slots on an evenly spaced grid, numbered "1"
-    upward row-major starting at the bottom-left (row 0, col 0), with one
-    cell reserved for a trash slot instead of a number.
+    """Lays out `rows` x `cols` slots in a grid from the bottom-left corner
+    (row 0, col 0 -> deck mm (0, 0)), numbered 1..N-1 in row-major order,
+    skipping whichever cell hosts the trash (by default the top-right
+    corner -- the last cell in that order).
 
-    `trash_position` is (row, col), 0-indexed from the bottom-left, and
-    defaults to the top-right cell -- the standard OT-2-style deck
-    convention. Pitch defaults to slot size plus `gap_mm` (the physical
-    separator between adjacent slots); pass explicit `x_pitch_mm`/
-    `y_pitch_mm` to override directly. The trash slot's own footprint can be
-    sized independently via `trash_width_mm`/`trash_depth_mm` (defaults to
-    the standard slot size) -- its origin still sits at its cell's grid
-    position, so a larger footprint extends into the deck's outer margin
-    rather than displacing neighboring slots.
+    x_pitch_mm/y_pitch_mm default to the slot footprint plus gap_mm; an
+    explicit pitch overrides gap_mm entirely rather than adding to it.
     """
-    x_pitch_mm = slot_width_mm + gap_mm if x_pitch_mm is None else x_pitch_mm
-    y_pitch_mm = slot_depth_mm + gap_mm if y_pitch_mm is None else y_pitch_mm
-    trash_width_mm = slot_width_mm if trash_width_mm is None else trash_width_mm
-    trash_depth_mm = slot_depth_mm if trash_depth_mm is None else trash_depth_mm
-    if trash_position is None:
-        trash_position = (rows - 1, cols - 1)
+    x_pitch = x_pitch_mm if x_pitch_mm is not None else slot_width_mm + gap_mm
+    y_pitch = y_pitch_mm if y_pitch_mm is not None else slot_depth_mm + gap_mm
+    trash_row, trash_col = trash_position if trash_position is not None else (rows - 1, cols - 1)
 
     slots: Dict[str, SlotSchema] = {}
     next_id = 1
     for row in range(rows):
         for col in range(cols):
-            is_trash = (row, col) == trash_position
-            slot_id = trash_slot_id if is_trash else str(next_id)
-            if not is_trash:
+            x_offset = col * x_pitch
+            y_offset = row * y_pitch
+            if (row, col) == (trash_row, trash_col):
+                slots["trash"] = SlotSchema(
+                    x_offset_mm=x_offset,
+                    y_offset_mm=y_offset,
+                    width_mm=trash_width_mm if trash_width_mm is not None else slot_width_mm,
+                    depth_mm=trash_depth_mm if trash_depth_mm is not None else slot_depth_mm,
+                    is_trash=True,
+                )
+            else:
+                slots[str(next_id)] = SlotSchema(
+                    x_offset_mm=x_offset,
+                    y_offset_mm=y_offset,
+                    width_mm=slot_width_mm,
+                    depth_mm=slot_depth_mm,
+                )
                 next_id += 1
-            slots[slot_id] = SlotSchema(
-                x_offset_mm=origin_x_mm + col * x_pitch_mm,
-                y_offset_mm=origin_y_mm + row * y_pitch_mm,
-                width_mm=trash_width_mm if is_trash else slot_width_mm,
-                depth_mm=trash_depth_mm if is_trash else slot_depth_mm,
-                is_trash=is_trash,
-            )
     return slots
 
 
 class Deck:
     def __init__(self, slots: Dict[str, SlotSchema]):
-        self._slots = slots
+        self._slots = dict(slots)
 
     @classmethod
-    def from_config(cls, deck_layout_data: dict) -> "Deck":
-        validated = DeckLayoutSchema.model_validate(deck_layout_data)
+    def from_config(cls, data: dict) -> "Deck":
+        validated = DeckLayoutSchema.model_validate(data)
         logger.debug(f"Loaded deck layout with slots: {sorted(validated.slots.keys())}")
         return cls(validated.slots)
 
     @classmethod
-    def load(cls, path: Union[str, Path] = DEFAULT_DECK_LAYOUT_PATH) -> "Deck":
+    def load(cls, path: Union[str, Path]) -> "Deck":
         with open(path, "r") as file:
-            return cls.from_config(json.load(file))
+            data = json.load(file)
+        deck = cls.from_config(data)
+        logger.debug(f"Loaded deck layout from {path}")
+        return deck
 
     @classmethod
-    def standard_grid(cls, **grid_kwargs) -> "Deck":
-        """Builds a Deck directly from build_grid_layout()'s parameters --
-        see that function for the full argument list."""
-        slots = build_grid_layout(**grid_kwargs)
-        return cls(slots)
+    def standard_grid(
+        cls, rows: int, cols: int, slot_width_mm: float, slot_depth_mm: float, **kwargs
+    ) -> "Deck":
+        return cls(build_grid_layout(rows, cols, slot_width_mm, slot_depth_mm, **kwargs))
 
     def get_slot(self, slot_id: str) -> SlotSchema:
         if slot_id not in self._slots:
-            raise KeyError(f"No slot '{slot_id}' defined in deck layout.")
+            raise KeyError(f"No slot '{slot_id}' defined on this deck.")
         return self._slots[slot_id]
 
-    def slot_ids(self) -> List[str]:
+    def slot_view(self, slot_id: str) -> Slot:
+        """A richer runtime Slot wrapper (availability/labware tracking) for
+        a given slot_id, built fresh from this deck's static geometry."""
+        return Slot(slot_id=slot_id, schema=self.get_slot(slot_id))
+
+    def known_slots(self) -> List[str]:
         return list(self._slots.keys())
 
     def trash_slot_ids(self) -> List[str]:
@@ -113,3 +124,63 @@ class Deck:
             "Y": slot.y_offset_mm + location.y_mm,
             "Z": slot.z_offset_mm + location.z_mm,
         }
+
+    def calibrate(
+        self,
+        origin_slot_id: str,
+        origin: PhysicalCoordinate,
+        x_reference_slot_id: str,
+        x_reference: PhysicalCoordinate,
+        y_reference_slot_id: str,
+        y_reference: PhysicalCoordinate,
+        origin_corner: str = "front_left",
+        x_reference_corner: str = "front_right",
+        y_reference_corner: str = "back_left",
+    ) -> DeckCalibration:
+        """Builds a DeckCalibration from three raw-step corner readings taken
+        during a calibration jog -- each a PhysicalCoordinate (x, y, z, a, b,
+        c) -- using this deck's own slot geometry to resolve each reading's
+        deck-mm position, with no manual mm bookkeeping required.
+
+        Matches the standard procedure: jog to the outer front-left corner of
+        the slot that defines the deck origin (its mm position must be
+        (0, 0)), then to the outer front-right corner of a slot in that same
+        row (pure +X offset), then to the outer back-left corner of a slot in
+        that same column (pure +Y offset). E.g. on an 11-slot/trash deck
+        where slot 1 sits at the front-left: origin_slot_id="1",
+        x_reference_slot_id="3", y_reference_slot_id="10".
+        """
+        origin_mm = self.slot_view(origin_slot_id).corner_mm(origin_corner)
+        if origin_mm != (0.0, 0.0):
+            raise ValueError(
+                f"Slot '{origin_slot_id}' corner '{origin_corner}' is at deck mm {origin_mm}, "
+                "not (0, 0) -- pick the slot/corner that defines this deck's virtual origin."
+            )
+
+        x_reference_mm, x_reference_row = self.slot_view(x_reference_slot_id).corner_mm(
+            x_reference_corner
+        )
+        if x_reference_row != 0.0:
+            raise ValueError(
+                f"Slot '{x_reference_slot_id}' corner '{x_reference_corner}' is not in the "
+                f"origin's row (deck y={x_reference_row}, expected 0) -- it must be offset "
+                "purely along X."
+            )
+
+        y_reference_col, y_reference_mm = self.slot_view(y_reference_slot_id).corner_mm(
+            y_reference_corner
+        )
+        if y_reference_col != 0.0:
+            raise ValueError(
+                f"Slot '{y_reference_slot_id}' corner '{y_reference_corner}' is not in the "
+                f"origin's column (deck x={y_reference_col}, expected 0) -- it must be offset "
+                "purely along Y."
+            )
+
+        return DeckCalibration.from_three_points(
+            origin_steps=origin.as_steps(),
+            x_reference_steps=x_reference.as_steps(),
+            x_reference_mm=x_reference_mm,
+            y_reference_steps=y_reference.as_steps(),
+            y_reference_mm=y_reference_mm,
+        )

@@ -1,14 +1,33 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
-from src.hardware.dispatcher import AXES
+from src.backend.dispatcher import AXES
 
 
 def _reject_unknown_axes(axes: Dict[str, float]) -> None:
     unknown = {axis.upper() for axis in axes} - AXES
     if unknown:
         raise ValueError(f"Unknown axes: {unknown}. Must be a subset of {AXES}.")
+
+
+class PhysicalCoordinateSchema(BaseModel):
+    """A single raw-step reading across the six physical axes -- the config
+    shape of src.core.coordinate.PhysicalCoordinate. Any axis left out
+    simply wasn't part of that reading."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
+    a: Optional[float] = None
+    b: Optional[float] = None
+    c: Optional[float] = None
+
+    def as_steps(self) -> Dict[str, float]:
+        axes = {"X": self.x, "Y": self.y, "Z": self.z, "A": self.a, "B": self.b, "C": self.c}
+        return {axis: value for axis, value in axes.items() if value is not None}
 
 
 class AxisCalibrationSchema(BaseModel):
@@ -77,18 +96,13 @@ class MountOffsetsSchema(RootModel[Dict[str, MountOffsetSchema]]):
 class DeckCalibrationSchema(BaseModel):
     """Three calibration readings that fix the deck plane's origin,
     orientation, and scale in raw steps: an origin (steps at deck mm
-    (0, 0)) and one reading offset purely along each deck axis."""
+    (0, 0)) and one reading offset purely along each deck axis. Each
+    reading is a physical coordinate across x, y, z, a, b, c."""
 
     model_config = ConfigDict(frozen=True)
 
-    origin_steps: Dict[str, float]
-    x_reference_steps: Dict[str, float]
+    origin_steps: PhysicalCoordinateSchema
+    x_reference_steps: PhysicalCoordinateSchema
     x_reference_mm: float = Field(gt=0)
-    y_reference_steps: Dict[str, float]
+    y_reference_steps: PhysicalCoordinateSchema
     y_reference_mm: float = Field(gt=0)
-
-    @field_validator("origin_steps", "x_reference_steps", "y_reference_steps")
-    @classmethod
-    def _validate_axes(cls, value: Dict[str, float]) -> Dict[str, float]:
-        _reject_unknown_axes(value)
-        return value

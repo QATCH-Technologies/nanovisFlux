@@ -1,7 +1,14 @@
 import pytest
 
-from src.tools import Pipette, TouchSensor, create_tool, register_tool
+from src.core.mount import MountPosition
+from src.tools import Empty, Pipette, TouchSensor, create_tool, register_tool
 from src.tools.base import Tool
+
+
+def test_create_tool_empty():
+    tool = create_tool("empty", {"position": "front"}, motion=object())
+    assert isinstance(tool, Empty)
+    assert tool.mount_position is MountPosition.FRONT
 
 
 def test_create_tool_pipette():

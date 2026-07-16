@@ -2,11 +2,14 @@ import json
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Union
 
-from src.core.calibration import Calibration
+from src.common.calibration import Calibration
+from src.common.motion import MotionController
+from src.coms.connection import Connection
+from src.core.coordinate import VirtualCoordinate
 from src.core.coordinate_system import DeckCalibration, MountOffsets, PhysicalEnvelope
 from src.core.deck import DEFAULT_DECK_LAYOUT_PATH, Deck, DeckLocation
-from src.core.motion import MotionController
-from src.hardware.connection import Connection
+from src.core.gantry import Gantry
+from src.core.mount import MountPosition
 from src.tools import Tool, create_tool
 from src.utils.logger import logger
 
@@ -14,6 +17,11 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" /
 
 
 class Robot:
+    # Legacy "left"/"right" mount config keys map onto the primary gantry
+    # mount positions -- the only ones current configs populate. A caller can
+    # still pass a MountPosition (e.g. MountPosition.LEFT_SECONDARY) directly
+    # to reach positions with no legacy alias.
+    _MOUNT_ALIASES = {"left": MountPosition.LEFT_PRIMARY, "right": MountPosition.RIGHT_PRIMARY}
 
     def __init__(
         self,
@@ -39,8 +47,14 @@ class Robot:
 
         self.motion = MotionController(self._connection)
 
-        self.left_tool = self._init_tool("left")
-        self.right_tool = self._init_tool("right")
+        self.gantry = Gantry()
+        for side, position in self._MOUNT_ALIASES.items():
+            tool = self._init_tool(side)
+            if tool is not None:
+                self.gantry.mount(position, tool)
+
+        self.left_tool = self.gantry.get(MountPosition.LEFT_PRIMARY)
+        self.right_tool = self.gantry.get(MountPosition.RIGHT_PRIMARY)
 
         self.calibration = self._load_calibration()
         self.deck = self._load_deck(deck_layout_path)
@@ -102,7 +116,9 @@ class Robot:
     def _load_mount_offsets(self) -> Optional[MountOffsets]:
         offsets = self.config.get("mount_offsets")
         if not offsets:
-            logger.info("No mount offsets configured. Deck moves will target the gantry frame directly.")
+            logger.info(
+                "No mount offsets configured. Deck moves will target the gantry frame directly."
+            )
             return None
         return MountOffsets.from_config(offsets)
 
@@ -131,13 +147,20 @@ class Robot:
     def reset(self) -> None:
         self.motion.reset_controller()
 
-    def get_tool(self, side: Literal["left", "right"]) -> Tool:
-        tool = self.left_tool if side == "left" else self.right_tool
+    def get_tool(self, side: Union[Literal["left", "right"], MountPosition]) -> Tool:
+        tool = self.gantry.get(self._resolve_mount_position(side))
 
         if tool is None:
             raise RuntimeError(f"The {side} tool is not configured or initialized.")
 
         return tool
+
+    def _resolve_mount_position(self, side: Union[str, MountPosition]) -> MountPosition:
+        if isinstance(side, MountPosition):
+            return side
+        if side in self._MOUNT_ALIASES:
+            return self._MOUNT_ALIASES[side]
+        return MountPosition(side)
 
     def get_mount_axis(self, side: Literal["left", "right"]) -> str:
         mount_axis = self.config.get("mounts", {}).get(side, {}).get("mount_axis")
@@ -191,8 +214,9 @@ class Robot:
             raise RuntimeError("No calibration loaded. Cannot convert Z mm to steps.")
 
         positions_mm = self.deck.resolve_mm(location)
-        positions_steps = self.deck_calibration.mm_to_steps(positions_mm["X"], positions_mm["Y"])
-        positions_steps.update(self.calibration.mm_to_steps({"Z": positions_mm["Z"]}))
+        virtual = VirtualCoordinate(x=positions_mm["X"], y=positions_mm["Y"], z=positions_mm["Z"])
+        physical = virtual.to_steps(self.deck_calibration, self.calibration)
+        positions_steps = physical.as_steps()
 
         if mount is not None:
             positions_steps = self._to_mount_frame(mount, positions_steps)
