@@ -1,136 +1,103 @@
-from typing import Optional
+from __future__ import annotations
+from dataclasses import dataclass
+from ..geometry.coordinates import DeckPoint
+from .base import Tool
+from .tips import TipGeometry, TipPickup
 
-from src.common.motion import MotionController
-from src.tools.base import Tool, register_tool
-from src.utils.logger import logger
+
+@dataclass
+class PlungerModel:
+    """Maps volume (uL) to plunger microsteps. Calibrate microsteps_per_ul
+    and the fully-dispensed position for your specific pipette."""
+    microsteps_per_ul: float
+    bottom_microsteps: int = 0  # plunger position for 0 uL
+
+    def volume_to_microsteps(self, ul: float) -> int:
+        return int(self.bottom_microsteps + round(ul * self.microsteps_per_ul))
 
 
-@register_tool("pipette")
 class Pipette(Tool):
-    DEFAULT_DROP_TIP_SPEED = 500.0
+    """A single-channel pipette. Aspirate/dispense drive the plunger axis of
+    whichever mount the pipette is attached to (B on the left, C on right).
 
-    def __init__(
-        self,
-        mount_axis: str,
-        plunger_axis: str,
-        max_volume: float,
-        steps_per_ul: float,
-        motion: MotionController,
-        blowout_distance: float = 2.0,
-        plunger_max_steps: Optional[float] = None,
-        tip_pickup_presses: int = 3,
-        tip_pickup_press_depth: float = 300.0,
-        tip_pickup_press_speed: float = 300.0,
-    ):
-        super().__init__(mount_axis=mount_axis, motion=motion)
-        self.axis = plunger_axis.upper()
-        self.max_volume = max_volume
-        self.steps_per_ul = steps_per_ul
-        self.blowout_distance = blowout_distance
-        self.plunger_max_steps = plunger_max_steps
-        self.tip_pickup_presses = tip_pickup_presses
-        self.tip_pickup_press_depth = tip_pickup_press_depth
-        self.tip_pickup_press_speed = tip_pickup_press_speed
-        self.current_volume: float = 0.0
-        self.has_tip: bool = False
+    Once a tip is picked up, ``current_tip`` is set and the robot offsets all
+    subsequent Z moves by the tip length so the tip *end* lands on target.
+    """
 
-    @classmethod
-    def from_config(cls, tool_data: dict, motion: MotionController) -> "Pipette":
-        return cls(
-            mount_axis=tool_data.get("mount_axis", ""),
-            plunger_axis=tool_data.get("plunger_axis", ""),
-            max_volume=tool_data.get("max_volume", 0.0),
-            steps_per_ul=tool_data.get("steps_per_ul", 0),
-            blowout_distance=tool_data.get("blowout_distance", 0),
-            plunger_max_steps=tool_data.get("plunger_max_steps"),
-            tip_pickup_presses=tool_data.get("tip_pickup_presses", 3),
-            tip_pickup_press_depth=tool_data.get("tip_pickup_press_depth", 300.0),
-            tip_pickup_press_speed=tool_data.get("tip_pickup_press_speed", 300.0),
-            motion=motion,
-        )
+    def __init__(self, name: str, plunger: PlungerModel, max_volume_ul: float):
+        super().__init__()
+        self.name = name
+        self.plunger = plunger
+        self.max_volume_ul = max_volume_ul
+        self.current_volume_ul = 0.0
+        self.current_tip: TipGeometry | None = None
 
-    def _check_plunger_limit(self, delta_steps: float) -> None:
-        if self.plunger_max_steps is None:
-            return
-        current = self.motion.current_position.get(self.axis)
-        if current is None:
-            return  # not homed; MotionController's own homed-state check will raise on the move
+    def uses_plunger(self) -> bool:
+        return True
 
-        projected = current + delta_steps
-        if projected >= self.plunger_max_steps:
-            raise RuntimeError(
-                f"Aspirate on axis {self.axis} would drive to {projected} steps, at or beyond "
-                f"the tip-eject limit ({self.plunger_max_steps}). This position is reserved for "
-                "drop_tip()."
-            )
+    def tip_offset_mm(self) -> float:
+        """Length of the installed tip (0 when none) -- read by the robot to
+        make Z moves place the tip end rather than the bare nozzle."""
+        return self.current_tip.length_mm if self.current_tip else 0.0
 
-    def aspirate(self, volume: float, speed: Optional[float] = 300.0) -> None:
+    # -- plunger --------------------------------------------------------
+    def _move_plunger_to(self, ul: float, feed=None) -> None:
+        axis = self._mount.plunger
+        target = self.plunger.volume_to_microsteps(ul)
+        self._robot.controller.linear_move({axis: target}, feed=feed)
 
-        if volume <= 0:
-            raise ValueError("Aspiration volume must be greater than zero.")
+    def aspirate(self, ul: float, feed=None) -> None:
+        if self.current_volume_ul + ul > self.max_volume_ul:
+            raise ValueError("aspirate would exceed pipette capacity")
+        self.current_volume_ul += ul
+        self._move_plunger_to(self.current_volume_ul, feed)
 
-        # TODO: Bring back once we know step to ul conversion!
-        # if self.current_volume + volume > self.max_volume:
-        #     raise ValueError(
-        #         f"Cannot aspirate {volume}uL. Exceeds max volume "
-        #         f"({self.max_volume}uL). Current: {self.current_volume}uL."
-        #     )
+    def dispense(self, ul: float | None = None, feed=None) -> None:
+        ul = self.current_volume_ul if ul is None else ul
+        self.current_volume_ul = max(0.0, self.current_volume_ul - ul)
+        self._move_plunger_to(self.current_volume_ul, feed)
 
-        distance_steps = volume * self.steps_per_ul
-        self._check_plunger_limit(distance_steps)
-        logger.info(f"Aspirating {volume}uL ({distance_steps:.3f} steps) on axis {self.axis}.")
+    def blow_out(self, feed=None) -> None:
+        self.current_volume_ul = 0.0
+        self._move_plunger_to(0.0, feed)
 
-        self.motion.move_relative({self.axis: distance_steps}, speed=speed)
-        self.current_volume += volume
+    # -- tips -----------------------------------------------------------
+    def pick_up_tip(self, xy: DeckPoint, tip: TipGeometry, pickup: TipPickup) -> None:
+        """Seat a tip by pressing onto it, over its position in the rack.
 
-    def dispense(self, volume: float, speed: Optional[float] = 300.0) -> None:
-        if volume <= 0:
-            raise ValueError("Dispense volume must be greater than zero.")
+        No tip is installed during the strokes (offset 0), so Z is commanded
+        against the bare nozzle reference. After the final stroke the tip is
+        recorded and the mount lifts away with the tip-aware offset applied.
+        """
+        if self.current_tip is not None:
+            raise RuntimeError("a tip is already attached; drop it first")
+        robot, side = self._robot, self._mount.side
+        top = pickup.press_z_mm
 
-        if volume > self.current_volume:
-            logger.warning(
-                f"Dispensing {volume}uL, but only {self.current_volume}uL tracked in tip. "
-                "Dispensing remaining volume."
-            )
-            volume = self.current_volume
-        distance_steps = -(volume * self.steps_per_ul)
-        logger.info(f"Dispensing {volume}uL ({distance_steps:.3f} steps) on axis {self.axis}.")
-        self.motion.move_relative({self.axis: distance_steps}, speed=speed)
-        self.current_volume -= volume
+        # Arrive above the tip, then touch its top with the bare nozzle.
+        robot.safe_move_to(DeckPoint(xy.x, xy.y, top), side)
+        for stroke in range(pickup.presses):
+            robot.move_vertical_to(top - pickup.engage_mm, side, feed=pickup.feed)
+            if stroke < pickup.presses - 1:
+                robot.move_vertical_to(top + pickup.retract_mm, side, feed=pickup.feed)
 
-    def blowout(self, speed: Optional[float] = 500.0) -> None:
-        logger.info(f"Executing blowout on axis {self.axis}.")
-        self.motion.move_relative({self.axis: -self.blowout_distance}, speed=speed)
-        self.motion.move_absolute({self.axis: 0.0}, speed=speed)
-        self.current_volume = 0.0
+        self.current_tip = tip                     # now tip-aware
+        robot.raise_z(side)                         # lift clear at travel height
 
-    def pick_up_tip(self, presses: Optional[int] = None) -> None:
-        presses = presses if presses is not None else self.tip_pickup_presses
-        logger.info(f"Picking up tip on {self.mount_axis} axis ({presses} presses).")
-
-        for _ in range(presses):
-            self.motion.move_relative(
-                {self.mount_axis: self.tip_pickup_press_depth}, speed=self.tip_pickup_press_speed
-            )
-            self.motion.move_relative(
-                {self.mount_axis: -self.tip_pickup_press_depth}, speed=self.tip_pickup_press_speed
-            )
-
-        self.has_tip = True
-        logger.debug(f"Tip picked up on {self.mount_axis} axis.")
-
-    def drop_tip(self, speed: Optional[float] = None) -> None:
-        if self.plunger_max_steps is None:
-            raise RuntimeError(
-                f"plunger_max_steps not configured for axis {self.axis}; cannot execute drop_tip()."
-            )
-
-        logger.info(
-            f"Dropping tip: driving axis {self.axis} to eject limit ({self.plunger_max_steps})."
-        )
-        self.motion.move_absolute(
-            {self.axis: self.plunger_max_steps}, speed=speed or self.DEFAULT_DROP_TIP_SPEED
-        )
-        self.has_tip = False
-        self.current_volume = 0.0
-        logger.debug(f"Tip dropped on {self.axis} axis.")
+    def drop_tip(self, xy: DeckPoint | None = None, eject_z_mm: float | None = None,
+                 side_offset=None) -> None:
+        """Eject the tip. On the plunger axes, tip ejection happens at the
+        extreme down position (per the hardware notes), so this drives the
+        plunger fully down when at the drop location."""
+        if self.current_tip is None:
+            raise RuntimeError("no tip to drop")
+        robot, side = self._robot, self._mount.side
+        if xy is not None and eject_z_mm is not None:
+            robot.safe_move_to(DeckPoint(xy.x, xy.y, eject_z_mm), side)
+        axis = self._mount.plunger
+        limit = robot.axes[axis].config.endstop_limit  # extreme down = eject
+        robot.controller.linear_move({axis: limit})
+        self.current_tip = None
+        self.current_volume_ul = 0.0
+        self._move_plunger_to(0.0)                  # return plunger to top
+        robot.raise_z(side)
