@@ -55,6 +55,14 @@ def build_axes(cfg: dict) -> dict:
     return axes
 
 
+def load_calibration(path: str) -> DeckCalibration:
+    """Load a calibration section either from a full robot config (under
+    the ``calibration:`` key) or a standalone calibration-only file (as
+    written by scripts/calibrate_deck.py)."""
+    cfg = load_config(path)
+    return build_calibration(cfg.get("calibration", cfg))
+
+
 def build_calibration(cfg: dict) -> DeckCalibration:
     if "affine" in cfg:
         xy = AffineTransform2D(*cfg["affine"])

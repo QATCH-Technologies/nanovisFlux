@@ -7,6 +7,16 @@ from .units import AxisScale
 
 
 @dataclass
+class ZContact:
+    """Result of a Z calibration touch, however it was made."""
+    side: MountSide
+    contact_microsteps: int          # vertical-axis position at contact
+    z_zero_microsteps: int           # implied nozzle-reference z_zero
+    tip_length_mm: float
+    xy: DeckPoint | None = None      # set for an automated probe; None for a manual touch-off
+
+
+@dataclass
 class DeckCalibration:
     """The bridge between deck space (mm) and motor space (microsteps).
 
@@ -48,6 +58,78 @@ class DeckCalibration:
 
     def motor_to_deck_xy(self, mx: float, my: float) -> tuple:
         return self.xy.inverse().apply(mx, my)
+
+    # -- z calibration: finding z_zero is calibrating the deck's Z ------
+    #
+    # Both methods below need a live ``robot`` (controller + axis config),
+    # so the import of protocol types stays lazy -- geometry otherwise has
+    # no dependency on the protocol layer, and importing this module should
+    # never require one.
+    def probe_z_zero(self, robot, side: MountSide, xy: DeckPoint,
+                     tip_length_mm: float = 0.0, *, feed: int = 100,
+                     safe_up_microsteps: int = 2000,
+                     max_descent_microsteps: int | None = None,
+                     commit: bool = True) -> ZContact:
+        """Find z_zero for ``side`` by touching a conductive surface at
+        ``xy`` with an automated G38.2 probe. Works in raw microsteps for the
+        descent, so it does NOT need a prior Z calibration (that would be
+        circular) -- only the XY affine, to position over the target.
+
+        Whatever is on the nozzle -- a bare calibration probe or a
+        disposable tip -- is described by ``tip_length_mm``; the result is
+        the tip-independent nozzle reference, written back into ``z_zero``.
+        """
+        from ..protocol.commands import ProbeMode
+        from ..protocol.errors import ProbeError
+
+        ctrl = robot.controller
+        vertical = self.vertical_axis(side)
+        max_descent = (max_descent_microsteps
+                       or robot.axes[vertical].config.endstop_limit)
+
+        # 1. Lift to a safe height, then position over the target in XY.
+        ctrl.rapid_move({vertical: safe_up_microsteps})
+        mx, my = self.xy.apply(xy.x, xy.y)
+        ctrl.rapid_move({AxisId.X: round(mx), AxisId.Y: round(my)})
+
+        # 2. Probe down (error if it never touches).
+        result = ctrl.probe(vertical, max_descent, feed=feed,
+                            mode=ProbeMode.TOWARD_OR_FAIL)
+        if not result.contacted:
+            raise ProbeError(f"no surface found probing {side.value} at "
+                             f"({xy.x}, {xy.y})")
+
+        # 3. Read the exact contact microsteps and derive the nozzle z_zero.
+        contact = ctrl.report_position()[vertical]
+        z_zero = self.z_zero_from_contact(contact, tip_length_mm)
+        if commit:
+            self.z_zero[side] = z_zero
+
+        # 4. Retract to safe height.
+        ctrl.rapid_move({vertical: safe_up_microsteps})
+        return ZContact(side, contact, z_zero, tip_length_mm, xy)
+
+    def touch_off_z_zero(self, robot, side: MountSide,
+                         tip_length_mm: float | None = None,
+                         commit: bool = True) -> ZContact:
+        """Derive z_zero for ``side`` from the mount's *current* position --
+        call after manually jogging the tip end down onto a reference
+        surface. An alternative to ``probe_z_zero`` for tips too soft or
+        fragile to drive into a hard stop, or when feel/sight is the only
+        sensor on hand.
+
+        Tip-agnostic the same way: it never assumes what's on the nozzle.
+        ``tip_length_mm`` defaults to whatever tip/tool is attached to
+        ``side`` right now (``robot.tip_offset``); pass an explicit value
+        when jogging with a bare calibration pin or an unregistered tip.
+        """
+        vertical = self.vertical_axis(side)
+        length = robot.tip_offset(side) if tip_length_mm is None else tip_length_mm
+        contact = robot.controller.report_position()[vertical]
+        z_zero = self.z_zero_from_contact(contact, length)
+        if commit:
+            self.z_zero[side] = z_zero
+        return ZContact(side, contact, z_zero, length)
 
     @classmethod
     def from_points(cls, deck_pts, motor_xy, z_scale, z_zero=None) -> "DeckCalibration":
