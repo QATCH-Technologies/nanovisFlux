@@ -14,6 +14,7 @@
 - [Motion Commands](#motion-commands)
 - [Homing Commands](#homing-commands)
 - [Probe Commands](#probe-commands)
+- [Ultrasonic Commands](#ultrasonic-commands)
 - [Configuration Commands](#configuration-commands)
 - [Status Commands](#status-commands)
 - [Emergency and Control Commands](#emergency-and-control-commands)
@@ -36,6 +37,7 @@ Quick links to supported commands:
 | [G38.3](#g383--probe-toward-no-error) | Probe toward surface without error on failure |
 | [G38.4](#g384--probe-away-error-on-failure) | Probe away from surface with error on failure |
 | [G38.5](#g385--probe-away-no-error) | Probe away from surface without error on failure |
+| [G42](#g42-ultra--probe-ultrasonic-distance) | Query the ultrasonic distance probe |
 | [G90](#g90--absolute-positioning) | Set absolute coordinate mode |
 | [G91](#g91--relative-positioning) | Set relative coordinate mode |
 | [M30](#m30--reset-controller) | Reset controller to firmware defaults |
@@ -49,6 +51,7 @@ Quick links to supported commands:
 | [M411](#m411--query-debug-information) | Query debug information |
 | [M421](#m421--set-homing-retraction-distance) | Configure homing retract distance |
 | [M911](#m911--disable-blocking-limits) | Disable firmware motion limits |
+| [VERSION](#version--get-firmware-version) | Query firmware version information |
 
 ---
 
@@ -423,6 +426,26 @@ Fields:
 | flag = 0 | Probe failed                 |
 
 ---
+# Ultrasonic Commands
+
+The G42 family performs ultrasonic sensor operations.
+
+Ultrasonic sensor operations query and report the mounted distance (in cm).
+
+---
+
+## G42 ULTRA — Probe Ultrasonic Distance
+
+Query and report the mounted ultrasonic distance sensor (in cm).
+
+Example reply:
+
+```
+Distance: 15 cm
+ok
+```
+
+---
 
 # Configuration Commands
 
@@ -596,6 +619,12 @@ When enabled:
 > **Warning:**
 > This command bypasses normal motion safety protections. <br/>
 > Use only when the operator understands the consequences.
+
+---
+
+## VERSION — Get Firmware Version
+
+Query firmware version information.
 
 ---
 
