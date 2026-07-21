@@ -23,3 +23,4 @@ class AxisId(Enum):
 class MountSide(Enum):
     LEFT = "left"    # vertical Z, plunger B
     RIGHT = "right"  # vertical A, plunger C
+    REAR = "rear"    # fixed sensor mount behind Z/A; no vertical or plunger axis

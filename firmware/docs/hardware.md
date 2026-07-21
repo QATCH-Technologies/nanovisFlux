@@ -24,6 +24,10 @@
 | **B** | Left pipette plunger (**up**/down)  |
 | **C** | Right pipette plunger (*missing*)   |
 
+## Rear-Mounted Sensor
+
+A fixed ultrasonic distance sensor is mounted on the rear of the gantry, behind the Z and A mounts. It has no dedicated motion axis -- it's rigidly fixed to the gantry frame and travels only with X/Y -- and is queried over serial with `M412` (see `firmware/docs/protocol.md`). Trigger/echo pin assignment (`ULTRASONIC_TRIG`/`ULTRASONIC_ECHO` in the `.ino`) is a placeholder pending final sensor selection and wiring.
+
  **NOTES:**
  * The **bold** position indicates the **home** endstop position.
  * For the plunger axes: **tip ejection** occurs at extreme **down** positon.

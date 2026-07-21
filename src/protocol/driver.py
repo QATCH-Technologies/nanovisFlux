@@ -4,8 +4,8 @@ from ..core import AxisId
 from ..transport.base import Transport
 from . import commands as cmd
 from .commands import Command
-from .responses import (Response, ProbeResult, extract_reason,
-                        parse_position, parse_probe)
+from .responses import (Response, ProbeResult, DistanceResult, extract_reason,
+                        parse_position, parse_probe, parse_distance)
 from .errors import map_error, TransportError
 
 
@@ -93,6 +93,10 @@ class Controller:
               mode: cmd.ProbeMode = cmd.ProbeMode.TOWARD_OR_FAIL) -> ProbeResult:
         resp = self.execute(cmd.Probe(axis, target, feed, mode))
         return parse_probe(resp.info) or ProbeResult(False, {})
+
+    def measure_distance(self) -> DistanceResult:
+        resp = self.execute(cmd.MeasureDistance())
+        return parse_distance(resp.info) or DistanceResult(False, None)
 
     def set_hard_limits(self, limits: Mapping[AxisId, int]) -> None:
         self.execute(cmd.SetHardLimits(dict(limits)))

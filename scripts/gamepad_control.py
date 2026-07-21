@@ -19,7 +19,7 @@ Run with no arguments (needs pygame and a gamepad attached).
     RB              eject tip
     Back/View       home
     Start/Menu      emergency stop, then disconnect
-    B               intentionally unbound
+    B               read rear ultrasonic sensor distance (if attached)
 
 All stick/trigger axes are continuous: return to center (or trigger
 release) cuts the move short with a quick stop (M410). Stick/trigger
@@ -211,7 +211,7 @@ class GamepadTeleop:
         print(" [Step size]     D-pad left/right (+/- speed_increment itself)")
         print(" [Actions]       X (print position), Back/View (home)")
         print(" [Stops]         A (quick stop), Start/Menu (emergency stop + disconnect)")
-        print(" [Unused]        B")
+        print(" [Sensor]        B (read rear ultrasonic distance, if attached)")
         print(f" mount: {self.jc.side.value} | speed ceiling: {self.jc.settings.jog_feed} steps/s | "
              f"step: {self.speed_increment}")
         print("=" * 60 + "\n")
@@ -224,6 +224,19 @@ class GamepadTeleop:
 
     def _current_pipette(self):
         return self.robot.mounts[self.jc.side].tool
+
+    def _read_ultrasonic(self) -> None:
+        """B button: one-shot read of the fixed rear ultrasonic sensor, if
+        one is attached (via --config; see src/tools/ultrasonic.py)."""
+        tool = self.robot.mounts[MountSide.REAR].tool
+        if tool is None:
+            print("  no ultrasonic sensor attached (rear mount empty)")
+            return
+        distance_mm = tool.read_distance_mm()
+        if distance_mm is None:
+            print("  rear distance: out of range / no echo")
+        else:
+            print(f"  rear distance: {distance_mm:.1f} mm")
 
     # -- stopping ------------------------------------------------------
     def _stop_all_motion(self) -> None:
@@ -327,6 +340,8 @@ class GamepadTeleop:
         elif button == 0:    # A
             self._stop_all_motion()
             print("quick stop")
+        elif button == 1:    # B
+            self._read_ultrasonic()
         elif button == 2:    # X
             print("position:", fmt_pos(self.robot.controller.report_position()))
         elif button == 3:    # Y
@@ -342,7 +357,6 @@ class GamepadTeleop:
             self.robot.home()
             self.robot.controller.set_relative()   # home() leaves G90; restore ambient G91
             print("homed")
-        # button 1 (B) intentionally unbound
 
     def _handle_hat(self, value: tuple) -> None:
         x, y = value

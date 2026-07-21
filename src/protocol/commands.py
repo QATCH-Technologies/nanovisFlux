@@ -152,3 +152,17 @@ class Reset(Command):
 class DisableLimits(Command):
     def render(self) -> str:
         return "M911"
+
+
+@dataclass
+class MeasureDistance(Command):
+    """Trigger the rear-mounted ultrasonic sensor and report its range.
+
+    Wire format (M412, replying with a single ``[RNG:<mm>]`` line before
+    ``ok`` -- mirroring the G38 probe's ``[PRB:...]`` line) is provisional:
+    the firmware side (trigger/echo timing or whatever protocol the chosen
+    sensor actually uses) has not been finalized. Update this alongside
+    ``responses.parse_distance`` and the firmware M412 handler once it is.
+    """
+    def render(self) -> str:
+        return "M412"

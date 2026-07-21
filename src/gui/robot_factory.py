@@ -1,0 +1,54 @@
+"""Builds a Robot from a config dict for a *transport the GUI already chose*.
+
+This mirrors ``config.loader.load_robot`` almost exactly, but deliberately
+does not use ``loader.build_transport`` / the YAML's own ``transport:``
+section: the whole point of the connection bar is to let an operator pick
+simulated vs. real (and which COM port) independently of whatever a given
+config file happens to say, so the same robot.example.yaml can be pointed at
+either FakeTransport or a real SerialTransport.
+"""
+from __future__ import annotations
+
+from ..core import MountSide
+from ..robot import Robot
+from ..config.loader import build_axes, build_calibration, build_deck, build_labware, build_tips
+from ..tools import Pipette, PlungerModel, UltrasonicSensor
+
+_SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
+
+
+def _pipette_from_cfg(cfg: dict) -> Pipette:
+    return Pipette(
+        name=cfg["name"],
+        plunger=PlungerModel(microsteps_per_ul=cfg["microsteps_per_ul"],
+                             bottom_microsteps=cfg.get("bottom_microsteps", 0)),
+        max_volume_ul=cfg["max_volume_ul"])
+
+
+def _ultrasonic_from_cfg(cfg: dict) -> UltrasonicSensor:
+    off = cfg.get("offset_mm", {})
+    return UltrasonicSensor(
+        offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
+        max_range_mm=cfg.get("max_range_mm", 4000.0))
+
+
+def build_robot(cfg: dict | None, transport) -> Robot:
+    """``cfg`` is a parsed config dict (or None for a bare robot with no deck
+    or calibration -- still enough to jog once axes are homed)."""
+    cfg = cfg or {}
+    calibration = build_calibration(cfg["calibration"]) if "calibration" in cfg else None
+    deck = build_deck(cfg["deck"]) if "deck" in cfg else None
+
+    robot = Robot(transport, calibration=calibration, deck=deck,
+                  travel_z_mm=cfg.get("travel_z_mm", 60.0), timeout=cfg.get("timeout", 30.0))
+    for a, ac in build_axes(cfg.get("axes", {})).items():
+        robot.axes[a].config = ac
+    robot.tips = build_tips(cfg.get("tips", []))
+    for lw in cfg.get("labware", []):
+        robot.load_labware(build_labware(lw), str(lw["slot"]))
+    for side_name, tool_cfg in cfg.get("mounts", {}).items():
+        if tool_cfg.get("type") == "pipette":
+            robot.attach(_SIDES[side_name], _pipette_from_cfg(tool_cfg))
+        elif tool_cfg.get("type") == "ultrasonic":
+            robot.attach(_SIDES[side_name], _ultrasonic_from_cfg(tool_cfg))
+    return robot

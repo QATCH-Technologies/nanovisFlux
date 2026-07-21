@@ -26,6 +26,7 @@ class Robot:
         self.mounts = {
             MountSide.LEFT: Mount(MountSide.LEFT),
             MountSide.RIGHT: Mount(MountSide.RIGHT),
+            MountSide.REAR: Mount(MountSide.REAR),
         }
         self.labware: dict = {}                  # name -> Labware, placed on a slot
         self.tips: dict = {}                     # name -> TipGeometry (known tip types)
@@ -55,6 +56,9 @@ class Robot:
 
     def right(self):
         return self.mounts[MountSide.RIGHT].tool
+
+    def rear(self):
+        return self.mounts[MountSide.REAR].tool
 
     def load_labware(self, labware, slot_name: str):
         if self.deck is None:

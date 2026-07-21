@@ -47,6 +47,7 @@ Quick links to supported commands:
 | [M220](#m220--set-travel-speeds) | Configure travel speeds |
 | [M410](#m410--quick-stop) | Stop motion while preserving position |
 | [M411](#m411--query-debug-information) | Query debug information |
+| [M412](#m412--query-ultrasonic-distance-provisional) | Query rear ultrasonic sensor range (provisional) |
 | [M421](#m421--set-homing-retraction-distance) | Configure homing retract distance |
 | [M911](#m911--disable-blocking-limits) | Disable firmware motion limits |
 
@@ -161,6 +162,11 @@ The controller supports six motion axes.
 | C    | Right pipette plunger         |
 
 Movement interpretation depends on the current positioning mode.
+
+A rear-mounted ultrasonic distance sensor is fixed to the gantry frame
+behind the Z/A mounts -- it has no axis of its own and travels only with
+X/Y. It is queried with [M412](#m412--query-ultrasonic-distance-provisional)
+rather than commanded like a motion axis.
 
 ---
 
@@ -535,6 +541,46 @@ Syntax:
 
 ```text
 M411 READ [pin]
+```
+
+---
+
+## M412 — Query Ultrasonic Distance (provisional)
+
+Triggers the rear-mounted ultrasonic sensor (behind the Z/A mounts, fixed to
+the gantry frame -- no axis of its own) and reports the measured range.
+
+> **Provisional:** the exact trigger/echo protocol and pin assignment have
+> not been finalized (see `ULTRASONIC_TRIG`/`ULTRASONIC_ECHO` in the
+> firmware source). The reply format below is the current placeholder;
+> keep it in sync with `responses.parse_distance` on the Python side if it
+> changes.
+
+### Syntax
+
+```text
+M412
+```
+
+### Response
+
+```text
+[RNG:<distance_mm>]
+ok
+```
+
+`distance_mm` is `-1` when no echo is received within the timeout (out of
+range / no target).
+
+Example:
+
+```text
+M412
+```
+
+```text
+[RNG:842.3]
+ok
 ```
 
 ---

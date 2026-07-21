@@ -8,12 +8,15 @@ class FakeTransport(Transport):
     """In-memory controller simulator for tests and examples.
 
     Understands enough of the protocol to exercise the stack: the boot
-    handshake, homing, absolute/relative moves, M114 reports, and G38 probes
-    (it "touches" at ``probe_contact[axis]`` and emits a [PRB:...] line).
-    Mirrors the firmware quirk that the config setters reply with nothing.
+    handshake, homing, absolute/relative moves, M114 reports, G38 probes
+    (it "touches" at ``probe_contact[axis]`` and emits a [PRB:...] line), and
+    M412 ultrasonic range reads (reports ``ultrasonic_mm``, emitting a
+    [RNG:...] line -- see MeasureDistance for why this wire format is
+    provisional). Mirrors the firmware quirk that the config setters reply
+    with nothing.
     """
 
-    def __init__(self, probe_contact: dict | None = None):
+    def __init__(self, probe_contact: dict | None = None, ultrasonic_mm: float | None = None):
         self._pos = {a: 0 for a in "XYZABC"}
         self._homed = {a: False for a in "XYZABC"}
         self._absolute = True
@@ -22,6 +25,8 @@ class FakeTransport(Transport):
         self.probe_contact = {"Z": 120000, "A": 120000}
         if probe_contact:
             self.probe_contact.update(probe_contact)
+        # simulated rear ultrasonic reading in mm; None = no echo / out of range
+        self.ultrasonic_mm = ultrasonic_mm
 
     def open(self) -> None:
         self._queue += ["OpenFlux OT-2 Stepper Controller (simulated)", "ok"]
@@ -88,6 +93,9 @@ class FakeTransport(Transport):
             return [" " + body, "ok"]
         if line.startswith("M911"):
             return ["Movement safety guards OFF.", "ok"]
+        if line.startswith("M412"):
+            val = self.ultrasonic_mm if self.ultrasonic_mm is not None else -1
+            return [f"[RNG:{val}]", "ok"]
         if line.startswith(_SILENT):
             return []
         return ["ok"]

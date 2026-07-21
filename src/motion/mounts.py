@@ -16,12 +16,22 @@ class Mount:
     tool: object = None  # a tools.Tool; typed loosely to avoid an import cycle
 
     @property
-    def vertical(self) -> AxisId:
-        return AxisId.Z if self.side is MountSide.LEFT else AxisId.A
+    def vertical(self) -> AxisId | None:
+        """None for REAR: it's fixed to the gantry frame, with no axis of
+        its own -- it only ever travels along with X/Y."""
+        if self.side is MountSide.LEFT:
+            return AxisId.Z
+        if self.side is MountSide.RIGHT:
+            return AxisId.A
+        return None
 
     @property
-    def plunger(self) -> AxisId:
-        return AxisId.B if self.side is MountSide.LEFT else AxisId.C
+    def plunger(self) -> AxisId | None:
+        if self.side is MountSide.LEFT:
+            return AxisId.B
+        if self.side is MountSide.RIGHT:
+            return AxisId.C
+        return None
 
     def attach(self, tool) -> None:
         self.tool = tool

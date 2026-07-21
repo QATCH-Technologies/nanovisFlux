@@ -10,10 +10,10 @@ from ..transport import SerialTransport, FakeTransport
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from ..motion.axis import default_axis_configs, AxisConfig
 from ..deck import Deck, Slot, Labware
-from ..tools import Pipette, PlungerModel, TipGeometry
+from ..tools import Pipette, PlungerModel, TipGeometry, UltrasonicSensor
 from ..robot import Robot
 
-_SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
+_SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
 
 
 def load_config(path: str) -> dict:
@@ -79,14 +79,17 @@ def build_calibration(cfg: dict) -> DeckCalibration:
 def build_deck(cfg: dict) -> Deck:
     if "grid" in cfg:
         g = cfg["grid"]
-        return Deck.grid(rows=g["rows"], cols=g["cols"],
+        deck = Deck.grid(rows=g["rows"], cols=g["cols"],
                          origin=DeckPoint(g["origin"]["x"], g["origin"]["y"]),
                          pitch=tuple(g["pitch"]), names=g.get("names"))
-    deck = Deck()
-    for s in cfg.get("slots", []):
-        deck.add(Slot(name=str(s["name"]),
-                      origin=DeckPoint(s["x"], s["y"], s.get("z", 0.0)),
-                      size=tuple(s.get("size", (0.0, 0.0)))))
+    else:
+        deck = Deck()
+        for s in cfg.get("slots", []):
+            deck.add(Slot(name=str(s["name"]),
+                          origin=DeckPoint(s["x"], s["y"], s.get("z", 0.0)),
+                          size=tuple(s.get("size", (0.0, 0.0)))))
+    deck.margins = cfg.get("margins")
+    deck.frame_margins = cfg.get("frame_margins")
     return deck
 
 
@@ -112,6 +115,13 @@ def _build_pipette(cfg: dict) -> Pipette:
         max_volume_ul=cfg["max_volume_ul"])
 
 
+def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
+    off = cfg.get("offset_mm", {})
+    return UltrasonicSensor(
+        offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
+        max_range_mm=cfg.get("max_range_mm", 4000.0))
+
+
 # -- top level --------------------------------------------------------------
 def load_robot(path: str) -> Robot:
     cfg = load_config(path)
@@ -134,4 +144,6 @@ def load_robot(path: str) -> Robot:
     for side_name, tool_cfg in cfg.get("mounts", {}).items():
         if tool_cfg.get("type") == "pipette":
             robot.attach(_SIDES[side_name], _build_pipette(tool_cfg))
+        elif tool_cfg.get("type") == "ultrasonic":
+            robot.attach(_SIDES[side_name], _build_ultrasonic(tool_cfg))
     return robot

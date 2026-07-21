@@ -14,8 +14,22 @@ class Slot:
 
 @dataclass
 class Deck:
-    """A generic collection of slots addressed by name."""
+    """A generic collection of slots addressed by name.
+
+    ``margins`` is purely descriptive (never consulted for motion/placement):
+    the clearance from the plate's outer edge to the slot grid, keyed
+    "front"/"left"/"right"/"rear"/"oversized" in mm -- "oversized" applies to
+    any slot whose footprint differs from the deck's most common slot size
+    (e.g. a bigger trash slot sitting close to the plate edge). Only used to
+    draw the plate boundary; a deck built without it renders none.
+
+    ``frame_margins`` is the next layer out: the clearance from the deck
+    *plate*'s edge to the robot's outer frame/chassis, keyed
+    "front"/"left"/"right"/"rear" in mm. Also purely descriptive.
+    """
     slots: dict = field(default_factory=dict)
+    margins: dict | None = None
+    frame_margins: dict | None = None
 
     def add(self, slot: Slot) -> Slot:
         self.slots[slot.name] = slot

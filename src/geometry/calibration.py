@@ -28,8 +28,13 @@ class DeckCalibration:
     z_scale: AxisScale
     z_zero: dict = field(default_factory=dict)  # MountSide -> microsteps at deck z=0
 
-    def vertical_axis(self, side: MountSide) -> AxisId:
-        return AxisId.Z if side is MountSide.LEFT else AxisId.A
+    def vertical_axis(self, side: MountSide) -> AxisId | None:
+        """None for a mount with no vertical axis (e.g. MountSide.REAR)."""
+        if side is MountSide.LEFT:
+            return AxisId.Z
+        if side is MountSide.RIGHT:
+            return AxisId.A
+        return None
 
     def deck_to_motor(self, point: DeckPoint, side: MountSide,
                       tip_length_mm: float = 0.0) -> dict:

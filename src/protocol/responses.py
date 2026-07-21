@@ -17,6 +17,12 @@ class ProbeResult:
     positions: dict[AxisId, int]  # microsteps at trigger (firmware reports X, Y, A)
 
 
+@dataclass
+class DistanceResult:
+    in_range: bool
+    distance_mm: float | None
+
+
 def extract_reason(status_line: str) -> str | None:
     """'NOT ok (axis Z not homed)' -> 'axis Z not homed'."""
     if "(" in status_line and ")" in status_line:
@@ -54,4 +60,16 @@ def parse_probe(info: list[str]) -> ProbeResult | None:
                 contacted=flag.strip() == "1",
                 positions={axes[i]: xs[i] for i in range(min(len(xs), 3))},
             )
+    return None
+
+
+def parse_distance(info: list[str]) -> DistanceResult | None:
+    """Parse '[RNG:<mm>]'; a negative value (e.g. -1) means no echo / out of
+    range. See MeasureDistance's docstring -- the exact wire format is
+    provisional pending firmware/hardware finalization."""
+    for line in info:
+        s = line.strip()
+        if s.startswith("[RNG:") and s.endswith("]"):
+            value = float(s[len("[RNG:"):-1])
+            return DistanceResult(in_range=value >= 0, distance_mm=value if value >= 0 else None)
     return None
