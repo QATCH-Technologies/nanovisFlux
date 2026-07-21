@@ -1,0 +1,152 @@
+# OpenFlux robot configuration. Everything the library needs to build a Robot.
+# Load with:  robot = openflux.config.load_robot("robot.example.yaml")
+
+transport:
+  type: fake              # fake | serial | tcp
+  # port: /dev/ttyACM0    # required when type: serial
+  # baudrate: 115200
+
+travel_z_mm: 120           # safe clearance height used by safe_move_to
+timeout: 30
+
+# Per-axis overrides; anything omitted keeps the firmware default.
+axes:
+  X: { steps_per_mm: 66.6 }
+  Y: { steps_per_mm: 66.6 }
+  Z: { steps_per_mm: 25.0 }
+  A: { steps_per_mm: 25.0 }
+
+# Deck <-> motor calibration.
+# The gantry homes to motor (0, 0) at the back-right, near slot "12" and
+# the robot's outer frame (see deck: below) -- measured directly rather
+# than assumed: when homed, the LEFT mount sits 117.5 mm in from the
+# frame's right edge and 139 mm in from its rear edge, i.e. deck
+# (498.5 - 117.5, 514.5 - 139) = (381.0, 375.5) (frame bounds computed from
+# the deck/frame margins below). The left/right mounts straddle the
+# gantry's shared X/Y reference by 32.5 mm (see MainWindow's
+# _LR_HALF_SPACING_MM), so that reference -- what this calibration actually
+# maps motor (0, 0) to -- is 16.25 mm to the right of the left mount:
+# (397.25, 375.5). Deck x/y decrease as motor steps increase (home is the
+# far corner; moving into the deck heads toward slot "1"). Same
+# steps-per-mm scale as a straightforward reading either way (213.2 X,
+# 144.78 Y).
+calibration:
+  # Option A: three deck points (mm) and the microsteps found for them.
+  points:
+    deck:  [ {x: 397.25, y: 375.5}, {x: 297.25, y: 375.5}, {x: 397.25, y: 275.5} ]
+    motor: [ [0, 0],                [21320, 0],            [0, 14478] ]
+  # Option B (instead of points): affine: [a, b, tx, c, d, ty]
+  z_scale: { steps_per_mm: 25.0 }
+  z_zero:                  # nozzle-reference microsteps at deck z=0 (from probe cal)
+    left: 144000
+    right: 144000
+
+# Named tip geometries. length_mm shifts every Z target once a tip is on.
+tips:
+  - { name: p300_tip, length_mm: 51.7, max_volume_ul: 300 }
+  - { name: p20_tip,  length_mm: 46.6, max_volume_ul: 20 }
+  - { name: cal_probe, length_mm: 63.0 }   # dedicated calibration probe
+
+# Deck plate: an OT-2-style 3-column x 4-row slot grid, numbered "1".."12"
+# row-major from the front-left. Slots "1"-"11" are uniform (123 x 81 mm);
+# slot "12" (the trash) is oversized and extends further toward the
+# back-right plate edge, sharing its front-left inner corner with where a
+# regular slot would sit. 5 mm gap between every adjacent slot. The gantry
+# homes to the back-right, beyond slot "12"'s outer corner -- "oversized"
+# below (slot "12"'s own clearance to the plate edge) is what puts home
+# exactly there: 5 mm past its outer corner.
+deck:
+  margins: { front: 60, left: 40, right: 40, rear: 40, oversized: 5 }
+  # Next layer out: clearance from the deck *plate*'s own edge to the
+  # robot's outer frame -- the plate is mounted with 67.5 mm of frame to
+  # spare on the left and right, 87.5 mm behind it (rear), and none in
+  # front (the plate's front edge is flush with the frame's).
+  frame_margins: { front: 0, left: 67.5, right: 67.5, rear: 87.5 }
+  slots:
+    - { name: "1",  x: 0,   y: 0,   size: [123, 81] }
+    - { name: "2",  x: 128, y: 0,   size: [123, 81] }
+    - { name: "3",  x: 256, y: 0,   size: [123, 81] }
+    - { name: "4",  x: 0,   y: 86,  size: [123, 81] }
+    - { name: "5",  x: 128, y: 86,  size: [123, 81] }
+    - { name: "6",  x: 256, y: 86,  size: [123, 81] }
+    - { name: "7",  x: 0,   y: 172, size: [123, 81] }
+    - { name: "8",  x: 128, y: 172, size: [123, 81] }
+    - { name: "9",  x: 256, y: 172, size: [123, 81] }
+    - { name: "10", x: 0,   y: 258, size: [123, 81] }
+    - { name: "11", x: 128, y: 258, size: [123, 81] }
+    - { name: "12", x: 256, y: 258, size: [170, 164] }   # trash -- oversized, back-right
+
+# Labware placed on named slots. Each well's (x, y, z) is relative to the
+# slot origin, with z always the well's TOP (opening/rim) -- the one
+# directly-measurable datum. "well_geometry" (or a per-well "geometry"
+# override, for irregular labware) supplies shape/depth/bottom profile, so
+# routines can ask for a well "at clearance" (a safe standoff above the
+# bottom -- the default for aspirate/dispense) instead of a hand-picked z.
+#
+# Use "grid" for a uniform rows x cols plate (named A1, A2, ..., B1, ...),
+# or list "wells" explicitly for irregular spacing / one-off labware.
+labware:
+  - name: tiprack1
+    slot: "10"
+    well_geometry:
+      shape: circular
+      diameter_mm: 5.23
+      depth_mm: 51.7          # ~ the tip length; unused for pickup (press_z_mm drives that)
+      bottom: flat
+      bottom_clearance_mm: 0
+    grid:
+      rows: 8
+      cols: 12
+      origin: { x: 0, y: 0, z: 90 }   # A1 center; z = tip top, first-contact height
+      row_spacing_mm: 9
+      col_spacing_mm: 9
+  - name: source
+    slot: "1"
+    well_geometry:
+      shape: circular
+      diameter_mm: 6.9
+      depth_mm: 10.9           # opening to the well's deepest point
+      bottom: round
+      bottom_clearance_mm: 1.5 # standoff kept above the bottom at "clearance"
+      max_volume_ul: 360
+    grid:
+      rows: 8
+      cols: 12
+      origin: { x: 14.4, y: 11.2, z: 14.4 }  # A1 center; z = plate top surface
+      row_spacing_mm: 9
+      col_spacing_mm: 9
+  - name: dest
+    slot: "6"
+    well_geometry:
+      shape: circular
+      diameter_mm: 6.9
+      depth_mm: 10.9
+      bottom: round
+      bottom_clearance_mm: 1.5
+      max_volume_ul: 360
+    grid:
+      rows: 8
+      cols: 12
+      origin: { x: 14.4, y: 11.2, z: 14.4 }
+      row_spacing_mm: 9
+      col_spacing_mm: 9
+
+# Tools on the mounts.
+mounts:
+  left:
+    type: pipette
+    name: p300
+    microsteps_per_ul: 50
+    max_volume_ul: 300
+  # Fixed ultrasonic distance sensor, rear-mounted behind the Z/A mounts.
+  # No vertical axis of its own -- it rides along with X/Y only, so it has
+  # no mount_axis. offset_mm is the sensor face's fixed position relative to
+  # the gantry's X/Y reference point: centered between the left/right mounts
+  # (32.5 mm apart) so x=0, and 50 mm behind them so y=+50 (this deck's
+  # "behind" = toward the back/slot-12 side, i.e. +y -- flip the sign if
+  # your gantry's Y axis runs the other way). See src/tools/ultrasonic.py
+  # and M412 in firmware/docs/protocol.md -- the wire format is provisional.
+  rear:
+    type: ultrasonic
+    offset_mm: { x: 0.0, y: 50.0, z: 130.0 }
+    max_range_mm: 4000

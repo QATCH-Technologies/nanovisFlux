@@ -1,5 +1,8 @@
-from .base import Tool, create_tool, register_tool
-from .pipette import Pipette
-from .touch_sensor import TouchSensor
+from .base import Tool
+from .pipette import Pipette, PlungerModel
+from .probe import TouchProbe
+from .ultrasonic import UltrasonicSensor
+from .tips import TipGeometry, TipPickup
 
-__all__ = ["Pipette", "TouchSensor", "Tool", "register_tool", "create_tool"]
+__all__ = ["Tool", "Pipette", "PlungerModel", "TouchProbe", "UltrasonicSensor",
+           "TipGeometry", "TipPickup"]

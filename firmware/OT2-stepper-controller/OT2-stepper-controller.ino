@@ -60,6 +60,13 @@
 #define PROBE_DISTANCE 36
 #define PROBE_UNUSED 37
 
+// Ultrasonic distance sensor: rear mount, behind the Z/A mounts.
+// TODO: pins and trigger/echo protocol below are placeholders -- confirm
+// once the actual sensor and wiring are finalized (see M412 handler).
+#define ULTRASONIC_TRIG 20
+#define ULTRASONIC_ECHO 21
+#define ULTRASONIC_TIMEOUT_US 30000UL  // ~5 m round trip at 343 m/s
+
 // Endstop switches
 #define MOTOR_X_SW_IN 14  // active low
 #define MOTOR_Y_SW_IN 15  // active low
@@ -205,6 +212,11 @@ void setup() {
   pinMode(PROBE_TOUCH, INPUT_PULLUP);
   digitalWrite(PROBE_GND, LOW);
   probeUltrasonic.begin();
+
+  // Ultrasonic sensor (rear mount) -- see M412 handler
+  pinMode(ULTRASONIC_TRIG, OUTPUT);
+  pinMode(ULTRASONIC_ECHO, INPUT);
+  digitalWrite(ULTRASONIC_TRIG, LOW);
 
   Serial.println("ok");
 }
@@ -875,6 +887,27 @@ void loop() {
     } else {
       Serial.println("Unknown sub-command.\nok");
     }
+  }
+
+  if (message_str.startsWith("M412")) {
+    // Query the rear ultrasonic sensor's range.
+    // TODO: placeholder HC-SR04-style trigger/echo timing -- update once the
+    // actual sensor and protocol are finalized, keeping the "[RNG:<mm>]"
+    // reply in sync with responses.parse_distance on the Python side.
+    digitalWrite(ULTRASONIC_TRIG, LOW);
+    delayMicroseconds(2);
+    digitalWrite(ULTRASONIC_TRIG, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(ULTRASONIC_TRIG, LOW);
+
+    unsigned long echo_us = pulseIn(ULTRASONIC_ECHO, HIGH, ULTRASONIC_TIMEOUT_US);
+    if (echo_us == 0) {
+      Serial.println("[RNG:-1]");  // no echo within timeout / out of range
+    } else {
+      float distance_mm = (echo_us * 0.343f) / 2.0f;  // speed of sound ~343 m/s
+      Serial.printf("[RNG:%.1f]\n", distance_mm);
+    }
+    Serial.println("ok");
   }
 
   if (message_str.startsWith("M421")) {
