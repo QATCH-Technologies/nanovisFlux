@@ -77,6 +77,26 @@ QLabel.h1 {{
     font-weight: 700;
 }}
 
+QLabel.pill {{
+    background: {PANEL_ALT};
+    border: 1px solid {BORDER};
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: {INK_MUTED};
+}}
+QLabel.pill-live {{
+    background: #E3F0E7;
+    border: 1px solid {ACCENT_GREEN};
+    color: {ACCENT_GREEN};
+}}
+QLabel.pill-warn {{
+    background: #F5EADC;
+    border: 1px solid {ACCENT_AMBER};
+    color: {ACCENT_AMBER};
+}}
+
 QLabel.mono {{
     font-family: "{MONO_FONT}";
 }}

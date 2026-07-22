@@ -53,8 +53,8 @@ class LabwareDialog(QDialog):
         cf.addRow("cols", self.cols)
         cf.addRow("row spacing (mm)", self.row_spacing)
         cf.addRow("col spacing (mm)", self.col_spacing)
-        cf.addRow("A1 offset x (mm)", self.origin_x)
-        cf.addRow("A1 offset y (mm)", self.origin_y)
+        cf.addRow("A1 offset x, from left (mm)", self.origin_x)
+        cf.addRow("A1 offset y, from top (mm)", self.origin_y)
         cf.addRow("A1 offset / top z (mm)", self.origin_z)
         root.addWidget(common)
 
