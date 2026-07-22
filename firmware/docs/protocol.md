@@ -14,9 +14,9 @@
 - [Motion Commands](#motion-commands)
 - [Homing Commands](#homing-commands)
 - [Probe Commands](#probe-commands)
-- [Ultrasonic Commands](#ultrasonic-commands)
 - [Configuration Commands](#configuration-commands)
 - [Status Commands](#status-commands)
+- [Ultrasonic Distance Commands](#ultrasonic-distance-commands)
 - [Emergency and Control Commands](#emergency-and-control-commands)
 - [Future Development](#future-development)
 
@@ -37,7 +37,6 @@ Quick links to supported commands:
 | [G38.3](#g383--probe-toward-no-error) | Probe toward surface without error on failure |
 | [G38.4](#g384--probe-away-error-on-failure) | Probe away from surface with error on failure |
 | [G38.5](#g385--probe-away-no-error) | Probe away from surface without error on failure |
-| [G42](#g42-ultra--probe-ultrasonic-distance) | Query the ultrasonic distance probe |
 | [G90](#g90--absolute-positioning) | Set absolute coordinate mode |
 | [G91](#g91--relative-positioning) | Set relative coordinate mode |
 | [M30](#m30--reset-controller) | Reset controller to firmware defaults |
@@ -49,7 +48,7 @@ Quick links to supported commands:
 | [M220](#m220--set-travel-speeds) | Configure travel speeds |
 | [M410](#m410--quick-stop) | Stop motion while preserving position |
 | [M411](#m411--query-debug-information) | Query debug information |
-| [M412](#m412--query-ultrasonic-distance-provisional) | Query rear ultrasonic sensor range (provisional) |
+| [M412](#m412--query-ultrasonic-distance) | Query rear ultrasonic sensor range |
 | [M421](#m421--set-homing-retraction-distance) | Configure homing retract distance |
 | [M911](#m911--disable-blocking-limits) | Disable firmware motion limits |
 | [VERSION](#version--get-firmware-version) | Query firmware version information |
@@ -168,7 +167,7 @@ Movement interpretation depends on the current positioning mode.
 
 A rear-mounted ultrasonic distance sensor is fixed to the gantry frame
 behind the Z/A mounts -- it has no axis of its own and travels only with
-X/Y. It is queried with [M412](#m412--query-ultrasonic-distance-provisional)
+X/Y. It is queried with [M412](#m412--query-ultrasonic-distance)
 rather than commanded like a motion axis.
 
 ---
@@ -432,26 +431,6 @@ Fields:
 | flag = 0 | Probe failed                 |
 
 ---
-# Ultrasonic Commands
-
-The G42 family performs ultrasonic sensor operations.
-
-Ultrasonic sensor operations query and report the mounted distance (in cm).
-
----
-
-## G42 ULTRA — Probe Ultrasonic Distance
-
-Query and report the mounted ultrasonic distance sensor (in cm).
-
-Example reply:
-
-```
-Distance: 15 cm
-ok
-```
-
----
 
 # Configuration Commands
 
@@ -537,6 +516,32 @@ Values are in microsteps.
 
 # Status Commands
 
+## VERSION — Get Firmware Version
+
+Query firmware version information from the OpenFlux OT-2 Stepper Controller.
+
+> **NOTE:** This information is also reported each time the device is
+> booted, reset, or power-cycled. The device is ready to accept input
+> over the serial bus only once this `VERSION` message has been printed
+> **including the trailing `ok` which denotes the device is ready and idle.**
+
+Command:
+
+```text
+VERSION
+```
+
+Response:
+
+```text
+OpenFlux OT-2 Stepper Controller
+Version: <FW_VERSION> (<FW_DATE>)
+QATCH Technologies LLC
+ok
+```
+
+---
+
 ## M114 — Report Current Position
 
 Returns the current axis positions.
@@ -568,41 +573,43 @@ M411 READ [pin]
 
 ---
 
-## M412 — Query Ultrasonic Distance (provisional)
+# Ultrasonic Distance Commands
+
+## M412 — Query Ultrasonic Distance
 
 Triggers the rear-mounted ultrasonic sensor (behind the Z/A mounts, fixed to
 the gantry frame -- no axis of its own) and reports the measured range.
 
-> **Provisional:** the exact trigger/echo protocol and pin assignment have
-> not been finalized (see `ULTRASONIC_TRIG`/`ULTRASONIC_ECHO` in the
-> firmware source). The reply format below is the current placeholder;
-> keep it in sync with `responses.parse_distance` on the Python side if it
-> changes.
+> **NOTE:** the exact trigger/echo protocol and pin assignment have
+> now been finalized (see `PROBE_DISTANCE`/`probeUltrasonic` in the
+> firmware source). The reply format below is an extensible standard;
+> however (for now) only the Z-axis ultrasonic distance sensor exists.\n
+> **The response for X/Y axis ultrasonic distance will always return -1.**
 
 ### Syntax
 
 ```text
-M412
+M412 [X] [Y] [Z]
 ```
 
 ### Response
 
 ```text
-[RNG:<distance_mm>]
+[RNG:<distanceX_mm>,<distanceY_mm>,<distanceZ_mm>]
 ok
 ```
 
 `distance_mm` is `-1` when no echo is received within the timeout (out of
-range / no target).
+range / no target) **or** when that axis was not queried in the command.
 
 Example:
 
 ```text
-M412
+M412 Z
 ```
 
 ```text
-[RNG:842.3]
+[RNG:-1,-1,842.3]
 ok
 ```
 
@@ -665,14 +672,6 @@ When enabled:
 > **Warning:**
 > This command bypasses normal motion safety protections. <br/>
 > Use only when the operator understands the consequences.
-
----
-
-## VERSION — Get Firmware Version
-
-Query firmware version information.
-
----
 
 # Future Development
 
