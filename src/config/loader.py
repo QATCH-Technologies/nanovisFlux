@@ -9,7 +9,7 @@ from ..core import AxisId, MountSide
 from ..transport import SerialTransport, FakeTransport
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from ..motion.axis import default_axis_configs, AxisConfig
-from ..deck import Deck, Slot, Labware
+from ..deck import Deck, Slot, SlotObstacle, Labware
 from ..tools import Pipette, PlungerModel, TipGeometry, UltrasonicSensor
 from ..robot import Robot
 
@@ -76,6 +76,12 @@ def build_calibration(cfg: dict) -> DeckCalibration:
     return DeckCalibration(xy=xy, z_scale=z_scale, z_zero=z_zero)
 
 
+def _build_slot_obstacles(cfg: list) -> list:
+    return [SlotObstacle(offset=tuple(o["offset"]), size=tuple(o["size"]),
+                         height_mm=o["height_mm"])
+            for o in (cfg or [])]
+
+
 def build_deck(cfg: dict) -> Deck:
     if "grid" in cfg:
         g = cfg["grid"]
@@ -85,11 +91,16 @@ def build_deck(cfg: dict) -> Deck:
     else:
         deck = Deck()
         for s in cfg.get("slots", []):
+            walls = s.get("walls", {})
             deck.add(Slot(name=str(s["name"]),
                           origin=DeckPoint(s["x"], s["y"], s.get("z", 0.0)),
-                          size=tuple(s.get("size", (0.0, 0.0)))))
+                          size=tuple(s.get("size", (0.0, 0.0))),
+                          wall_height_mm=walls.get("height_mm", 0.0),
+                          wall_thickness_mm=walls.get("thickness_mm", 0.0),
+                          obstacles=_build_slot_obstacles(s.get("obstacles"))))
     deck.margins = cfg.get("margins")
     deck.frame_margins = cfg.get("frame_margins")
+    deck.enclosure_height_mm = cfg.get("enclosure_height_mm")
     return deck
 
 

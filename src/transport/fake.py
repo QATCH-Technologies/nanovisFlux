@@ -31,7 +31,8 @@ class FakeTransport(Transport):
     existing, relied-upon behavior.
     """
 
-    def __init__(self, probe_contact: dict | None = None, ultrasonic_mm: float | None = None):
+    def __init__(self, probe_contact: dict | None = None, ultrasonic_mm: float | None = None,
+                axis_limits: dict | None = None):
         self._pos = {a: 0 for a in "XYZABC"}
         self._homed = {a: False for a in "XYZABC"}
         self._absolute = True
@@ -44,6 +45,20 @@ class FakeTransport(Transport):
             self.probe_contact.update(probe_contact)
         # simulated rear ultrasonic reading in mm; None = no echo / out of range
         self.ultrasonic_mm = ultrasonic_mm
+        # Hard travel bounds per axis, [0, limit] microsteps -- mirrors a
+        # real hard endstop: a commanded move just can't get any farther,
+        # it doesn't wrap or go negative. 0 (home) is always the low bound
+        # regardless of axis, matching the firmware convention (M114/report
+        # only ever reports a non-negative microstep count -- see
+        # report_position). Defaults from the same axis config the rest of
+        # the app uses, so a jog aimed at "as far as it goes"
+        # (JogController._restart_continuous targets endstop_limit) actually
+        # stops there instead of sailing past into negative territory.
+        from ..motion.axis import default_axis_configs
+        self.axis_limits = {a.letter: cfg.endstop_limit
+                            for a, cfg in default_axis_configs().items()}
+        if axis_limits:
+            self.axis_limits.update(axis_limits)
 
     def open(self) -> None:
         self._queue += ["OpenFlux OT-2 Stepper Controller (simulated)", "ok"]
@@ -96,6 +111,13 @@ class FakeTransport(Transport):
                 out[a] = int(num)
         return out
 
+    def _clamp(self, axis: str, value: float) -> int:
+        limit = self.axis_limits.get(axis)
+        value = max(0, value)
+        if limit is not None:
+            value = min(value, limit)
+        return int(value)
+
     @staticmethod
     def _feed_value(line: str) -> float | None:
         i = line.find("F")
@@ -135,14 +157,14 @@ class FakeTransport(Transport):
             for a, target in vals.items():
                 contact = self.probe_contact.get(a)
                 if toward and contact is not None and abs(contact) <= abs(target):
-                    self._pos[a] = contact
+                    self._pos[a] = self._clamp(a, contact)
                     return [self._prb_line(True), "ok"]
-                self._pos[a] = target
+                self._pos[a] = self._clamp(a, target)
             return [self._prb_line(False), "ok"]
         if line.startswith("G1"):
             feed = self._feed_value(line)
             for a, v in self._axis_values(line).items():
-                target = (self._pos[a] + v) if not self._absolute else v
+                target = self._clamp(a, (self._pos[a] + v) if not self._absolute else v)
                 if feed and feed > 0 and target != self._pos[a]:
                     self._motion[a] = (target, float(feed), self._pos[a], time.monotonic())
                 else:
@@ -151,7 +173,7 @@ class FakeTransport(Transport):
             return ["ok"]
         if line.startswith("G0"):
             for a, v in self._axis_values(line).items():
-                self._pos[a] = (self._pos[a] + v) if not self._absolute else v
+                self._pos[a] = self._clamp(a, (self._pos[a] + v) if not self._absolute else v)
                 self._motion.pop(a, None)
             return ["ok"]
         if line.startswith("M114"):

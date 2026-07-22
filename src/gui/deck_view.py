@@ -57,6 +57,9 @@ _CORNER_NOTCH_MM = 10.0     # square gap left empty at each end of a separator r
 _SEPARATOR_COLOR = QColor("#C9C3B2")   # solid rib filling the gap between adjacent slots
 _SEPARATOR_HEIGHT_MM = 5.0  # divider ribs are raised material, not painted-on flat lines
 _GANTRY_HEIGHT_MM = 400.0   # ~40cm: fallback mount height when no live z is reported
+_WALL_COLOR = QColor("#B7AD93")        # a slot's own built-in bin walls (e.g. the trash slot)
+_OBSTACLE_COLOR = QColor("#8F8672")    # solid interior fixture inside a walled slot
+_ENCLOSURE_COLOR = QColor("#9AA0A6")   # machine frame uprights, drawn to enclosure_height_mm
 
 _ZOOM_MIN = 0.25
 _ZOOM_MAX = 8.0
@@ -418,6 +421,23 @@ class DeckCanvas(QWidget):
         corners = [(gminx, gminy, 0.0), (gmaxx, gminy, 0.0), (gmaxx, gmaxy, 0.0), (gminx, gmaxy, 0.0)]
         self._draw_face(p, to_screen, corners, _SEPARATOR_COLOR)
 
+    def _slot_wall_rects(self, slot) -> list:
+        """Deck-space (x0, y0, x1, y1) rects for the four sides of a slot's
+        built-in bin wall (see deck.Slot.wall_height_mm/thickness_mm) --
+        a thin frame running around the slot's own footprint perimeter, on
+        the inside of its outer edge."""
+        t = slot.wall_thickness_mm
+        if t <= 0:
+            return []
+        w, h = self._slot_footprint(slot)
+        ox, oy = slot.origin.x, slot.origin.y
+        return [
+            (ox, oy, ox + w, oy + t),                 # front (min-y) wall
+            (ox, oy + h - t, ox + w, oy + h),          # back (max-y) wall
+            (ox, oy, ox + t, oy + h),                  # left (min-x) wall
+            (ox + w - t, oy, ox + w, oy + h),          # right (max-x) wall
+        ]
+
     def _draw_slot_floor(self, p: QPainter, to_screen, name: str, common_footprint, scale: float) -> None:
         """A slot's own footprint: fill, border, and name label -- always
         flat at z=0. Its labware (if any and if it has height) is drawn
@@ -641,6 +661,16 @@ class DeckCanvas(QWidget):
             for gminx, gminy, gmaxx, gmaxy in separator_segments:
                 all_pts.extend(self._project(cx, cy, _SEPARATOR_HEIGHT_MM) for cx, cy in
                                ((gminx, gminy), (gmaxx, gminy), (gmaxx, gmaxy), (gminx, gmaxy)))
+            for slot in self.deck.slots.values():
+                if slot.wall_height_mm > 0:
+                    for wx0, wy0, wx1, wy1 in self._slot_wall_rects(slot):
+                        all_pts.extend(self._project(cx, cy, slot.wall_height_mm) for cx, cy in
+                                       ((wx0, wy0), (wx1, wy0), (wx1, wy1), (wx0, wy1)))
+                for obs in slot.obstacles:
+                    oox, ooy = slot.origin.x + obs.offset[0], slot.origin.y + obs.offset[1]
+                    ow, oh = obs.size
+                    all_pts.extend(self._project(cx, cy, obs.height_mm) for cx, cy in
+                                   ((oox, ooy), (oox + ow, ooy), (oox + ow, ooy + oh), (oox, ooy + oh)))
             for pt in self.positions.values():
                 if pt is not None:
                     all_pts.append(self._project(pt.x, pt.y, pt.z if pt.z else _GANTRY_HEIGHT_MM))
@@ -660,6 +690,19 @@ class DeckCanvas(QWidget):
             frame_corners_proj = [self._project(cx, cy) for cx, cy in
                                   ((fminx, fminy), (fmaxx, fminy), (fmaxx, fmaxy), (fminx, fmaxy))]
             all_pts.extend(frame_corners_proj)
+
+        # NOTE: deliberately NOT folded into all_pts's auto-fit bounding box
+        # -- at 560 mm the enclosure is taller than the entire deck is wide,
+        # and fitting it would shrink the deck (the actually-relevant
+        # content) down to a sliver. Drawn at the deck's own fitted scale
+        # instead, so it may extend past the canvas edge until the operator
+        # zooms out -- see DeckCanvas's wheel-zoom.
+        enclosure_h = getattr(self.deck, "enclosure_height_mm", None)
+        enclosure_top_proj = None
+        if is_3d and enclosure_h and frame_bounds is not None:
+            fminx, fminy, fmaxx, fmaxy = frame_bounds
+            enclosure_top_proj = [self._project(cx, cy, enclosure_h) for cx, cy in
+                                  ((fminx, fminy), (fmaxx, fminy), (fmaxx, fmaxy), (fminx, fmaxy))]
 
         home_xy = self._home_deck_point()
         home_proj = self._project(*home_xy) if home_xy is not None else None
@@ -701,6 +744,28 @@ class DeckCanvas(QWidget):
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawPath(frame_path)
+
+        # Enclosure: the machine's own physical height, drawn as dashed
+        # uprights at the frame's 4 corners plus a top outline -- a wireframe
+        # "cage" rather than solid faces, consistent with the frame
+        # footprint's own dashed/schematic style (this isn't a real wall,
+        # just the known ceiling of the physical envelope).
+        if enclosure_top_proj is not None:
+            base_screen = [to_screen(pt) for pt in frame_corners_proj]
+            top_screen = [to_screen(pt) for pt in enclosure_top_proj]
+            pen = QPen(_ENCLOSURE_COLOR)
+            pen.setStyle(Qt.DashLine)
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            top_path = QPainterPath()
+            top_path.moveTo(*top_screen[0])
+            for sp in top_screen[1:]:
+                top_path.lineTo(*sp)
+            top_path.closeSubpath()
+            p.drawPath(top_path)
+            for b, t in zip(base_screen, top_screen):
+                p.drawLine(QPointF(*b), QPointF(*t))
 
         if plate_corners_proj is not None:
             screen_corners = [to_screen(pt) for pt in plate_corners_proj]
@@ -744,6 +809,36 @@ class DeckCanvas(QWidget):
             floor_depth = self._camera_depth(ox + w / 2, oy + h / 2, 0.0)
             drawables.append((floor_depth, lambda n=name:
                              self._draw_slot_floor(p, to_screen, n, common_footprint, scale)))
+
+            if slot.wall_height_mm > 0:
+                for wx0, wy0, wx1, wy1 in self._slot_wall_rects(slot):
+                    if is_3d:
+                        for depth, pts, color in self._box_faces(
+                                wx0, wy0, wx1 - wx0, wy1 - wy0, slot.wall_height_mm,
+                                _WALL_COLOR.lighter(112), _WALL_COLOR.darker(118), _WALL_COLOR.darker(106)):
+                            drawables.append((depth, lambda pts=pts, color=color:
+                                             self._draw_face(p, to_screen, pts, color)))
+                    else:
+                        wall_depth = self._camera_depth((wx0 + wx1) / 2, (wy0 + wy1) / 2)
+                        drawables.append((wall_depth, lambda a=wx0, b=wy0, c=wx1, d=wy1:
+                                         self._draw_face(p, to_screen,
+                                                        [(a, b, 0.0), (c, b, 0.0), (c, d, 0.0), (a, d, 0.0)],
+                                                        _WALL_COLOR)))
+            for obs in slot.obstacles:
+                oox, ooy = ox + obs.offset[0], oy + obs.offset[1]
+                ow, oh = obs.size
+                if is_3d:
+                    for depth, pts, color in self._box_faces(
+                            oox, ooy, ow, oh, obs.height_mm,
+                            _OBSTACLE_COLOR.lighter(115), _OBSTACLE_COLOR.darker(122), _OBSTACLE_COLOR.darker(108)):
+                        drawables.append((depth, lambda pts=pts, color=color:
+                                         self._draw_face(p, to_screen, pts, color)))
+                else:
+                    obs_depth = self._camera_depth(oox + ow / 2, ooy + oh / 2)
+                    drawables.append((obs_depth, lambda a=oox, b=ooy, c=ow, d=oh:
+                                     self._draw_face(p, to_screen,
+                                                    [(a, b, 0.0), (a + c, b, 0.0), (a + c, b + d, 0.0), (a, b + d, 0.0)],
+                                                    _OBSTACLE_COLOR)))
 
             lw = self._labware_by_slot.get(name)
             if lw is None:

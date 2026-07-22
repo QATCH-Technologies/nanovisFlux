@@ -10,9 +10,15 @@ travel_z_mm: 120           # safe clearance height used by safe_move_to
 timeout: 30
 
 # Per-axis overrides; anything omitted keeps the firmware default.
+# steps_per_mm here is "full motor steps per mm" (AxisScale multiplies by
+# MICROSTEPS_PER_STEP=32 to get firmware microsteps/mm) -- derived from
+# measured full-travel calibration: X 60,000 microsteps / 410 mm, Y 52,000
+# microsteps / 315 mm, Z/A 160,000 microsteps / 200 mm. See
+# geometry.units.MEASURED_AXIS_TRAVEL_MM, which is also what
+# default_axis_configs() uses when this section is omitted.
 axes:
-  X: { steps_per_mm: 66.6 }
-  Y: { steps_per_mm: 66.6 }
+  X: { steps_per_mm: 4.57 }
+  Y: { steps_per_mm: 5.16 }
   Z: { steps_per_mm: 25.0 }
   A: { steps_per_mm: 25.0 }
 
@@ -62,6 +68,9 @@ deck:
   # spare on the left and right, 87.5 mm behind it (rear), and none in
   # front (the plate's front edge is flush with the frame's).
   frame_margins: { front: 0, left: 67.5, right: 67.5, rear: 87.5 }
+  # Whole-machine enclosure height, floor to the top of the frame/housing --
+  # descriptive only (drawn as the 3D deck view's frame uprights).
+  enclosure_height_mm: 560
   slots:
     - { name: "1",  x: 0,   y: 0,   size: [123, 81] }
     - { name: "2",  x: 128, y: 0,   size: [123, 81] }
@@ -74,7 +83,23 @@ deck:
     - { name: "9",  x: 256, y: 172, size: [123, 81] }
     - { name: "10", x: 0,   y: 258, size: [123, 81] }
     - { name: "11", x: 128, y: 258, size: [123, 81] }
-    - { name: "12", x: 256, y: 258, size: [170, 164] }   # trash -- oversized, back-right
+    - name: "12"   # trash -- oversized, back-right
+      x: 256
+      y: 258
+      size: [170, 164]
+      # Physical trash-bin walls: 8.5 cm tall, 0.25 cm thick, standing on
+      # this slot's own footprint perimeter (x/y/size above, unchanged --
+      # those also anchor the deck calibration comment up top). NOTE: the
+      # real measured gap from this bin to the slot 11/9 separators is
+      # 1 cm, but that's larger than the nominal 5 mm slot-to-slot spacing
+      # baked into this footprint -- confirm before moving this slot's
+      # origin, since real calibration points were measured against it.
+      walls: { height_mm: 85, thickness_mm: 2.5 }
+      # Solid square excursion in the bin's bottom-left (min x, min y,
+      # i.e. front-left) corner; height assumed == wall height since none
+      # was separately given -- confirm/adjust once known.
+      obstacles:
+        - { offset: [0, 0], size: [37.5, 37.0], height_mm: 85 }
 
 # Labware placed on named slots. Each well's (x, y, z) is relative to the
 # slot origin, with z always the well's TOP (opening/rim) -- the one

@@ -4,6 +4,7 @@ workspace -- deck-centric, with the e-stop and connection controls pinned
 at the top regardless of which right-hand tab is active."""
 from __future__ import annotations
 
+import time
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, QTabWidget,
                              QLabel, QPushButton, QFrame, QMessageBox, QListWidget)
@@ -11,6 +12,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, QTabW
 from ..core import AxisId, MountSide
 from ..transport import FakeTransport, SerialTransport
 from ..control.jog import JogController
+from ..motion.axis import HOMING_ORDER
 from ..geometry.coordinates import DeckPoint
 from .connection_bar import ConnectionBar
 from .deck_view import DeckView
@@ -33,6 +35,8 @@ from .mounts_dialog import MountsDialog
 #: this ever needs to be exact for a rotated calibration.
 _LR_HALF_SPACING_MM = 32.5 / 2
 _REAR_BEHIND_MM = 50.0
+
+_HOMING_ANIM_INTERVAL_MS = 40  # 25 Hz -- smooth enough for a multi-second sweep
 
 
 class MainWindow(QMainWindow):
@@ -143,8 +147,26 @@ class MainWindow(QMainWindow):
         outer.addWidget(console_wrap)
 
         self._position_timer = QTimer(self)
-        self._position_timer.setInterval(1000)
+        # 200ms (5 Hz): a full-length X move (60,000 microsteps at the
+        # default 16,000 microsteps/s travel speed) takes ~3.75s, so 1 Hz
+        # only gave ~4 marker updates across a full traverse -- visibly
+        # choppy. 5 Hz keeps the deck marker tracking smoothly without
+        # over-polling the transport.
+        self._position_timer.setInterval(200)
         self._position_timer.timeout.connect(self._poll_position)
+
+        # Post-home sweep: robot.home() is a single blocking call (the
+        # firmware doesn't ack G28 until every requested axis has fully
+        # homed), so there is no real position to poll *during* it -- this
+        # timer instead replays the known homing order/speed as an
+        # animation once the call returns, so the operator still sees the
+        # gantry "arrive" home axis by axis rather than snapping instantly.
+        self._homing_anim_timer = QTimer(self)
+        self._homing_anim_timer.setInterval(_HOMING_ANIM_INTERVAL_MS)
+        self._homing_anim_timer.timeout.connect(self._tick_homing_animation)
+        self._homing_schedule: list = []
+        self._homing_t0 = 0.0
+        self._homing_display: dict = {}
 
         self.setFocusPolicy(Qt.StrongFocus)
         self.conn_bar.set_status("disconnected")
@@ -202,6 +224,7 @@ class MainWindow(QMainWindow):
 
     def _teardown_connection(self) -> None:
         self._position_timer.stop()
+        self._homing_anim_timer.stop()
         self.routine_runner_widget.set_context(None, None)
         self.manual_panel.set_context(None, None, None)
         if self.jog is not None:
@@ -230,6 +253,10 @@ class MainWindow(QMainWindow):
         if self.robot is None:
             return
         try:
+            start_pos = self.robot.controller.report_position()
+        except Exception:
+            start_pos = {}
+        try:
             self.robot.home()
             self.robot.controller.set_relative()   # home() leaves G90; restore ambient jog mode
             if self.tracer:
@@ -237,6 +264,53 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             if self.tracer:
                 self.tracer.note(f"home failed: {exc}")
+            return
+        self._start_homing_animation(start_pos)
+
+    # -- homing animation --------------------------------------------------
+    def _start_homing_animation(self, start_pos: dict) -> None:
+        """Replay the known homing order/speed as a sweep back to zero, axis
+        by axis, once ``robot.home()`` (a single blocking G28) has returned.
+        Pure GUI polish -- doesn't talk to the robot -- so it can't race the
+        real position poll; that timer is paused for the duration and
+        restarted (with an immediate poll) once the sweep finishes."""
+        schedule = []
+        t = 0.0
+        for axis in HOMING_ORDER:
+            axis_obj = self.robot.axes.get(axis)
+            if axis_obj is None:
+                continue
+            start_val = start_pos.get(axis, 0) or 0
+            speed = axis_obj.config.homing_speed or 0
+            duration = abs(start_val) / speed if speed > 0 else 0.0
+            schedule.append((axis, start_val, t, t + duration))
+            t += duration
+        self._position_timer.stop()
+        if not schedule:
+            self._position_timer.start()
+            return
+        self._homing_schedule = schedule
+        self._homing_display = dict(start_pos)
+        self._homing_t0 = time.monotonic()
+        self._homing_anim_timer.start()
+
+    def _tick_homing_animation(self) -> None:
+        elapsed = time.monotonic() - self._homing_t0
+        total = self._homing_schedule[-1][3]
+        for axis, start_val, t_start, t_end in self._homing_schedule:
+            if elapsed >= t_end:
+                self._homing_display[axis] = 0
+            elif elapsed <= t_start:
+                self._homing_display[axis] = start_val
+            else:
+                frac = (elapsed - t_start) / (t_end - t_start)
+                self._homing_display[axis] = int(round(start_val * (1.0 - frac)))
+        self.manual_panel.update_positions(self._homing_display)
+        self._update_deck_markers(self._homing_display)
+        if elapsed >= total:
+            self._homing_anim_timer.stop()
+            self._position_timer.start()
+            self._poll_position()   # reconcile the display with the real (homed) position
 
     def _on_estop_requested(self) -> None:
         if self.robot is None:
@@ -282,6 +356,27 @@ class MainWindow(QMainWindow):
         self.manual_panel.update_positions(pos)
         self._update_deck_markers(pos)
 
+    def _mount_deck_z(self, side: MountSide, pos: dict) -> float:
+        """Real deck-mm height of ``side``'s mount, from its vertical axis's
+        raw position and the Z calibration (inverting DeckCalibration.
+        deck_to_motor's z math) -- 0.0 (the DeckPoint default, which the
+        deck view then falls back to _GANTRY_HEIGHT_MM for, same as before)
+        wherever there's no vertical axis, no z_zero calibrated for this
+        side, or no live reading yet. At home (raw 0), this correctly comes
+        out near the top of travel -- home is up, see DeckCalibration's own
+        docstring -- rather than the previous hardcoded ~40cm guess."""
+        cal = self.robot.calibration
+        axis = cal.vertical_axis(side)
+        if axis is None or side not in cal.z_zero:
+            return 0.0
+        mz = pos.get(axis)
+        if mz is None:
+            return 0.0
+        try:
+            return cal.z_scale.to_mm(cal.z_zero[side] - mz) - self.robot.tip_offset(side)
+        except Exception:
+            return 0.0
+
     def _update_deck_markers(self, pos: dict) -> None:
         if self.robot.calibration is None:
             self.deck_view.update_positions({})
@@ -292,8 +387,10 @@ class MainWindow(QMainWindow):
             self.deck_view.update_positions({})
             return
         markers = {
-            MountSide.LEFT: DeckPoint(gx - _LR_HALF_SPACING_MM, gy),
-            MountSide.RIGHT: DeckPoint(gx + _LR_HALF_SPACING_MM, gy),
+            MountSide.LEFT: DeckPoint(gx - _LR_HALF_SPACING_MM, gy,
+                                      self._mount_deck_z(MountSide.LEFT, pos)),
+            MountSide.RIGHT: DeckPoint(gx + _LR_HALF_SPACING_MM, gy,
+                                       self._mount_deck_z(MountSide.RIGHT, pos)),
             MountSide.REAR: DeckPoint(gx, gy + _REAR_BEHIND_MM),
         }
         self.deck_view.update_positions(markers)

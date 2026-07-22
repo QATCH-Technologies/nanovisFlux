@@ -17,10 +17,16 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLa
                              QPushButton, QButtonGroup, QFrame, QStackedWidget)
 
 from ..core import AxisId, MountSide
+from ..geometry.units import default_axis_scale
 from .gamepad_input import GamepadInput
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
+
+#: Axes with a known linear-travel calibration (see
+#: geometry.units.MEASURED_AXIS_TRAVEL_MM) -- shown with a cm readout
+#: alongside raw microsteps. B/C are plunger axes (volumetric, not linear).
+_LINEAR_AXES = (AxisId.X, AxisId.Y, AxisId.Z, AxisId.A)
 
 _KEY_MAP = {
     Qt.Key_Left: "x-", Qt.Key_Right: "x+",
@@ -359,7 +365,7 @@ class ManualControlPanel(QWidget):
         pos_box = QFrame()
         pos_box.setProperty("class", "card")
         pos_layout = QVBoxLayout(pos_box)
-        pos_title = QLabel("LIVE POSITION (microsteps)")
+        pos_title = QLabel("LIVE POSITION (microsteps · cm)")
         pos_title.setProperty("class", "eyebrow")
         pos_layout.addWidget(pos_title)
         pos_grid = QGridLayout()
@@ -629,4 +635,10 @@ class ManualControlPanel(QWidget):
     def update_positions(self, positions: dict) -> None:
         for axis, label in self.pos_labels.items():
             value = positions.get(axis)
-            label.setText("--" if value is None else str(value))
+            if value is None:
+                label.setText("--")
+            elif axis in _LINEAR_AXES:
+                cm = default_axis_scale(axis).to_cm(value)
+                label.setText(f"{value}  ({cm:.2f} cm)")
+            else:
+                label.setText(str(value))
