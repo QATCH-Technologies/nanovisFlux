@@ -20,8 +20,8 @@ class GridLabwareDefinition:
     the conventional way (A1, A2, ..., B1, ...).
 
     ``grid_offset`` is well/tip A1's centre (z at its top), relative to the
-    labware's own origin corner -- a fixed property of the labware type,
-    independent of which slot it ends up in.
+    labware's own TOP-LEFT corner (see ``Labware.grid``) -- a fixed property
+    of the labware type, independent of which slot it ends up in.
 
     ``stacking_offset`` is only added when this labware sits on an adapter,
     module, or another piece of labware instead of directly on a bare deck

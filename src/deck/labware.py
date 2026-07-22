@@ -80,9 +80,21 @@ class Labware:
     name: str
     wells: dict = field(default_factory=dict)
     slot: object = None  # a deck.Slot once placed
+    _pending_row_flip: bool = field(default=False, repr=False, compare=False)
 
     def place(self, slot) -> None:
+        """Record the slot and, for a ``Labware.grid``-built plate, mirror
+        its row offsets across the slot's own height -- ``grid`` lays rows
+        out downward from A1 at the labware's TOP-LEFT corner, while the
+        slot's own coordinate frame runs the other way (+y = back/away).
+        Deferred to here (rather than done in ``grid``) because the slot,
+        and therefore its height, isn't known until placement."""
         self.slot = slot
+        if self._pending_row_flip and slot.size and slot.size[1]:
+            height = slot.size[1]
+            for well in self.wells.values():
+                well.offset = DeckPoint(well.offset.x, height - well.offset.y, well.offset.z)
+            self._pending_row_flip = False
 
     def well(self, name: str, ref: str = "top", clearance_mm: float | None = None) -> DeckPoint:
         """Absolute deck point for a well at the given reference height:
@@ -98,8 +110,15 @@ class Labware:
              row_spacing_mm: float, col_spacing_mm: float,
              geometry: WellGeometry | None = None) -> "Labware":
         """Uniform rows x cols grid, named the conventional way (A1, A2, ...,
-        B1, ...). ``origin`` is well A1's centre (z at the well top),
-        relative to the labware/slot origin; every well shares ``geometry``."""
+        B1, ...). ``origin`` is well A1's centre (z at the well top), given
+        as an offset from the labware's own TOP-LEFT corner: x to the right
+        of the left edge, y DOWN from the top edge -- matching how real
+        labware is labelled (row A nearest the back/top looking down at the
+        deck, row B/C/... further toward the front). Every well shares
+        ``geometry``.
+
+        These offsets are provisional until ``place()`` mirrors them across
+        the slot's height into the slot's own bottom-anchored frame."""
         geometry = geometry or WellGeometry()
         wells = {}
         for r in range(rows):
@@ -108,7 +127,9 @@ class Labware:
                 pos = DeckPoint(origin.x + c * col_spacing_mm,
                                 origin.y + r * row_spacing_mm, origin.z)
                 wells[well_name] = Well(well_name, pos, geometry)
-        return cls(name=name, wells=wells)
+        labware = cls(name=name, wells=wells)
+        labware._pending_row_flip = True
+        return labware
 
     @classmethod
     def from_dict(cls, data: dict) -> "Labware":

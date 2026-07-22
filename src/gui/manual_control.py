@@ -1,18 +1,22 @@
 """Manual jog panel: keyboard or gamepad input driving a JogController.
 
-See jog_timers.py for why every jog action here is a repeated discrete
-nudge() rather than JogController's begin_jog/end_jog continuous-move model
-(that model assumes a real, asynchronous controller a quick-stop can
-interrupt mid-flight; FakeTransport executes instantly, so it can't).
+Every jog action is a continuous move: press and hold (a key, an on-screen
+jog button, or a gamepad stick/trigger deflection) calls
+JogController.begin_jog, which commands a move toward the axis's endstop
+limit -- as far as it can physically go, the practical "max step size" --
+at a feed proportional to speed; release calls end_jog, which quick-stops
+it wherever it's gotten to. This now works correctly against FakeTransport
+too (see transport/fake.py's real-time G1 simulation), not just real
+hardware, which is why the panel no longer drives repeated discrete
+nudge() calls the way it used to.
 """
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-                             QPushButton, QButtonGroup, QFrame)
+                             QPushButton, QButtonGroup, QFrame, QStackedWidget)
 
 from ..core import AxisId, MountSide
-from .jog_timers import HoldRepeater
 from .gamepad_input import GamepadInput
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
@@ -24,6 +28,29 @@ _KEY_MAP = {
     Qt.Key_PageUp: "z+", Qt.Key_PageDown: "z-",
     Qt.Key_BracketRight: "plunger+", Qt.Key_BracketLeft: "plunger-",
 }
+
+#: gamepad axis name -> (begin_jog call, end_jog call), both taking the
+#: JogController as their first argument -- see GamepadInput.axis_speed_changed
+#: and ManualControlPanel._on_gamepad_axis.
+_GAMEPAD_JOG = {
+    "x": (lambda jog, s: jog.begin_jog(AxisId.X, 1 if s > 0 else -1, abs(s)),
+         lambda jog: jog.end_jog(AxisId.X)),
+    "y": (lambda jog, s: jog.begin_jog(AxisId.Y, 1 if s > 0 else -1, abs(s)),
+         lambda jog: jog.end_jog(AxisId.Y)),
+    "z": (lambda jog, s: jog.begin_jog_z(1 if s > 0 else -1, abs(s)),
+         lambda jog: jog.end_jog_z()),
+    "plunger": (lambda jog, s: jog.begin_jog_plunger(1 if s > 0 else -1, abs(s)),
+               lambda jog: jog.end_jog_plunger()),
+}
+
+
+def _set_pill_class(label: QLabel, css_class: str) -> None:
+    """Swap a QLabel's "class" dynamic property and force Qt to re-match
+    the stylesheet -- setProperty alone doesn't repaint, since Qt caches
+    class-selector results per widget until explicitly re-polished."""
+    label.setProperty("class", css_class)
+    label.style().unpolish(label)
+    label.style().polish(label)
 
 
 class ManualControlPanel(QWidget):
@@ -39,26 +66,93 @@ class ManualControlPanel(QWidget):
         self._input_mode = "keyboard"
         self._input_locked = False  # True while a routine is running
 
-        self._actions = {
-            "x-": self._guarded(lambda: self.jog.nudge(AxisId.X, -1)),
-            "x+": self._guarded(lambda: self.jog.nudge(AxisId.X, +1)),
-            "y+": self._guarded(lambda: self.jog.nudge(AxisId.Y, +1)),
-            "y-": self._guarded(lambda: self.jog.nudge(AxisId.Y, -1)),
-            "z+": self._guarded(lambda: self.jog.jog_z(+1)),
-            "z-": self._guarded(lambda: self.jog.jog_z(-1)),
-            "plunger+": self._guarded(lambda: self.jog.jog_plunger(+1)),
-            "plunger-": self._guarded(lambda: self.jog.jog_plunger(-1)),
+        # Continuous jog: press starts a move toward the endstop at the
+        # current jog_speed (see JogController.begin_jog); release quick-
+        # stops it wherever it got to. jog_speed is read fresh each call so
+        # it always reflects whatever the step/speed dial is set to *now*.
+        self._begin = {
+            "x-": self._guarded(lambda: self.jog.begin_jog(AxisId.X, -1, self.jog.jog_speed)),
+            "x+": self._guarded(lambda: self.jog.begin_jog(AxisId.X, +1, self.jog.jog_speed)),
+            "y+": self._guarded(lambda: self.jog.begin_jog(AxisId.Y, +1, self.jog.jog_speed)),
+            "y-": self._guarded(lambda: self.jog.begin_jog(AxisId.Y, -1, self.jog.jog_speed)),
+            "z+": self._guarded(lambda: self.jog.begin_jog_z(+1, self.jog.jog_speed)),
+            "z-": self._guarded(lambda: self.jog.begin_jog_z(-1, self.jog.jog_speed)),
+            "plunger+": self._guarded(lambda: self.jog.begin_jog_plunger(+1, self.jog.jog_speed)),
+            "plunger-": self._guarded(lambda: self.jog.begin_jog_plunger(-1, self.jog.jog_speed)),
         }
-        self._repeaters = {name: HoldRepeater(fn) for name, fn in self._actions.items()}
+        self._end = {
+            "x-": self._guarded_end(lambda: self.jog.end_jog(AxisId.X)),
+            "x+": self._guarded_end(lambda: self.jog.end_jog(AxisId.X)),
+            "y+": self._guarded_end(lambda: self.jog.end_jog(AxisId.Y)),
+            "y-": self._guarded_end(lambda: self.jog.end_jog(AxisId.Y)),
+            "z+": self._guarded_end(lambda: self.jog.end_jog_z()),
+            "z-": self._guarded_end(lambda: self.jog.end_jog_z()),
+            "plunger+": self._guarded_end(lambda: self.jog.end_jog_plunger()),
+            "plunger-": self._guarded_end(lambda: self.jog.end_jog_plunger()),
+        }
 
         root = QVBoxLayout(self)
         root.setSpacing(10)
 
+        root.addLayout(self._build_header())
+        root.addLayout(self._build_mode_toggle())
+
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self._build_keyboard_page())
+        self.content_stack.addWidget(self._build_gamepad_page())
+        root.addWidget(self.content_stack)
+
+        root.addWidget(self._build_position_box())
+        root.addLayout(self._build_bottom_buttons())
+
+        legend = QLabel("keyboard: arrows = X/Y · PgUp/PgDn = Z · [ ] = plunger · "
+                        "M = cycle mount · Esc = quick stop\n"
+                        "gamepad: sticks jog · LT/RT fluidics · Y mount · A stop · X zero Z · "
+                        "Back/View home · Start/Menu e-stop · LB/RB tip")
+        legend.setWordWrap(True)
+        legend.setProperty("class", "eyebrow")
+        root.addWidget(legend)
+        root.addStretch(1)
+
+        self._refresh_enabled()
+
+    # -- layout builders ------------------------------------------------------
+    def _build_header(self) -> QHBoxLayout:
+        header = QHBoxLayout()
+        title = QLabel("Manual control")
+        title.setProperty("class", "h1")
+        header.addWidget(title)
+
+        self.status_pill = QLabel("jog")
+        _set_pill_class(self.status_pill, "pill")
+        header.addWidget(self.status_pill)
+        header.addStretch(1)
+
+        mount_label = QLabel("active mount")
+        mount_label.setProperty("class", "eyebrow")
+        header.addWidget(mount_label)
+
+        self.mount_buttons = {}
+        mount_group = QButtonGroup(self)
+        mount_group.setExclusive(True)
+        for label, side in _MOUNT_BUTTONS:
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setFixedWidth(40)
+            b.clicked.connect(lambda _checked, s=side: self._select_mount(s))
+            mount_group.addButton(b)
+            header.addWidget(b)
+            self.mount_buttons[side] = b
+        self.mount_buttons[MountSide.LEFT].setChecked(True)
+        return header
+
+    def _build_mode_toggle(self) -> QHBoxLayout:
         mode_row = QHBoxLayout()
         self.btn_keyboard = QPushButton("⌨  Keyboard")
         self.btn_gamepad = QPushButton("🎮  Gamepad")
         for b in (self.btn_keyboard, self.btn_gamepad):
             b.setCheckable(True)
+            b.setMinimumHeight(36)
         self.btn_keyboard.setChecked(True)
         mode_group = QButtonGroup(self)
         mode_group.setExclusive(True)
@@ -66,60 +160,202 @@ class ManualControlPanel(QWidget):
         mode_group.addButton(self.btn_gamepad)
         self.btn_keyboard.clicked.connect(lambda: self._set_input_mode("keyboard"))
         self.btn_gamepad.clicked.connect(lambda: self._set_input_mode("gamepad"))
-        mode_row.addWidget(self.btn_keyboard)
-        mode_row.addWidget(self.btn_gamepad)
-        root.addLayout(mode_row)
+        mode_row.addWidget(self.btn_keyboard, 1)
+        mode_row.addWidget(self.btn_gamepad, 1)
+        return mode_row
 
-        mount_row = QHBoxLayout()
-        self.mount_buttons = {}
-        mount_group = QButtonGroup(self)
-        mount_group.setExclusive(True)
-        for label, side in _MOUNT_BUTTONS:
-            b = QPushButton(label)
-            b.setCheckable(True)
-            b.clicked.connect(lambda _checked, s=side: self._select_mount(s))
-            mount_group.addButton(b)
-            mount_row.addWidget(b)
-            self.mount_buttons[side] = b
-        self.mount_buttons[MountSide.LEFT].setChecked(True)
-        mount_row.addStretch(1)
-        self.btn_step = QPushButton("step ×1")
+    def _key_cap(self, text: str, action: str, *, wide: bool = False) -> QPushButton:
+        """A jog button styled/labelled as the physical key that triggers
+        it (e.g. "PgUp"), rather than the semantic action name."""
+        btn = self._jog_button(text, action)
+        if wide:
+            btn.setMinimumWidth(64)
+        return btn
+
+    def _captioned(self, item, caption: str, *, align=Qt.AlignCenter) -> QVBoxLayout:
+        """A widget or layout with a small eyebrow-style caption beneath it."""
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        if isinstance(item, QWidget):
+            col.addWidget(item, alignment=align)
+        else:
+            col.addLayout(item)
+        label = QLabel(caption)
+        label.setProperty("class", "eyebrow")
+        label.setAlignment(align)
+        col.addWidget(label)
+        return col
+
+    def _build_keyboard_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        top_row = QHBoxLayout()
+        self.btn_esc = QPushButton("Esc")
+        self.btn_esc.setObjectName("estop")
+        self.btn_esc.clicked.connect(self._quick_stop)
+        top_row.addLayout(self._captioned(self.btn_esc, "quick stop"))
+        top_row.addStretch(1)
+
+        step_col = QVBoxLayout()
+        step_col.setSpacing(2)
+        step_label = QLabel("STEP")
+        step_label.setProperty("class", "eyebrow")
+        step_label.setAlignment(Qt.AlignRight)
+        step_col.addWidget(step_label)
+        self.btn_step = QPushButton("×1")
         self.btn_step.clicked.connect(lambda: self._apply_step_cycle(+1))
-        mount_row.addWidget(self.btn_step)
-        root.addLayout(mount_row)
+        step_col.addWidget(self.btn_step)
+        top_row.addLayout(step_col)
 
+        self.btn_cycle_mount = QPushButton("M")
+        top_row.addLayout(self._captioned(self.btn_cycle_mount, "cycle mount"))
+        self.btn_cycle_mount.clicked.connect(self._cycle_mount)
+        layout.addLayout(top_row)
+
+        clusters = QHBoxLayout()
+        clusters.setSpacing(18)
+
+        xy_group = QVBoxLayout()
+        xy_caption = QLabel("GANTRY · X / Y")
+        xy_caption.setProperty("class", "eyebrow")
+        xy_caption.setAlignment(Qt.AlignCenter)
+        xy_group.addWidget(xy_caption)
         cross = QGridLayout()
         cross.setSpacing(6)
-        self.btn_yplus = self._jog_button("Y+", "y+")
-        self.btn_yminus = self._jog_button("Y-", "y-")
-        self.btn_xminus = self._jog_button("X-", "x-")
-        self.btn_xplus = self._jog_button("X+", "x+")
-        xy_label = QLabel("XY")
-        xy_label.setAlignment(Qt.AlignCenter)
-        xy_label.setProperty("class", "eyebrow")
+        self.btn_yplus = self._key_cap("↑", "y+")
+        self.btn_yminus = self._key_cap("↓", "y-")
+        self.btn_xminus = self._key_cap("←", "x-")
+        self.btn_xplus = self._key_cap("→", "x+")
         cross.addWidget(self.btn_yplus, 0, 1)
         cross.addWidget(self.btn_xminus, 1, 0)
-        cross.addWidget(xy_label, 1, 1)
         cross.addWidget(self.btn_xplus, 1, 2)
         cross.addWidget(self.btn_yminus, 2, 1)
+        xy_group.addLayout(cross)
+        clusters.addLayout(xy_group)
 
-        self.btn_zplus = self._jog_button("Z+", "z+")
-        self.btn_zminus = self._jog_button("Z-", "z-")
-        z_label = QLabel("Z")
-        z_label.setAlignment(Qt.AlignCenter)
-        z_label.setProperty("class", "eyebrow")
-        cross.addWidget(self.btn_zplus, 0, 3)
-        cross.addWidget(z_label, 1, 3)
-        cross.addWidget(self.btn_zminus, 2, 3)
-        root.addLayout(cross)
+        z_group = QVBoxLayout()
+        z_caption = QLabel("Z LIFT")
+        z_caption.setProperty("class", "eyebrow")
+        z_caption.setAlignment(Qt.AlignCenter)
+        z_group.addWidget(z_caption)
+        self.btn_zplus = self._key_cap("PgUp", "z+", wide=True)
+        self.btn_zminus = self._key_cap("PgDn", "z-", wide=True)
+        z_group.addLayout(self._captioned(self.btn_zplus, "z+"))
+        z_group.addLayout(self._captioned(self.btn_zminus, "z-"))
+        clusters.addLayout(z_group)
 
-        plunger_row = QHBoxLayout()
-        self.btn_plunger_plus = self._jog_button("Plunger +", "plunger+")
-        self.btn_plunger_minus = self._jog_button("Plunger −", "plunger-")
-        plunger_row.addWidget(self.btn_plunger_plus)
-        plunger_row.addWidget(self.btn_plunger_minus)
-        root.addLayout(plunger_row)
+        plunger_group = QVBoxLayout()
+        plunger_caption = QLabel("PLUNGER")
+        plunger_caption.setProperty("class", "eyebrow")
+        plunger_caption.setAlignment(Qt.AlignCenter)
+        plunger_group.addWidget(plunger_caption)
+        self.btn_plunger_plus = self._key_cap("]", "plunger+", wide=True)
+        self.btn_plunger_minus = self._key_cap("[", "plunger-", wide=True)
+        plunger_group.addLayout(self._captioned(self.btn_plunger_plus, "aspirate +"))
+        plunger_group.addLayout(self._captioned(self.btn_plunger_minus, "dispense −"))
+        clusters.addLayout(plunger_group)
 
+        layout.addLayout(clusters)
+
+        hint = QLabel("keys highlight blue while held")
+        hint.setProperty("class", "eyebrow")
+        hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _gamepad_button(self, text: str, color: str, on_click) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setFixedSize(34, 34)
+        btn.setStyleSheet(
+            f"QPushButton {{ border-radius: 17px; background: {color}; color: white; "
+            "font-weight: 700; border: none; }}"
+            f"QPushButton:hover {{ background: {color}; }}"
+        )
+        btn.clicked.connect(on_click)
+        return btn
+
+    def _gamepad_pill(self, text: str, on_click) -> QPushButton:
+        btn = QPushButton(text)
+        btn.clicked.connect(on_click)
+        return btn
+
+    def _build_gamepad_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        trigger_row = QHBoxLayout()
+        self.btn_lt = self._gamepad_pill("LT   dispense −",
+                                        self._guarded(lambda: self.jog.jog_plunger(-1)))
+        self.btn_lb = self._gamepad_pill("LB   tip up", lambda: self._on_tip_action("pickup"))
+        trigger_row.addWidget(self.btn_lt)
+        trigger_row.addWidget(self.btn_lb)
+        trigger_row.addStretch(1)
+        self.btn_rb = self._gamepad_pill("tip drop   RB", lambda: self._on_tip_action("eject"))
+        self.btn_rt = self._gamepad_pill("aspirate +   RT",
+                                        self._guarded(lambda: self.jog.jog_plunger(+1)))
+        trigger_row.addWidget(self.btn_rb)
+        trigger_row.addWidget(self.btn_rt)
+        layout.addLayout(trigger_row)
+
+        body = QFrame()
+        body.setProperty("class", "panel")
+        body_layout = QHBoxLayout(body)
+
+        left_col = QVBoxLayout()
+        stick = QLabel("L")
+        stick.setFixedSize(56, 56)
+        stick.setAlignment(Qt.AlignCenter)
+        stick.setStyleSheet("border-radius: 28px; background: #E4E0D4; font-weight: 700;")
+        stick_caption = QLabel("jog X / Y")
+        stick_caption.setProperty("class", "eyebrow")
+        stick_caption.setAlignment(Qt.AlignCenter)
+        left_col.addWidget(stick, alignment=Qt.AlignCenter)
+        left_col.addWidget(stick_caption)
+        body_layout.addLayout(left_col)
+
+        mid_col = QVBoxLayout()
+        self.btn_back = self._gamepad_pill("⟲ Back", self.home_requested.emit)
+        mid_col.addLayout(self._captioned(self.btn_back, "home / view"))
+        self.btn_start = QPushButton("☰ Start")
+        self.btn_start.setObjectName("estop")
+        self.btn_start.clicked.connect(self.estop_requested.emit)
+        mid_col.addLayout(self._captioned(self.btn_start, "E-STOP"))
+        dpad = QGridLayout()
+        dpad.setSpacing(2)
+        self.btn_dpad_up = self._gamepad_pill("▲", lambda: self._apply_step_cycle(+1))
+        self.btn_dpad_down = self._gamepad_pill("▼", lambda: self._apply_step_cycle(-1))
+        for b in (self.btn_dpad_up, self.btn_dpad_down):
+            b.setFixedSize(22, 18)
+        dpad.addWidget(self.btn_dpad_up, 0, 0)
+        dpad.addWidget(self.btn_dpad_down, 1, 0)
+        mid_col.addLayout(self._captioned(dpad, "D-pad · step size"))
+        body_layout.addLayout(mid_col)
+
+        right_col = QGridLayout()
+        right_col.setSpacing(4)
+        self.btn_y = self._gamepad_button("Y", "#B18A3E", self._cycle_mount)
+        self.btn_x = self._gamepad_button("X", "#3E6E8E", self._zero_z)
+        self.btn_b = self._gamepad_button("B", "#C13B2E", self._read_sensor)
+        self.btn_a = self._gamepad_button("A", "#3E8E5B", self._quick_stop)
+        right_col.addWidget(self.btn_y, 0, 1)
+        right_col.addWidget(self.btn_x, 1, 0)
+        right_col.addWidget(self.btn_b, 1, 2)
+        right_col.addWidget(self.btn_a, 2, 1)
+        body_layout.addLayout(right_col)
+        layout.addWidget(body)
+
+        legend_grid = QGridLayout()
+        for i, text in enumerate(("Y cycle mount", "A stop motion", "X zero Z", "B read sensor")):
+            lbl = QLabel(text)
+            lbl.setProperty("class", "eyebrow")
+            legend_grid.addWidget(lbl, i // 2, i % 2)
+        layout.addLayout(legend_grid)
+        layout.addStretch(1)
+        return page
+
+    def _build_position_box(self) -> QFrame:
         pos_box = QFrame()
         pos_box.setProperty("class", "card")
         pos_layout = QVBoxLayout(pos_box)
@@ -137,27 +373,29 @@ class ManualControlPanel(QWidget):
             pos_grid.addWidget(val_lbl, r, c * 2 + 1)
             self.pos_labels[axis] = val_lbl
         pos_layout.addLayout(pos_grid)
-        root.addWidget(pos_box)
+        return pos_box
 
-        btn_row = QHBoxLayout()
+    def _build_bottom_buttons(self) -> QVBoxLayout:
+        rows = QVBoxLayout()
+        row1 = QHBoxLayout()
         self.btn_zero_z = QPushButton("Zero Z")
         self.btn_zero_z.clicked.connect(self._zero_z)
         self.btn_read_sensor = QPushButton("Read rear sensor")
         self.btn_read_sensor.clicked.connect(self._read_sensor)
-        btn_row.addWidget(self.btn_zero_z)
-        btn_row.addWidget(self.btn_read_sensor)
-        root.addLayout(btn_row)
+        row1.addWidget(self.btn_zero_z)
+        row1.addWidget(self.btn_read_sensor)
+        rows.addLayout(row1)
 
-        legend = QLabel("keyboard: arrows = X/Y · PgUp/PgDn = Z · [ ] = plunger · "
-                        "M = cycle mount · Esc = quick stop\n"
-                        "gamepad: sticks jog · LT/RT fluidics · Y mount · A stop · "
-                        "Back/View home · Start/Menu e-stop · LB/RB tip")
-        legend.setWordWrap(True)
-        legend.setProperty("class", "eyebrow")
-        root.addWidget(legend)
-        root.addStretch(1)
-
-        self._refresh_enabled()
+        row2 = QHBoxLayout()
+        self.btn_home = QPushButton("⌂ Home")
+        self.btn_home.clicked.connect(self.home_requested.emit)
+        self.btn_stop = QPushButton("⏻ STOP")
+        self.btn_stop.setObjectName("estop")
+        self.btn_stop.clicked.connect(self.estop_requested.emit)
+        row2.addWidget(self.btn_home)
+        row2.addWidget(self.btn_stop)
+        rows.addLayout(row2)
+        return rows
 
     # -- helpers ------------------------------------------------------------
     def _guarded(self, fn):
@@ -167,12 +405,23 @@ class ManualControlPanel(QWidget):
             fn()
         return call
 
+    def _guarded_end(self, fn):
+        """Like _guarded, but without the lock check -- releasing a held
+        jog input must always be able to stop the move, even if a routine
+        started running while it was held (set_routine_active already
+        calls stop_all_jog in that case, but a stray release event should
+        never be a no-op that leaves motion running)."""
+        def call():
+            if self.jog is None:
+                return
+            fn()
+        return call
+
     def _jog_button(self, text: str, action: str) -> QPushButton:
         btn = QPushButton(text)
         btn.setProperty("class", "jog")
-        rep = self._repeaters[action]
-        btn.pressed.connect(rep.start)
-        btn.released.connect(rep.stop)
+        btn.pressed.connect(self._begin[action])
+        btn.released.connect(self._end[action])
         return btn
 
     def _refresh_enabled(self) -> None:
@@ -184,12 +433,22 @@ class ManualControlPanel(QWidget):
         for b in (self.btn_xplus, self.btn_xminus, self.btn_yplus, self.btn_yminus):
             b.setEnabled(xy_enabled)
         for b in (self.btn_zplus, self.btn_zminus, self.btn_plunger_plus,
-                 self.btn_plunger_minus, self.btn_zero_z):
+                 self.btn_plunger_minus, self.btn_zero_z, self.btn_lt, self.btn_rt):
             b.setEnabled(zp_enabled)
         self.btn_read_sensor.setEnabled(connected and not locked)
+        self.btn_x.setEnabled(zp_enabled)
+        self.btn_b.setEnabled(connected and not locked)
         for b in self.mount_buttons.values():
             b.setEnabled(connected and not locked)
         self.btn_step.setEnabled(connected and not locked)
+        self.btn_dpad_up.setEnabled(connected and not locked)
+        self.btn_dpad_down.setEnabled(connected and not locked)
+        self.btn_cycle_mount.setEnabled(connected and not locked)
+        self.btn_y.setEnabled(connected and not locked)
+        self.btn_home.setEnabled(connected and not locked)
+        self.btn_stop.setEnabled(connected)
+        self.btn_esc.setEnabled(connected)
+        self.btn_a.setEnabled(connected)
 
     # -- mount / step size ----------------------------------------------------
     def _select_mount(self, side: MountSide) -> None:
@@ -211,7 +470,7 @@ class ManualControlPanel(QWidget):
         if self.jog is None:
             return
         scale = self.jog.cycle_scale(direction)
-        self.btn_step.setText(f"step ×{scale:g}")
+        self.btn_step.setText(f"×{scale:g}")
 
     # -- one-shot actions -----------------------------------------------------
     def _zero_z(self) -> None:
@@ -251,17 +510,19 @@ class ManualControlPanel(QWidget):
             if self.tracer:
                 self.tracer.note("quick stop")
 
-    def _on_gamepad_nudge(self, axis_name: str, sign: int) -> None:
-        if self.jog is None or self._input_locked:
+    def _on_gamepad_axis(self, axis_name: str, signed: float) -> None:
+        """A stick/trigger's deflection changed. 0 means centered/released
+        -- stop; otherwise (re)start a continuous jog at this speed,
+        matching real accel/decel-by-deflection behaviour (see
+        JogController.begin_jog's own restart-tolerance for why re-calling
+        this every poll tick while deflected is cheap, not redundant)."""
+        if self.jog is None:
             return
-        if axis_name == "x":
-            self.jog.nudge(AxisId.X, sign)
-        elif axis_name == "y":
-            self.jog.nudge(AxisId.Y, sign)
-        elif axis_name == "z":
-            self.jog.jog_z(sign)
-        elif axis_name == "plunger":
-            self.jog.jog_plunger(sign)
+        begin, end = _GAMEPAD_JOG[axis_name]
+        if signed == 0.0 or self._input_locked:
+            end(self.jog)
+        else:
+            begin(self.jog, signed)
 
     def _on_tip_action(self, action: str) -> None:
         if self.robot is None or self.jog is None or self._input_locked:
@@ -277,22 +538,36 @@ class ManualControlPanel(QWidget):
     def _set_input_mode(self, mode: str) -> None:
         self._input_mode = mode
         if mode == "gamepad":
+            self.content_stack.setCurrentIndex(1)
             self._start_gamepad()
         else:
+            self.content_stack.setCurrentIndex(0)
             self._stop_gamepad()
+            _set_pill_class(self.status_pill, "pill")
+            self.status_pill.setText("jog")
+
+    def _on_gamepad_connected(self, connected: bool) -> None:
+        if connected:
+            _set_pill_class(self.status_pill, "pill-live")
+            self.status_pill.setText("●  pad connected")
+        else:
+            _set_pill_class(self.status_pill, "pill-warn")
+            self.status_pill.setText("○  no gamepad")
 
     def _start_gamepad(self) -> None:
         if self.gamepad is not None:
             return
         self.gamepad = GamepadInput(self)
-        self.gamepad.nudge_requested.connect(self._on_gamepad_nudge)
+        self.gamepad.axis_speed_changed.connect(self._on_gamepad_axis)
         self.gamepad.mount_toggle_requested.connect(self._cycle_mount)
         self.gamepad.home_requested.connect(self.home_requested.emit)
         self.gamepad.estop_requested.connect(self.estop_requested.emit)
         self.gamepad.quick_stop_requested.connect(self._quick_stop)
         self.gamepad.step_cycle_requested.connect(self._apply_step_cycle)
         self.gamepad.read_sensor_requested.connect(self._read_sensor)
+        self.gamepad.zero_z_requested.connect(self._zero_z)
         self.gamepad.tip_action_requested.connect(self._on_tip_action)
+        self.gamepad.connected_changed.connect(self._on_gamepad_connected)
         self.gamepad.status.connect(lambda msg: self.tracer.note(msg) if self.tracer else None)
         self.gamepad.start()
 
@@ -308,7 +583,7 @@ class ManualControlPanel(QWidget):
             return False
         action = _KEY_MAP.get(key)
         if action:
-            self._repeaters[action].start()
+            self._begin[action]()
             return True
         if key == Qt.Key_M:
             self._cycle_mount()
@@ -323,14 +598,14 @@ class ManualControlPanel(QWidget):
             return False
         action = _KEY_MAP.get(key)
         if action:
-            self._repeaters[action].stop()
+            self._end[action]()
             return True
         return False
 
     # -- lifecycle ------------------------------------------------------------
     def stop_all_jog(self) -> None:
-        for rep in self._repeaters.values():
-            rep.stop()
+        if self.jog is not None:
+            self.jog.end_jog()   # every axis at once -- see JogController.end_jog
         if self.gamepad is not None:
             self.gamepad.stop()
 
@@ -342,7 +617,7 @@ class ManualControlPanel(QWidget):
         if jog is not None:
             for side, b in self.mount_buttons.items():
                 b.setChecked(side is jog.side)
-            self.btn_step.setText(f"step ×{jog.scale:g}")
+            self.btn_step.setText(f"×{jog.scale:g}")
         self._refresh_enabled()
 
     def set_routine_active(self, active: bool) -> None:
