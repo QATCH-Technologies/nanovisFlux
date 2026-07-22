@@ -1,7 +1,15 @@
-
 #include <Arduino.h>
+#include "AlashUltrasonic.h"
 #include "DualHBridgeStepper.h"
 
+/*  ##########################
+    # APPLICATION parameters #
+    ##########################  */
+// This can be queried serially using command: "VERSION"
+#define APP_TITLE "OpenFlux OT-2 Stepper Controller"
+#define APP_VERSION "1.1-alpha"
+#define APP_DATE "2026-07-21"
+#define APP_COMPANY "QATCH Technologies LLC"
 // #define DEBUG
 
 // Motor X: Gantry left/right
@@ -46,9 +54,11 @@
 #define MOTOR_C_M1 255
 #define MOTOR_C_M2 255
 
-// Touch Probe
+// Touch Probe(s): these pins were Motor C
 #define PROBE_GND 34
 #define PROBE_TOUCH 35
+#define PROBE_DISTANCE 36
+#define PROBE_UNUSED 37
 
 // Ultrasonic distance sensor: rear mount, behind the Z/A mounts.
 // TODO: pins and trigger/echo protocol below are placeholders -- confirm
@@ -63,7 +73,7 @@
 #define MOTOR_Z_SW_IN 16  // active high
 #define MOTOR_A_SW_IN 17  // active high
 #define MOTOR_B_SW_IN 18  // active high
-#define MOTOR_C_SW_IN 19  // active high
+#define MOTOR_C_SW_IN 19  // active high (unused)
 
 #define PCB_LED 13
 
@@ -76,12 +86,16 @@
 #define MOTOR_C_SW_HIT HIGH
 
 // Max PWM value for each motor (too big may blow H-Bridge)
-#define MOTOR_X_MAX_PWM 666
-#define MOTOR_Y_MAX_PWM 666
-#define MOTOR_Z_MAX_PWM 725
-#define MOTOR_A_MAX_PWM 725
-#define MOTOR_B_MAX_PWM 725
-#define MOTOR_C_MAX_PWM 725
+#define MOTOR_X_MAX_PWM 570
+#define MOTOR_Y_MAX_PWM 600
+#define MOTOR_Z_MAX_PWM 650
+#define MOTOR_A_MAX_PWM 650
+#define MOTOR_B_MAX_PWM 625
+#define MOTOR_C_MAX_PWM 625
+
+// Probe touch parameters
+#define PROBE_TOUCH_COUNT 5
+#define PROBE_TOUCH_DELAY 500  // ms
 
 // reboot is the same for all ARM devices
 #define CPU_RESTART_ADDR ((uint32_t *)0xE000ED0C)
@@ -106,12 +120,12 @@ const bool MOTOR_C_HomingDir = false;
 
 // Motor Movement Parameters (X, Y, Z, A, B, C)
 const bool MOTOR_DIR_INVERT[6] = { true, true, true, true, false, false };
-const long ENDSTOP_LIMITS[6] = { 60000, 52000, 160000, 160000, 20000, 20000 };
+const long ENDSTOP_LIMITS[6] = { 62500, 50000, 175000, 175000, 20000, 20000 };
 long ENDSTOP_BOUNCE[6] = { 1000, 1000, 1500, 1500, 1250, 1250 };
 float TRAVEL_ACCELS[6] = { 69000, 69000, 69000, 69000, 3200, 3200 };
 float TRAVEL_SPEEDS[6] = { 16000, 16000, 32000, 32000, 6900, 6900 };
 float HOMING_ACCELS[6] = { 1E6, 1E6, 1E6, 1E6, 1E6, 1E6 };
-float HOMING_SPEEDS[6] = { 8000, 8000, 12000, 12000, 5000, 5000 };
+float HOMING_SPEEDS[6] = { 8000, 8000, 16000, 16000, 5000, 5000 };
 long CUSTOM_LIMITS[6];
 
 bool MOVEMENT_MODE = false;  // false = absolute; true = relative
@@ -119,6 +133,7 @@ bool MOVEMENT_SAFE = true;   // unset with M911
 
 bool MOTORS_MOVING = false;
 bool MOTORS_HOMED[6] = { false, false, false, false, false, false };
+bool suppress_ok = false;  // used when 'NOT ok' already sent
 
 // G38.X flags for touch probe
 bool stop_on_probe_high = false;
@@ -127,16 +142,34 @@ bool error_on_failure = false;
 bool probe_contacted = false;
 uint8_t probe_count = 0;
 
+AlashUltrasonic probeUltrasonic(PROBE_DISTANCE, ONEWIRE_MODE);
+
 // Function prototypes
+void serial_print_version_info(void);
 void switch_relays(bool motor_en);
 bool home_stepper(char motor);
+
+// Comparison function for ints in ascending order
+int compareIntsAsc(const void *a, const void *b) {
+  int int_a = *((int *)a);
+  int int_b = *((int *)b);
+  return (int_a - int_b);
+}
+
+// Comparison function for floats in ascending order
+int compareFloatsAsc(const void *a, const void *b) {
+  float f_a = *((float *)a);
+  float f_b = *((float *)b);
+
+  if (f_a < f_b) return -1;
+  if (f_a > f_b) return 1;
+  return 0;
+}
 
 void setup() {
   Serial.begin(115200);
 
-  Serial.println("OpenFlux OT-2 Stepper Controller");
-  Serial.println("Version 1.0-alpha (2026-07-10)");
-  Serial.println("QATCH Technologies LLC");
+  serial_print_version_info();
 
   Serial.println("Booting...");
 
@@ -174,10 +207,11 @@ void setup() {
 
   switch_relays(false);  // turn off
 
-  // Touch probe
+  // Touch probe(s)
   pinMode(PROBE_GND, OUTPUT);
   pinMode(PROBE_TOUCH, INPUT_PULLUP);
   digitalWrite(PROBE_GND, LOW);
+  probeUltrasonic.begin();
 
   // Ultrasonic sensor (rear mount) -- see M412 handler
   pinMode(ULTRASONIC_TRIG, OUTPUT);
@@ -191,6 +225,8 @@ void loop() {
   String message_str = "";
   if (Serial.available())
     message_str = Serial.readStringUntil('\n').toUpperCase().trim();
+
+  if (message_str.startsWith("VERSION")) serial_print_version_info();
 
   if (message_str.startsWith("G0") || message_str.startsWith("G1")
       || message_str.startsWith("G38")) {
@@ -318,15 +354,17 @@ void loop() {
               delta_y = abs(positions[1]);
             } else {
               // absolute
-              delta_x = abs(MOTOR_X.currentPosition() - positions[0]);
-              delta_y = abs(MOTOR_Y.currentPosition() - positions[1]);
+              delta_x = abs(abs(MOTOR_X.currentPosition()) - positions[0]);
+              delta_y = abs(abs(MOTOR_Y.currentPosition()) - positions[1]);
             }
             if (i == 0 && delta_x < delta_y)
               speed_pct = ((float)delta_x) / delta_y;
             if (i == 1 && delta_y < delta_x)
               speed_pct = ((float)delta_y) / delta_x;
-#ifdef DEBUG
-            Serial.printf("Max speed for axis %i: %f\n", i, speed * speed_pct);
+#if 0
+            Serial.printf("Delta X = %f, Delta Y = %f\n", delta_x, delta_y);
+            Serial.printf("Max speed for axis %i: %f (%i pct)\n", i,
+                          speed * speed_pct, (int)(100 * speed_pct));
 #endif
           }
         }
@@ -377,7 +415,7 @@ void loop() {
       home_Z = true;
       home_A = true;
       home_B = true;
-      // home_C = true;  // does not exist
+      home_C = true;  // does not exist
     }
 
     // parse flags, if provided in command
@@ -411,10 +449,88 @@ void loop() {
     // Serial.println("ok");
   }
 
-  if (message_str.startsWith("G38")) {
+  if (message_str.startsWith("G42")) {
     // Touch Probe
 
-    // TODO: Not implemented
+    // NOTE: G38.X commands in G0/G1 handler!
+    // Only ultrasonic distance probe here...
+
+    if (message_str.endsWith("ULTRA")) {
+      // These parameters will average remaining samples...
+      // Average 3, 4, 5, 6, 7 and 8 (drop 1, 2, 9, and 10)
+      const uint8_t NUM_SAMPLES = 10;
+      const uint8_t DROP_LOW = 2;
+      const uint8_t DROP_HIGH = 2;
+
+      // Do not accumulate smaller reads towards average
+      const float MIN_VALID_READ = 3.0;
+      const int MAX_READ_MICROS = 1000000;  // 1 sec
+
+      float distancesOneWire[NUM_SAMPLES];
+
+      // Using the sensor via 1-Wire
+      unsigned long startAt = micros();
+      float distanceOneWire = 0;
+
+      for (int i = 0; i < NUM_SAMPLES; i++) {
+        distancesOneWire[i] = probeUltrasonic.getDistance();
+        if (micros() - startAt < MAX_READ_MICROS)         // timeout if stuck
+          if (distancesOneWire[i] < MIN_VALID_READ) i--;  // try again
+      }
+
+      // Usage: qsort(array_name, array_size, size_of_one_element, comparison_function)
+      qsort(distancesOneWire, NUM_SAMPLES, sizeof(float), compareFloatsAsc);
+
+#if 0
+      // Print results
+      for (int i = 0; i < NUM_SAMPLES; i++) {
+        Serial.print(distancesOneWire[i]);
+        Serial.print(" ");
+      }
+#endif
+
+      // Find the most frequently occurring value (Mode)
+      float mode = distancesOneWire[0];
+      int maxCount = 0;
+      int currentCount = 1;
+
+      for (int i = 1; i < NUM_SAMPLES; i++) {
+        // ignore bad reads:
+        if (distancesOneWire[i] < MIN_VALID_READ) continue;
+        if (distancesOneWire[i] == distancesOneWire[i - 1]) {
+          currentCount++;
+        } else {
+          currentCount = 1;
+        }
+
+        if (currentCount > maxCount) {
+          maxCount = currentCount;
+          mode = distancesOneWire[i - 1];
+        }
+      }
+      if (maxCount > 1) distanceOneWire = mode;
+      else {
+        int numSamples = 0;
+        for (int i = DROP_LOW; i < NUM_SAMPLES - DROP_HIGH; i++) {
+          // ignore bad reads:
+          if (distancesOneWire[i] < MIN_VALID_READ) continue;
+          distanceOneWire += distancesOneWire[i];
+          numSamples++;
+        }
+        distanceOneWire /= numSamples;  // Take average
+      }
+
+      Serial.print("Distance: ");
+      Serial.print(distanceOneWire);
+      Serial.print(" cm");
+#if 0
+      Serial.print(" (took ");
+      Serial.print(micros() - startAt);
+      Serial.print(" us)");
+#endif
+      Serial.println();
+      Serial.println("ok");
+    }
   }
 
   if (message_str.startsWith("G90")) {
@@ -875,23 +991,37 @@ void loop() {
     if (probe_count < 255) probe_count++;
   } else probe_count = 0;
 
-  if (stop_on_probe_high && probe_count > 3) {
-    probe_contacted = true;
-    MOTOR_X.stop();
-    MOTOR_Y.stop();
-    MOTOR_Z.stop();
-    MOTOR_A.stop();
-    MOTOR_B.stop();
-    MOTOR_C.stop();
+  if (stop_on_probe_high && probe_count > PROBE_TOUCH_COUNT) {
+    delay(PROBE_TOUCH_DELAY);  // wait for settle, then check again
+    if (digitalRead(PROBE_TOUCH)) {
+      probe_contacted = true;
+      MOTOR_X.stop();
+      MOTOR_Y.stop();
+      MOTOR_Z.stop();
+      MOTOR_A.stop();
+      MOTOR_B.stop();
+      MOTOR_C.stop();
+    } else {
+      // else: probe made brief contact, but it lost it
+      // keep going until probe contact is FULLY gained
+      // Serial.println("Keep going!");
+    }
   }
-  if (stop_on_probe_low && probe_count > 3) {
-    probe_contacted = true;
-    MOTOR_X.stop();
-    MOTOR_Y.stop();
-    MOTOR_Z.stop();
-    MOTOR_A.stop();
-    MOTOR_B.stop();
-    MOTOR_C.stop();
+  if (stop_on_probe_low && probe_count > PROBE_TOUCH_COUNT) {
+    delay(PROBE_TOUCH_DELAY);  // wait for settle, then check again
+    if (!digitalRead(PROBE_TOUCH)) {
+      probe_contacted = true;
+      MOTOR_X.stop();
+      MOTOR_Y.stop();
+      MOTOR_Z.stop();
+      MOTOR_A.stop();
+      MOTOR_B.stop();
+      MOTOR_C.stop();
+    } else {
+      // else: probe lost brief contact, but it kept it
+      // keep going until probe contact is FULLY losted
+      // Serial.println("Keep going!");
+    }
   }
 
   bool motors_moving = false;
@@ -938,6 +1068,7 @@ void loop() {
       if (!MOTOR_C.isRunning()) MOTOR_C.disableOutputs();
 
       if (stop_on_probe_high || stop_on_probe_low) {
+        // Handle G38.X response here, on motion stop
         Serial.print("[PRB:");
         Serial.print(MOTORS_HOMED[0] ? abs(MOTOR_X.currentPosition()) : -1);
         Serial.print(",");
@@ -947,8 +1078,11 @@ void loop() {
         Serial.println(probe_contacted ? ":1]" : ":0]");
       }
 
-      if (error_on_failure && !probe_contacted) Serial.print("NOT ");
-      Serial.println("ok");
+      if (!suppress_ok) {
+        if (error_on_failure && !probe_contacted) Serial.print("NOT ");
+        Serial.println("ok");
+      }
+      suppress_ok = false;
 
       stop_on_probe_high = false;
       stop_on_probe_low = false;
@@ -957,6 +1091,12 @@ void loop() {
     }
   }
   MOTORS_MOVING = motors_moving;
+}
+
+void serial_print_version_info() {
+  Serial.println(APP_TITLE);
+  Serial.printf("Version %s (%s)\n", APP_VERSION, APP_DATE);
+  Serial.println(APP_COMPANY);
 }
 
 void switch_relays(bool motor_en) {
@@ -1023,8 +1163,8 @@ bool home_stepper(char motor) {
     return false;
   }
 
-  long limit = CUSTOM_LIMITS[index];
   long retro = ENDSTOP_BOUNCE[index];
+  long limit = CUSTOM_LIMITS[index] + retro;  // a little extra
   float accel = HOMING_ACCELS[index];
   float speed = HOMING_SPEEDS[index];
 
@@ -1062,12 +1202,14 @@ bool home_stepper(char motor) {
       Serial.println("NOT ok (serial pending)");
       stepper->stop();  // Abort movement
       MOTORS_HOMED[index] = false;
-      return false;  // Don't move to position without valid home
+      suppress_ok = true;  // Applies only on next motor stop
+      return false;        // Don't move to position without valid home
     }
   } else {
     Serial.println("NOT ok (no endstop found)");
     MOTORS_HOMED[index] = false;
-    return false;  // Don't move to position without valid home
+    suppress_ok = true;  // Applies only on next motor stop
+    return false;        // Don't move to position without valid home
   }
 
   // Move off endstop by a fixed distance
@@ -1095,12 +1237,14 @@ bool home_stepper(char motor) {
       Serial.println("NOT ok (serial pending)");
       stepper->stop();  // Abort movement
       MOTORS_HOMED[index] = false;
-      return false;  // Don't move to position without valid home
+      suppress_ok = true;  // Applies only on next motor stop
+      return false;        // Don't move to position without valid home
     }
   } else {
     Serial.println("NOT ok (no endstop found)");
     MOTORS_HOMED[index] = false;
-    return false;  // Don't move to position without valid home
+    suppress_ok = true;  // Applies only on next motor stop
+    return false;        // Don't move to position without valid home
   }
 
   // Set this precise postion as this motor's HOME
