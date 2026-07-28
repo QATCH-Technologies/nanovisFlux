@@ -30,3 +30,7 @@ class SerialTransport(Transport):
         if timeout is not None:
             self._ser.timeout = timeout
         return self._ser.readline().decode("ascii", errors="replace").strip()
+
+    def reset_input_buffer(self) -> None:
+        if self._ser is not None:
+            self._ser.reset_input_buffer()

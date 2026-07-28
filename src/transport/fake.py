@@ -73,6 +73,9 @@ class FakeTransport(Transport):
     def read_line(self, timeout: float | None = None) -> str:
         return self._queue.pop(0) if self._queue else ""
 
+    def reset_input_buffer(self) -> None:
+        self._queue.clear()
+
     # -- crude firmware emulation -------------------------------------
     def _settle(self) -> None:
         """Advance every in-flight G1 move to where it actually is right

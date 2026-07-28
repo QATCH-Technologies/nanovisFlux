@@ -31,11 +31,20 @@ class JogController:
     - ``nudge()``: one short, bounded relative move -- fire and forget.
     - ``begin_jog()`` / ``end_jog()``: a continuous move for held inputs. It
       commands a relative move far past any real travel range at a feed
-      scaled to the requested speed, then relies on the caller invoking
-      ``end_jog`` (key release, stick back to center) to cut it short with a
-      quick stop (M410) -- the only way to interrupt an in-flight move
-      without losing step position. Holding multiple axes combines them into
-      one move; any change to the held set restarts it.
+      scaled to the requested speed, and -- unlike every other move this
+      class sends -- does NOT wait for the firmware's 'ok' (see
+      Controller.execute's wait_for_ok). A held jog is open-ended by
+      nature, and the firmware may not send that 'ok' until the move
+      itself completes, not merely once it's queued; waiting for it would
+      block the caller (the GUI thread, for keyboard/on-screen/gamepad
+      input) for the move's entire duration, so a release/quick-stop
+      request could never even be sent until the axis already ran out of
+      travel on its own. ``end_jog`` cuts the move short with a quick stop
+      (M410, also not waited on) wherever it's gotten to, then resets the
+      transport's input buffer (a stray late 'ok' for the move we skipped
+      waiting on is likely still sitting there) before re-querying the
+      real position. Holding multiple axes combines them into one move;
+      any change to the held set re-issues it.
 
     Requires homed axes (the firmware refuses motion otherwise); M911 relaxes
     limit *clamping* but not the homed gate, so home before jogging.
@@ -49,6 +58,15 @@ class JogController:
         self._scale_idx = 1
         self._entered = False
         self._active: dict[AxisId, float] = {}   # axis -> signed speed of the in-flight jog
+
+    @property
+    def is_jogging(self) -> bool:
+        """True while a continuous jog's move is in flight -- its 'ok' is
+        deliberately left unread (see class docstring), so anything that
+        polls the controller for a response (e.g. a live position timer)
+        needs to skip its turn until this goes false again, or it'll read
+        that stray leftover reply instead of its own."""
+        return bool(self._active)
 
     # -- session mode --------------------------------------------------
     def __enter__(self):
@@ -116,15 +134,35 @@ class JogController:
         self._restart_continuous()
 
     def _restart_continuous(self) -> None:
+        """Quick-stop (M410, not waited on) whatever's in flight, then --
+        if anything is still held -- issue a fresh move for exactly that
+        set. The quick stop isn't optional even when only *narrowing* the
+        held set (e.g. releasing X while Y stays held): since multiple
+        held axes share one combined G1 line, a new line that only
+        mentions Y doesn't touch X's still-in-flight move at all -- G1
+        only affects the axes it names, so a dropped axis just keeps
+        coasting toward its old target unless something explicitly halts
+        it first. When nothing's left held, this is the real "motion
+        should stop now" case: also clear whatever stray reply the
+        skipped-ack move (see below) left unread, then re-sync the real
+        position now that it's actually settled."""
         self.robot.controller.quick_stop()
         if not self._active:
+            self.robot.controller.reset_input_buffer()
+            self.robot.controller.report_position()
             return
         if not self._entered:
             self.robot.controller.set_relative()
         targets = {axis: int(math.copysign(self.robot.axes[axis].config.endstop_limit, s))
                    for axis, s in self._active.items()}
         feed = int(self.settings.jog_feed * max(abs(s) for s in self._active.values()))
-        self.robot.controller.linear_move(targets, feed=feed)
+        # Not waited on: a continuous jog is open-ended, and the firmware
+        # may not send this G1's 'ok' until the move itself completes, not
+        # merely once it's queued -- see class docstring. Waiting would
+        # block the caller (the GUI thread, for any input source) for the
+        # move's entire duration, so a release could never even be sent
+        # until the axis ran out of travel on its own.
+        self.robot.controller.linear_move(targets, feed=feed, wait_for_ok=False)
 
     # -- convenience for the active mount -----------------------------
     def jog_z(self, sign: int) -> None:

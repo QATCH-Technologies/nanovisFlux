@@ -52,11 +52,11 @@ class CommandTracer:
         """Post a plain human-readable line (not a wire command) to the console."""
         self.bus.event.emit(TraceEvent(line=message, source="note"))
 
-    def _traced_execute(self, command):
+    def _traced_execute(self, command, **kwargs):
         line = command.render()
         with self.lock:
             try:
-                resp = self._orig_execute(command)
+                resp = self._orig_execute(command, **kwargs)
             except Exception as exc:
                 self.bus.event.emit(TraceEvent(line=line, ok=False, error=str(exc)))
                 raise

@@ -24,6 +24,14 @@ class Transport(ABC):
     def read_line(self, timeout: float | None = None) -> str:
         """Block for and return one response line, stripped of EOL."""
 
+    def reset_input_buffer(self) -> None:
+        """Discard any unread bytes already sitting in the receive buffer.
+        No-op by default (only a real byte-stream transport has one to
+        flush -- see SerialTransport). Meant to be called after
+        deliberately not waiting for a response (Controller.execute's
+        wait_for_ok=False), so a stray late reply doesn't get parsed as the
+        answer to whatever's sent next."""
+
     def __enter__(self) -> "Transport":
         self.open()
         return self

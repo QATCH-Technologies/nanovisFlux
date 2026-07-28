@@ -39,14 +39,26 @@ class Controller:
         self.close()
 
     # -- core execution ----------------------------------------------
-    def execute(self, command: Command) -> Response:
+    def execute(self, command: Command, *, wait_for_ok: bool | None = None) -> Response:
+        """Send ``command``. By default waits for a terminal 'ok'/'NOT ok'
+        exactly when ``command.acknowledges`` says to; pass ``wait_for_ok``
+        to override that per call -- e.g. a continuous jog's move is fired
+        without waiting (see JogController), so a stick release isn't stuck
+        behind a G1 whose 'ok' the firmware may not send until the move
+        itself finishes. When skipping the wait, call reset_input_buffer()
+        before the next command that DOES need a clean response to read,
+        so that eventual late reply doesn't get parsed as its answer."""
         line = command.render()
         if self.on_send:
             self.on_send(line)
         self._t.write_line(line)
-        if not command.acknowledges:
+        should_wait = command.acknowledges if wait_for_ok is None else wait_for_ok
+        if not should_wait:
             return Response(ok=True, info=[], status="(no ack)")
         return self._read_response()
+
+    def reset_input_buffer(self) -> None:
+        self._t.reset_input_buffer()
 
     def _read_response(self) -> Response:
         info: list[str] = []
@@ -77,8 +89,9 @@ class Controller:
     def rapid_move(self, targets: Mapping[AxisId, int]) -> Response:
         return self.execute(cmd.RapidMove(dict(targets)))
 
-    def linear_move(self, targets: Mapping[AxisId, int], feed: int | None = None) -> Response:
-        return self.execute(cmd.LinearMove(dict(targets), feed))
+    def linear_move(self, targets: Mapping[AxisId, int], feed: int | None = None,
+                    *, wait_for_ok: bool | None = None) -> Response:
+        return self.execute(cmd.LinearMove(dict(targets), feed), wait_for_ok=wait_for_ok)
 
     def set_absolute(self) -> Response:
         return self.execute(cmd.SetAbsolute())

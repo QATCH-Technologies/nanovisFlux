@@ -349,6 +349,14 @@ class MainWindow(QMainWindow):
     def _poll_position(self) -> None:
         if self.robot is None:
             return
+        jog = self.manual_panel.jog
+        if jog is not None and jog.is_jogging:
+            # A continuous jog's move is in flight with its 'ok' left
+            # deliberately unread (see JogController's docstring) -- an
+            # M114 sent now would read that stray reply instead of its own
+            # and come back empty/wrong. Skip this tick; end_jog() already
+            # re-syncs position itself the moment the jog actually stops.
+            return
         try:
             pos = self.robot.controller.report_position()
         except Exception:
