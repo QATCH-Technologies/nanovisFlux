@@ -2,34 +2,23 @@
 
 Every jog action is a continuous move: press and hold (a key, an on-screen
 jog button, or a gamepad stick/trigger deflection) calls
-JogController.begin_jog, which commands a short bounded move at a feed
-proportional to speed; release calls end_jog, which quick-stops it wherever
-it's gotten to. A dedicated keep-alive timer (_jog_keepalive_timer, below)
-calls JogController.refresh() every _KEEPALIVE_INTERVAL_MS to keep
-re-arming that bounded move for as long as something is actually held --
-see JogController's own docstring for why the move is deliberately bounded
-rather than one long run to the endstop: a stop signal that's late or never
-arrives (dropped gamepad event, exception mid-poll, whatever) now only
-costs a fraction of a second of extra travel instead of a runaway to the
-wall. This now works correctly against FakeTransport too (see
-transport/fake.py's real-time G1 simulation), not just real hardware, which
-is why the panel no longer drives repeated discrete nudge() calls the way
-it used to.
+JogController.begin_jog, which commands a move toward the axis's endstop
+limit -- as far as it can physically go, the practical "max step size" --
+at a feed proportional to speed; release calls end_jog, which quick-stops
+it wherever it's gotten to. This now works correctly against FakeTransport
+too (see transport/fake.py's real-time G1 simulation), not just real
+hardware, which is why the panel no longer drives repeated discrete
+nudge() calls the way it used to.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QPushButton, QButtonGroup, QFrame, QStackedWidget)
 
 from ..core import AxisId, MountSide
 from ..geometry.units import default_axis_scale
 from .gamepad_input import GamepadInput
-
-#: Faster than JogController's own _CONTINUOUS_WINDOW_S (300ms), so a held
-#: input's heartbeat never has a chance to actually run out while genuinely
-#: still held.
-_KEEPALIVE_INTERVAL_MS = 120
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
@@ -82,11 +71,6 @@ class ManualControlPanel(QWidget):
         self.gamepad: GamepadInput | None = None
         self._input_mode = "keyboard"
         self._input_locked = False  # True while a routine is running
-
-        self._jog_keepalive_timer = QTimer(self)
-        self._jog_keepalive_timer.setInterval(_KEEPALIVE_INTERVAL_MS)
-        self._jog_keepalive_timer.timeout.connect(self._keepalive_tick)
-        self._jog_keepalive_timer.start()
 
         # Continuous jog: press starts a move toward the endstop at the
         # current jog_speed (see JogController.begin_jog); release quick-
@@ -432,10 +416,6 @@ class ManualControlPanel(QWidget):
         return rows
 
     # -- helpers ------------------------------------------------------------
-    def _keepalive_tick(self) -> None:
-        if self.jog is not None and self.jog.is_jogging:
-            self.jog.refresh()
-
     def _guarded(self, fn):
         def call():
             if self.jog is None or self._input_locked:

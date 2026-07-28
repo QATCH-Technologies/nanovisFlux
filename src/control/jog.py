@@ -22,16 +22,6 @@ class JogSettings:
     jog_feed: int = 10000                           # feed (microsteps/s) at full jog speed
 
 
-#: A continuous jog's underlying move is bounded to this many seconds of
-#: travel (see _restart_continuous/refresh) instead of running all the way
-#: to the endstop and trusting a stop command to arrive in time -- a single
-#: dropped/late release event (real gamepad hardware, an exception mid-poll,
-#: whatever) used to mean the gantry just sailed on to the wall with nothing
-#: left to cut it short. Bounding the move means the WORST case for a missed
-#: stop is this many seconds of extra travel, not the full axis range.
-_CONTINUOUS_WINDOW_S = 0.30
-
-
 class JogController:
     """Turns abstract jog intents into moves. Stays in G91 for the session so
     each nudge/jog is relative; restores G90 on close.
@@ -39,18 +29,13 @@ class JogController:
     Two move styles are supported:
 
     - ``nudge()``: one short, bounded relative move -- fire and forget.
-    - ``begin_jog()`` / ``end_jog()``: a continuous move for held inputs.
-      Each underlying move only covers ``_CONTINUOUS_WINDOW_S`` seconds of
-      travel at the requested speed (a "heartbeat"), so it's self-stopping
-      by construction: call ``refresh()`` periodically (e.g. every ~100-150ms
-      from a QTimer, faster than the window) for as long as the input stays
-      held to keep re-arming it, and it just naturally runs out and stops
-      the moment refreshes stop arriving -- whether that's because the
-      caller properly called ``end_jog`` or because something upstream
-      dropped the ball. ``end_jog`` still quick-stops immediately rather
-      than waiting for the current heartbeat to expire. Holding multiple
-      axes combines them into one move; any change to the held set (a new
-      ``begin_jog`` call, ``end_jog``, or ``refresh``) restarts it.
+    - ``begin_jog()`` / ``end_jog()``: a continuous move for held inputs. It
+      commands a relative move far past any real travel range at a feed
+      scaled to the requested speed, then relies on the caller invoking
+      ``end_jog`` (key release, stick back to center) to cut it short with a
+      quick stop (M410) -- the only way to interrupt an in-flight move
+      without losing step position. Holding multiple axes combines them into
+      one move; any change to the held set restarts it.
 
     Requires homed axes (the firmware refuses motion otherwise); M911 relaxes
     limit *clamping* but not the homed gate, so home before jogging.
@@ -64,10 +49,6 @@ class JogController:
         self._scale_idx = 1
         self._entered = False
         self._active: dict[AxisId, float] = {}   # axis -> signed speed of the in-flight jog
-
-    @property
-    def is_jogging(self) -> bool:
-        return bool(self._active)
 
     # -- session mode --------------------------------------------------
     def __enter__(self):
@@ -134,27 +115,15 @@ class JogController:
             self._active.pop(axis, None)
         self._restart_continuous()
 
-    def refresh(self) -> None:
-        """Re-arm the in-flight heartbeat for whatever's currently active --
-        call this on a timer (faster than _CONTINUOUS_WINDOW_S) for as long
-        as an input stays held. A no-op when nothing's active, so it's safe
-        to call unconditionally from a shared, always-running timer rather
-        than one each caller has to start/stop in lockstep with begin/end."""
-        if self._active:
-            self._restart_continuous()
-
     def _restart_continuous(self) -> None:
         self.robot.controller.quick_stop()
         if not self._active:
             return
         if not self._entered:
             self.robot.controller.set_relative()
+        targets = {axis: int(math.copysign(self.robot.axes[axis].config.endstop_limit, s))
+                   for axis, s in self._active.items()}
         feed = int(self.settings.jog_feed * max(abs(s) for s in self._active.values()))
-        window_steps = feed * _CONTINUOUS_WINDOW_S
-        targets = {}
-        for axis, s in self._active.items():
-            limit = self.robot.axes[axis].config.endstop_limit
-            targets[axis] = int(math.copysign(min(window_steps, limit), s))
         self.robot.controller.linear_move(targets, feed=feed)
 
     # -- convenience for the active mount -----------------------------
