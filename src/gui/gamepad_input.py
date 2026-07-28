@@ -70,19 +70,22 @@ class GamepadInput(QObject):
         try:
             pygame.init()
             pygame.joystick.init()
-            if pygame.joystick.get_count() == 0:
-                self.status.emit("no gamepad detected")
-                self.connected_changed.emit(False)
-                return
-            self._pygame = pygame
-            self._pad = pygame.joystick.Joystick(0)
-            self._pad.init()
-            self.status.emit(f"gamepad connected: {self._pad.get_name()}")
-            self.connected_changed.emit(True)
-            self._timer.start()
         except Exception as exc:
             self.status.emit(f"gamepad unavailable: {exc}")
             self.connected_changed.emit(False)
+            return
+        self._pygame = pygame
+        self._pad = None
+        self.status.emit("waiting for a gamepad...")
+        self.connected_changed.emit(False)
+        # Poll continuously from here rather than checking get_count() once
+        # and giving up: right after joystick.init() SDL often hasn't
+        # actually enumerated attached devices yet (needs an event pump
+        # cycle -- see _try_attach), and a one-shot check also meant a
+        # gamepad plugged in *after* switching to this tab was never
+        # detected at all. This way it attaches the moment one shows up,
+        # whether it was already plugged in or shows up later.
+        self._timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
@@ -100,13 +103,32 @@ class GamepadInput(QObject):
         self.connected_changed.emit(False)
 
     def _poll(self) -> None:
-        if self._pad is None:
+        if self._pygame is None:
             return
         try:
-            self._poll_unsafe()
+            if self._pad is None:
+                self._try_attach()
+            else:
+                self._poll_unsafe()
         except Exception as exc:
             self.status.emit(f"gamepad error: {exc}")
             self.stop()
+
+    def _try_attach(self) -> None:
+        """Look for a gamepad this tick -- called every poll while none is
+        attached yet, so one that's plugged in after this tab was opened
+        (or wasn't finished enumerating on the very first check) still gets
+        picked up. pygame.event.pump() is what actually lets SDL notice a
+        newly (or not-yet-fully) enumerated joystick; joystick.init() alone
+        doesn't guarantee get_count() is accurate on the same tick."""
+        pygame = self._pygame
+        pygame.event.pump()
+        if pygame.joystick.get_count() == 0:
+            return
+        self._pad = pygame.joystick.Joystick(0)
+        self._pad.init()
+        self.status.emit(f"gamepad connected: {self._pad.get_name()}")
+        self.connected_changed.emit(True)
 
     def _poll_unsafe(self) -> None:
         pygame = self._pygame

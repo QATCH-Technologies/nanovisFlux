@@ -2,23 +2,34 @@
 
 Every jog action is a continuous move: press and hold (a key, an on-screen
 jog button, or a gamepad stick/trigger deflection) calls
-JogController.begin_jog, which commands a move toward the axis's endstop
-limit -- as far as it can physically go, the practical "max step size" --
-at a feed proportional to speed; release calls end_jog, which quick-stops
-it wherever it's gotten to. This now works correctly against FakeTransport
-too (see transport/fake.py's real-time G1 simulation), not just real
-hardware, which is why the panel no longer drives repeated discrete
-nudge() calls the way it used to.
+JogController.begin_jog, which commands a short bounded move at a feed
+proportional to speed; release calls end_jog, which quick-stops it wherever
+it's gotten to. A dedicated keep-alive timer (_jog_keepalive_timer, below)
+calls JogController.refresh() every _KEEPALIVE_INTERVAL_MS to keep
+re-arming that bounded move for as long as something is actually held --
+see JogController's own docstring for why the move is deliberately bounded
+rather than one long run to the endstop: a stop signal that's late or never
+arrives (dropped gamepad event, exception mid-poll, whatever) now only
+costs a fraction of a second of extra travel instead of a runaway to the
+wall. This now works correctly against FakeTransport too (see
+transport/fake.py's real-time G1 simulation), not just real hardware, which
+is why the panel no longer drives repeated discrete nudge() calls the way
+it used to.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QPushButton, QButtonGroup, QFrame, QStackedWidget)
 
 from ..core import AxisId, MountSide
 from ..geometry.units import default_axis_scale
 from .gamepad_input import GamepadInput
+
+#: Faster than JogController's own _CONTINUOUS_WINDOW_S (300ms), so a held
+#: input's heartbeat never has a chance to actually run out while genuinely
+#: still held.
+_KEEPALIVE_INTERVAL_MS = 120
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
@@ -72,17 +83,34 @@ class ManualControlPanel(QWidget):
         self._input_mode = "keyboard"
         self._input_locked = False  # True while a routine is running
 
+        self._jog_keepalive_timer = QTimer(self)
+        self._jog_keepalive_timer.setInterval(_KEEPALIVE_INTERVAL_MS)
+        self._jog_keepalive_timer.timeout.connect(self._keepalive_tick)
+        self._jog_keepalive_timer.start()
+
         # Continuous jog: press starts a move toward the endstop at the
         # current jog_speed (see JogController.begin_jog); release quick-
         # stops it wherever it got to. jog_speed is read fresh each call so
         # it always reflects whatever the step/speed dial is set to *now*.
+        #
+        # X/Y/Z signs are deliberately the OPPOSITE of JogController's own
+        # "positive = away from the endstop" convention: away-from-home
+        # raw motor X/Y actually maps to a SMALLER deck x/y (see
+        # DeckCalibration/robot.example.yaml's calibration points -- the
+        # gantry homes to the deck's back-right corner), which the 2D/3D
+        # deck view then renders moving left/down on screen (deck_view's
+        # _project is (x, -y), +screen-y is down). GamepadInput's
+        # positive_dir/negative_dir already correct for this (see its own
+        # "down = Z+" comment); these need the same correction so the "->"
+        # /"^"/PgUp glyphs (and the identically-bound arrow keys) actually
+        # move the marker the way they're labelled instead of backwards.
         self._begin = {
-            "x-": self._guarded(lambda: self.jog.begin_jog(AxisId.X, -1, self.jog.jog_speed)),
-            "x+": self._guarded(lambda: self.jog.begin_jog(AxisId.X, +1, self.jog.jog_speed)),
-            "y+": self._guarded(lambda: self.jog.begin_jog(AxisId.Y, +1, self.jog.jog_speed)),
-            "y-": self._guarded(lambda: self.jog.begin_jog(AxisId.Y, -1, self.jog.jog_speed)),
-            "z+": self._guarded(lambda: self.jog.begin_jog_z(+1, self.jog.jog_speed)),
-            "z-": self._guarded(lambda: self.jog.begin_jog_z(-1, self.jog.jog_speed)),
+            "x-": self._guarded(lambda: self.jog.begin_jog(AxisId.X, +1, self.jog.jog_speed)),
+            "x+": self._guarded(lambda: self.jog.begin_jog(AxisId.X, -1, self.jog.jog_speed)),
+            "y+": self._guarded(lambda: self.jog.begin_jog(AxisId.Y, -1, self.jog.jog_speed)),
+            "y-": self._guarded(lambda: self.jog.begin_jog(AxisId.Y, +1, self.jog.jog_speed)),
+            "z+": self._guarded(lambda: self.jog.begin_jog_z(-1, self.jog.jog_speed)),
+            "z-": self._guarded(lambda: self.jog.begin_jog_z(+1, self.jog.jog_speed)),
             "plunger+": self._guarded(lambda: self.jog.begin_jog_plunger(+1, self.jog.jog_speed)),
             "plunger-": self._guarded(lambda: self.jog.begin_jog_plunger(-1, self.jog.jog_speed)),
         }
@@ -404,6 +432,10 @@ class ManualControlPanel(QWidget):
         return rows
 
     # -- helpers ------------------------------------------------------------
+    def _keepalive_tick(self) -> None:
+        if self.jog is not None and self.jog.is_jogging:
+            self.jog.refresh()
+
     def _guarded(self, fn):
         def call():
             if self.jog is None or self._input_locked:

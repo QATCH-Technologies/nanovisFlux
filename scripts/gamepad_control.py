@@ -414,6 +414,14 @@ class GamepadTeleop:
                 try:
                     while self.running:
                         self._process_events()
+                        # Re-arm whatever's held: JogController now bounds a
+                        # continuous jog's underlying move to a short window
+                        # (see its own docstring) rather than running all the
+                        # way to the endstop, so it needs a periodic refresh
+                        # to keep going -- this loop is event-driven
+                        # (JOYAXISMOTION only fires on a value *change*), so
+                        # a steadily-held stick wouldn't otherwise re-arm it.
+                        self.jc.refresh()
                         time.sleep(self.poll_dt)
                 except KeyboardInterrupt:
                     self._stop_all_motion()
