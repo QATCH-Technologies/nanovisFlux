@@ -7,8 +7,8 @@
     ##########################  */
 // This can be queried serially using command: "VERSION"
 #define APP_TITLE "OpenFlux OT-2 Stepper Controller"
-#define APP_VERSION "1.1-alpha"
-#define APP_DATE "2026-07-21"
+#define APP_VERSION "1.1.1-alpha"
+#define APP_DATE "2026-07-28"
 #define APP_COMPANY "QATCH Technologies LLC"
 // #define DEBUG
 
@@ -94,7 +94,7 @@
 #define MOTOR_C_MAX_PWM 625
 
 // Probe touch parameters
-#define PROBE_TOUCH_COUNT 5
+#define PROBE_TOUCH_COUNT 15
 #define PROBE_TOUCH_DELAY 500  // ms
 
 // reboot is the same for all ARM devices
@@ -169,9 +169,8 @@ int compareFloatsAsc(const void *a, const void *b) {
 void setup() {
   Serial.begin(115200);
 
+  suppress_ok = true;
   serial_print_version_info();
-
-  Serial.println("Booting...");
 
   MOTOR_X.setAcceleration(TRAVEL_ACCELS[0]);
   MOTOR_X.setMaxSpeed(TRAVEL_SPEEDS[0]);
@@ -449,88 +448,9 @@ void loop() {
     // Serial.println("ok");
   }
 
-  if (message_str.startsWith("G42")) {
-    // Touch Probe
-
-    // NOTE: G38.X commands in G0/G1 handler!
-    // Only ultrasonic distance probe here...
-
-    if (message_str.endsWith("ULTRA")) {
-      // These parameters will average remaining samples...
-      // Average 3, 4, 5, 6, 7 and 8 (drop 1, 2, 9, and 10)
-      const uint8_t NUM_SAMPLES = 10;
-      const uint8_t DROP_LOW = 2;
-      const uint8_t DROP_HIGH = 2;
-
-      // Do not accumulate smaller reads towards average
-      const float MIN_VALID_READ = 3.0;
-      const int MAX_READ_MICROS = 1000000;  // 1 sec
-
-      float distancesOneWire[NUM_SAMPLES];
-
-      // Using the sensor via 1-Wire
-      unsigned long startAt = micros();
-      float distanceOneWire = 0;
-
-      for (int i = 0; i < NUM_SAMPLES; i++) {
-        distancesOneWire[i] = probeUltrasonic.getDistance();
-        if (micros() - startAt < MAX_READ_MICROS)         // timeout if stuck
-          if (distancesOneWire[i] < MIN_VALID_READ) i--;  // try again
-      }
-
-      // Usage: qsort(array_name, array_size, size_of_one_element, comparison_function)
-      qsort(distancesOneWire, NUM_SAMPLES, sizeof(float), compareFloatsAsc);
-
-#if 0
-      // Print results
-      for (int i = 0; i < NUM_SAMPLES; i++) {
-        Serial.print(distancesOneWire[i]);
-        Serial.print(" ");
-      }
-#endif
-
-      // Find the most frequently occurring value (Mode)
-      float mode = distancesOneWire[0];
-      int maxCount = 0;
-      int currentCount = 1;
-
-      for (int i = 1; i < NUM_SAMPLES; i++) {
-        // ignore bad reads:
-        if (distancesOneWire[i] < MIN_VALID_READ) continue;
-        if (distancesOneWire[i] == distancesOneWire[i - 1]) {
-          currentCount++;
-        } else {
-          currentCount = 1;
-        }
-
-        if (currentCount > maxCount) {
-          maxCount = currentCount;
-          mode = distancesOneWire[i - 1];
-        }
-      }
-      if (maxCount > 1) distanceOneWire = mode;
-      else {
-        int numSamples = 0;
-        for (int i = DROP_LOW; i < NUM_SAMPLES - DROP_HIGH; i++) {
-          // ignore bad reads:
-          if (distancesOneWire[i] < MIN_VALID_READ) continue;
-          distanceOneWire += distancesOneWire[i];
-          numSamples++;
-        }
-        distanceOneWire /= numSamples;  // Take average
-      }
-
-      Serial.print("Distance: ");
-      Serial.print(distanceOneWire);
-      Serial.print(" cm");
-#if 0
-      Serial.print(" (took ");
-      Serial.print(micros() - startAt);
-      Serial.print(" us)");
-#endif
-      Serial.println();
-      Serial.println("ok");
-    }
+  if (message_str.startsWith("G38")) {
+    // Touch probe
+    // NOTE: G38.X commands in G0/G1 handler
   }
 
   if (message_str.startsWith("G90")) {
@@ -890,23 +810,122 @@ void loop() {
   }
 
   if (message_str.startsWith("M412")) {
-    // Query the rear ultrasonic sensor's range.
-    // TODO: placeholder HC-SR04-style trigger/echo timing -- update once the
-    // actual sensor and protocol are finalized, keeping the "[RNG:<mm>]"
-    // reply in sync with responses.parse_distance on the Python side.
-    digitalWrite(ULTRASONIC_TRIG, LOW);
-    delayMicroseconds(2);
-    digitalWrite(ULTRASONIC_TRIG, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(ULTRASONIC_TRIG, LOW);
+    // M412 - Query Ultrasonic Distance
 
-    unsigned long echo_us = pulseIn(ULTRASONIC_ECHO, HIGH, ULTRASONIC_TIMEOUT_US);
-    if (echo_us == 0) {
-      Serial.println("[RNG:-1]");  // no echo within timeout / out of range
-    } else {
-      float distance_mm = (echo_us * 0.343f) / 2.0f;  // speed of sound ~343 m/s
-      Serial.printf("[RNG:%.1f]\n", distance_mm);
+    // To support multiple ultrasonic sensors (X, Y, Z):
+    // - Default command will return all distance readings as:
+    //    [RNG:<distanceX_mm>,<distanceY_mm>,<distanceZ_mm>]
+    // - If command is `M412 Z` (for example) only return one value as:
+    //    [RNG:-1,-1,<distanceZ_mm>]
+
+    // For now, only the Z-axis ultrasonic sensor is supported.
+    // X and Y distance queries always return -1.
+
+    bool query_axis[3] = { false, false, false };  // X Y Z
+    float distanceOneWire_X = -1;
+    float distanceOneWire_Y = -1;
+    float distanceOneWire_Z = -1;  // timeout value
+
+    // default, if no flags provided in command
+    if (message_str.endsWith("M412")) {
+      query_axis[2] = true;  // Z-axis
     }
+
+    // parse flags, if provided in command
+    if (message_str.indexOf("X") > 0) query_axis[0] = true;
+    if (message_str.indexOf("Y") > 0) query_axis[1] = true;
+    if (message_str.indexOf("Z") > 0) query_axis[2] = true;
+
+    // Query Z-axis Ultrasonic Probe (if Z flag set)
+    if (query_axis[2]) {
+      // These parameters will average remaining samples...
+      // Average 3, 4, 5, 6, 7 and 8 (drop 1, 2, 9, and 10)
+      const uint8_t NUM_SAMPLES = 10;
+      const uint8_t DROP_LOW = 2;
+      const uint8_t DROP_HIGH = 2;
+
+      // Do not accumulate smaller reads towards average
+      const bool CONVERT_CM_TO_MM = true;
+      const float MIN_VALID_READ = CONVERT_CM_TO_MM ? 30.0 : 3.0;
+      const int MAX_READ_MICROS = 1000000;  // 1 sec
+
+      float distancesOneWire[NUM_SAMPLES];
+
+      // Using the sensor via 1-Wire
+      unsigned long startAt = micros();
+      bool readTimeout = false;
+
+      for (int i = 0; i < NUM_SAMPLES; i++) {
+        distancesOneWire[i] = probeUltrasonic.getDistance();
+        if (CONVERT_CM_TO_MM) distancesOneWire[i] *= 10;
+        if (micros() - startAt < MAX_READ_MICROS) {       // timeout if stuck
+          if (distancesOneWire[i] < MIN_VALID_READ) i--;  // try again
+        } else readTimeout = true;
+      }
+
+      if (!readTimeout) {
+        // Usage: qsort(array_name, array_size, size_of_one_element, comparison_function)
+        qsort(distancesOneWire, NUM_SAMPLES, sizeof(float), compareFloatsAsc);
+
+#if 0
+        // Print results
+        for (int i = 0; i < NUM_SAMPLES; i++) {
+          Serial.print(distancesOneWire[i]);
+          Serial.print(" ");
+        }
+#endif
+
+        // Find the most frequently occurring value (Mode)
+        float mode = distancesOneWire[0];
+        int maxCount = 0;
+        int currentCount = 1;
+
+        for (int i = 1; i < NUM_SAMPLES; i++) {
+          // ignore bad reads:
+          if (distancesOneWire[i] < MIN_VALID_READ) continue;
+          if (distancesOneWire[i] == distancesOneWire[i - 1]) {
+            currentCount++;
+          } else {
+            currentCount = 1;
+          }
+
+          if (currentCount > maxCount) {
+            maxCount = currentCount;
+            mode = distancesOneWire[i - 1];
+          }
+        }
+        if (maxCount > 1) distanceOneWire_Z = mode;
+        else {
+          int numSamples = 0;
+          for (int i = DROP_LOW; i < NUM_SAMPLES - DROP_HIGH; i++) {
+            // ignore bad reads:
+            if (distancesOneWire[i] < MIN_VALID_READ) continue;
+            distanceOneWire_Z += distancesOneWire[i];
+            numSamples++;
+          }
+          distanceOneWire_Z /= numSamples;  // Take average
+        }
+      }
+    }
+
+    Serial.print("[RNG:");
+    if (distanceOneWire_X == -1) Serial.print("-1");
+    else Serial.printf("%.1f", distanceOneWire_X);
+    Serial.print(",");
+    if (distanceOneWire_Y == -1) Serial.print("-1");
+    else Serial.printf("%.1f", distanceOneWire_Y);
+    Serial.print(",");
+    if (distanceOneWire_Z == -1) Serial.print("-1");
+    else Serial.printf("%.1f", distanceOneWire_Z);
+    Serial.println("]");
+#if 0
+      Serial.print("Distance: ");
+      Serial.print(distanceOneWire_Z);
+      Serial.print(" cm");
+      Serial.print(" (took ");
+      Serial.print(micros() - startAt);
+      Serial.println(" us)");
+#endif
     Serial.println("ok");
   }
 
@@ -1097,6 +1116,8 @@ void serial_print_version_info() {
   Serial.println(APP_TITLE);
   Serial.printf("Version %s (%s)\n", APP_VERSION, APP_DATE);
   Serial.println(APP_COMPANY);
+  if (!suppress_ok) Serial.println("ok");
+  else suppress_ok = false;
 }
 
 void switch_relays(bool motor_en) {

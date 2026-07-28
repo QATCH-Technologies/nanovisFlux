@@ -16,7 +16,26 @@ https://semver.org/
 
 ---
 
-## Version 1.1-alpha (2026-07-21)
+## Version 1.1.1-alpha (2026-07-28)
+
+### Added
+
+- Support for M412 command (Query Ultrasonic Distance)
+
+### Changed
+
+- `PROBE_TOUCH_COUNT` from 5 to 15
+- Remove "Booting..." message on startup
+- Add "ok" reply to `VERSION` response
+- Auto-format all source files
+
+### Fixed
+
+- Ultrasonic distance sensor uses M412 (per spec), not G42
+
+---
+
+## Version 1.1.0-alpha (2026-07-21)
 
 ### Added
 
@@ -37,7 +56,7 @@ https://semver.org/
 
 ---
 
-## Version 1.0-alpha (2026-07-10)
+## Version 1.0.0-alpha (2026-07-10)
 
 ### Added
 
