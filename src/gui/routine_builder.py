@@ -15,11 +15,13 @@ from pathlib import Path
 from PyQt5.QtCore import Qt, QMimeData, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
                              QPushButton, QListWidget, QListWidgetItem, QAbstractItemView,
-                             QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame)
+                             QCheckBox, QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QFrame)
 
 from .routine_model import REGISTRY, Routine
 
 _SIDE_CHOICES = ("left", "right", "rear")
+_REF_CHOICES = ("clearance", "top", "bottom")
+_HOME_AXES = ("X", "Y", "Z", "A", "B", "C")
 
 
 class BlockPalette(QListWidget):
@@ -144,14 +146,71 @@ class StepListWidget(QListWidget):
         self.steps_changed.emit()
 
 
+class HomeAxesWidget(QWidget):
+    """Checkboxes for which axes a Home step homes, plus an ALL box that's
+    just a synced shortcut -- checked when every individual axis already
+    is, and checking/unchecking it checks/unchecks all six at once. The
+    underlying value stays the same space-separated-letters string Home
+    always used (empty = home everything, matching a bare G28)."""
+    changed = pyqtSignal()
+
+    def __init__(self, value: str, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._syncing = False
+
+        self.all_box = QCheckBox("ALL")
+        layout.addWidget(self.all_box)
+
+        selected = set(value.split())
+        all_by_default = not selected   # HomeStep's "" already means "home everything"
+        self.axis_boxes: dict = {}
+        for letter in _HOME_AXES:
+            box = QCheckBox(letter)
+            box.setChecked(all_by_default or letter in selected)
+            box.stateChanged.connect(self._on_axis_toggled)
+            layout.addWidget(box)
+            self.axis_boxes[letter] = box
+        layout.addStretch(1)
+
+        self.all_box.setChecked(all(b.isChecked() for b in self.axis_boxes.values()))
+        self.all_box.stateChanged.connect(self._on_all_toggled)
+
+    def _on_all_toggled(self, _state: int) -> None:
+        if self._syncing:
+            return
+        checked = self.all_box.isChecked()
+        self._syncing = True
+        for box in self.axis_boxes.values():
+            box.setChecked(checked)
+        self._syncing = False
+        self.changed.emit()
+
+    def _on_axis_toggled(self, _state: int) -> None:
+        if self._syncing:
+            return
+        self._syncing = True
+        self.all_box.setChecked(all(b.isChecked() for b in self.axis_boxes.values()))
+        self._syncing = False
+        self.changed.emit()
+
+    def value(self) -> str:
+        return " ".join(letter for letter in _HOME_AXES if self.axis_boxes[letter].isChecked())
+
+
 class ParamEditor(QWidget):
     """Dynamic param form for whichever step is currently selected, driven
-    by that step class's ``param_fields``."""
+    by that step class's ``param_fields``. "labware"/"well" fields are
+    editable combo boxes: populated from whatever's currently loaded on the
+    deck (see ``set_robot``) when a robot is connected, but still accept
+    freely-typed text so a routine can be authored offline."""
     changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.step = None
+        self._robot = None
         self._widgets: dict = {}
         outer = QVBoxLayout(self)
         self.title = QLabel("no step selected")
@@ -161,6 +220,23 @@ class ParamEditor(QWidget):
         self.form = QFormLayout(self.form_host)
         outer.addWidget(self.form_host)
         outer.addStretch(1)
+
+    def set_robot(self, robot) -> None:
+        """Called whenever the connected robot (or its loaded labware)
+        changes, so labware/well combo boxes offer what's actually on the
+        deck. Rebuilds the current form in place to pick up the new
+        choices."""
+        self._robot = robot
+        if self.step is not None:
+            self.set_step(self.step)
+
+    def _labware_names(self) -> list:
+        return sorted(self._robot.labware.keys()) if self._robot else []
+
+    def _well_names_for(self, labware_name: str) -> list:
+        if not self._robot or labware_name not in self._robot.labware:
+            return []
+        return list(self._robot.labware[labware_name].wells.keys())
 
     def set_step(self, step) -> None:
         self.step = step
@@ -190,12 +266,44 @@ class ParamEditor(QWidget):
             w.setCurrentText(value or "left")
             w.currentTextChanged.connect(lambda _t: self._commit())
             return w
+        if kind == "ref":
+            w = QComboBox()
+            w.addItems(_REF_CHOICES)
+            w.setCurrentText(value or "clearance")
+            w.currentTextChanged.connect(lambda _t: self._commit())
+            return w
         if kind == "float":
             w = QDoubleSpinBox()
             w.setRange(-1_000_000, 1_000_000)
             w.setDecimals(2)
             w.setValue(float(value) if value is not None else 0.0)
             w.valueChanged.connect(lambda _v: self._commit())
+            return w
+        if kind == "int":
+            w = QSpinBox()
+            w.setRange(1, 1_000_000)
+            w.setValue(int(value) if value else 1)
+            w.valueChanged.connect(lambda _v: self._commit())
+            return w
+        if kind == "labware":
+            w = QComboBox()
+            w.setEditable(True)
+            w.addItem("")
+            w.addItems(self._labware_names())
+            w.setCurrentText(value or "")
+            w.currentTextChanged.connect(lambda _t: self._on_labware_changed())
+            return w
+        if kind == "well":
+            w = QComboBox()
+            w.setEditable(True)
+            w.addItem("")
+            w.addItems(self._well_names_for(getattr(self.step, "labware", "")))
+            w.setCurrentText(value or "")
+            w.currentTextChanged.connect(lambda _t: self._commit())
+            return w
+        if kind == "axes":
+            w = HomeAxesWidget(value or "")
+            w.changed.connect(self._commit)
             return w
         if kind in ("float_opt", "int_opt"):
             w = QLineEdit("" if value is None else str(value))
@@ -212,9 +320,9 @@ class ParamEditor(QWidget):
         for name, (kind, widget) in self._widgets.items():
             if kind == "bool":
                 setattr(self.step, name, widget.isChecked())
-            elif kind == "side":
+            elif kind in ("side", "ref", "labware", "well"):
                 setattr(self.step, name, widget.currentText())
-            elif kind == "float":
+            elif kind in ("float", "int"):
                 setattr(self.step, name, widget.value())
             elif kind == "float_opt":
                 text = widget.text().strip()
@@ -222,9 +330,28 @@ class ParamEditor(QWidget):
             elif kind == "int_opt":
                 text = widget.text().strip()
                 setattr(self.step, name, int(float(text)) if text else None)
+            elif kind == "axes":
+                setattr(self.step, name, widget.value())
             else:
                 setattr(self.step, name, widget.text())
         self.changed.emit()
+
+    def _on_labware_changed(self) -> None:
+        """A step's ``labware`` choice changed -- commit it, then refresh
+        the sibling ``well`` combo's items in place (without rebuilding the
+        whole form) so it lists that labware's actual wells."""
+        self._commit()
+        entry = self._widgets.get("well")
+        if entry is None:
+            return
+        _kind, well_widget = entry
+        current = well_widget.currentText()
+        well_widget.blockSignals(True)
+        well_widget.clear()
+        well_widget.addItem("")
+        well_widget.addItems(self._well_names_for(getattr(self.step, "labware", "")))
+        well_widget.setCurrentText(current)
+        well_widget.blockSignals(False)
 
 
 class RoutineBuilderWidget(QWidget):
@@ -233,6 +360,7 @@ class RoutineBuilderWidget(QWidget):
     def __init__(self, routine: Routine, parent=None):
         super().__init__(parent)
         self.routine = routine
+        self._robot = None
 
         root = QHBoxLayout(self)
 
@@ -279,7 +407,13 @@ class RoutineBuilderWidget(QWidget):
         right_col = QVBoxLayout()
         self.param_editor = ParamEditor()
         self.param_editor.changed.connect(self._on_param_changed)
-        right_col.addWidget(self.param_editor, 1)
+        right_col.addWidget(self.param_editor)
+        self.nested_label = QLabel("REPEAT BODY  ·  double-click or drag to add")
+        self.nested_label.setProperty("class", "eyebrow")
+        self.nested_label.setVisible(False)
+        right_col.addWidget(self.nested_label)
+        self.nested_host = QVBoxLayout()
+        right_col.addLayout(self.nested_host, 1)
         root.addLayout(right_col, 1)
 
         self.refresh()
@@ -312,6 +446,43 @@ class RoutineBuilderWidget(QWidget):
     def _on_selection_changed(self, row: int) -> None:
         step = self.routine.steps[row] if 0 <= row < len(self.routine.steps) else None
         self.param_editor.set_step(step)
+        self._set_nested_step(step)
+
+    def _set_nested_step(self, step) -> None:
+        """Show a recursive builder for a Repeat step's inner ``body`` --
+        a Repeat is itself just a Routine, so editing its body reuses this
+        exact widget rather than inventing separate nested-list machinery."""
+        while self.nested_host.count():
+            item = self.nested_host.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        body = getattr(step, "body", None)
+        self.nested_label.setVisible(body is not None)
+        if body is None:
+            return
+        nested = RoutineBuilderWidget(body)
+        nested.set_robot(self._robot)
+        nested.routine_changed.connect(self._on_nested_changed)
+        self.nested_host.addWidget(nested)
+
+    def _on_nested_changed(self) -> None:
+        row = self.step_list.currentRow()
+        if row >= 0:
+            self.step_list.refresh_row_summary(row)
+        self.routine_changed.emit()
+
+    # -- deck context ---------------------------------------------------------
+    def set_robot(self, robot) -> None:
+        """Wire in (or clear, on disconnect) the connected robot so the
+        labware/well combo boxes offer what's actually loaded on the deck.
+        Propagates into whichever Repeat body is currently being edited,
+        since that's a whole separate recursive instance of this widget."""
+        self._robot = robot
+        self.param_editor.set_robot(robot)
+        nested = self.nested_host.itemAt(0)
+        if nested is not None and nested.widget() is not None:
+            nested.widget().set_robot(robot)
 
     def _on_param_changed(self) -> None:
         row = self.step_list.currentRow()
