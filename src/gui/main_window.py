@@ -252,6 +252,17 @@ class MainWindow(QMainWindow):
     def _on_home_requested(self) -> None:
         if self.robot is None:
             return
+        # A continuous jog's move is deliberately sent without waiting for
+        # its 'ok' (see JogController) and only gets cleaned up when it's
+        # properly released. Home pressed while one is still in flight --
+        # held stick/key plus a Home shortcut, gamepad Back/View with the
+        # stick still deflected -- would otherwise send G28 right on top of
+        # unstopped motion, AND the G28 response read would consume that
+        # stale unread reply instead of its own, making home() return
+        # almost immediately instead of actually waiting out the homing
+        # sequence. Stopping first (a no-op if nothing was jogging) avoids
+        # both.
+        self.manual_panel.stop_all_jog()
         try:
             start_pos = self.robot.controller.report_position()
         except Exception:

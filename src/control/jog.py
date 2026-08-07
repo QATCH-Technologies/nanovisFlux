@@ -248,9 +248,18 @@ class JogSession:
             "step_down": lambda: self.c.cycle_scale(-1),
             "mount_toggle": lambda: self.c.toggle_mount(),
             "zero_z": lambda: self.c.capture_z_zero(),
-            "home": lambda: self.c.robot.home(),
+            "home": self._home,
             "quit": self._quit,
         }
+
+    def _home(self):
+        # A continuous jog's move is sent without waiting for its 'ok' (see
+        # JogController) and only gets cleaned up on end_jog -- home() must
+        # not send G28 while one might still be in flight, or its response
+        # read risks consuming that stale unread reply instead of G28's
+        # own. No-op if nothing was jogging.
+        self.c.end_jog()
+        self.c.robot.home()
 
     def _quit(self):
         self.c.end_jog()
