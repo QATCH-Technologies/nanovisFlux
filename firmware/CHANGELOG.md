@@ -16,6 +16,19 @@ https://semver.org/
 
 ---
 
+## Version 1.1.2-alpha (2026-08-07)
+
+### Added
+
+### Changed
+
+- Y ENDSTOP LIMIT increased from 50000 to 54000
+- Enforce XY padding when homing while close to limits
+
+### Fixed
+
+---
+
 ## Version 1.1.1-alpha (2026-07-28)
 
 ### Added

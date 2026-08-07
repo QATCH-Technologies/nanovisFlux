@@ -7,8 +7,8 @@
     ##########################  */
 // This can be queried serially using command: "VERSION"
 #define APP_TITLE "OpenFlux OT-2 Stepper Controller"
-#define APP_VERSION "1.1.1-alpha"
-#define APP_DATE "2026-07-28"
+#define APP_VERSION "1.1.2-alpha"
+#define APP_DATE "2026-08-07"
 #define APP_COMPANY "QATCH Technologies LLC"
 // #define DEBUG
 
@@ -120,13 +120,15 @@ const bool MOTOR_C_HomingDir = false;
 
 // Motor Movement Parameters (X, Y, Z, A, B, C)
 const bool MOTOR_DIR_INVERT[6] = { true, true, true, true, false, false };
-const long ENDSTOP_LIMITS[6] = { 62500, 50000, 175000, 175000, 20000, 20000 };
+const long ENDSTOP_LIMITS[6] = { 62500, 54000, 175000, 175000, 20000, 20000 };
 long ENDSTOP_BOUNCE[6] = { 1000, 1000, 1500, 1500, 1250, 1250 };
 float TRAVEL_ACCELS[6] = { 69000, 69000, 69000, 69000, 3200, 3200 };
 float TRAVEL_SPEEDS[6] = { 16000, 16000, 32000, 32000, 6900, 6900 };
 float HOMING_ACCELS[6] = { 1E6, 1E6, 1E6, 1E6, 1E6, 1E6 };
 float HOMING_SPEEDS[6] = { 8000, 8000, 16000, 16000, 5000, 5000 };
 long CUSTOM_LIMITS[6];
+
+const long HOMING_XY_PAD = 10000;
 
 bool MOVEMENT_MODE = false;  // false = absolute; true = relative
 bool MOVEMENT_SAFE = true;   // unset with M911
@@ -439,7 +441,24 @@ void loop() {
     // Do not change this order without careful thought
     if (home_A && !home_stepper('A')) return;
     if (home_Z && !home_stepper('Z')) return;
+    // Serial.printf("Pre-X Y-Limit Checks: %i, %i > %i\n", home_X,
+    //               abs(MOTOR_Y.currentPosition()), ENDSTOP_LIMITS[1] - HOMING_XY_PAD);
+    if (home_X && MOTORS_HOMED[1]
+        && abs(MOTOR_Y.currentPosition()) > ENDSTOP_LIMITS[1] - HOMING_XY_PAD) {
+      // Enforce Y-axis is far enough away from front before tracking right
+      MOTOR_Y.setMaxSpeed(HOMING_SPEEDS[1] / 2);  // slowly
+      MOTOR_Y.move(MOTOR_Y_HomingDir ? HOMING_XY_PAD : -HOMING_XY_PAD);  // safe homing edge pad
+      MOTOR_Y.runToPosition();  // BLOCKING
+    }
     if (home_X && !home_stepper('X')) return;
+    // Serial.printf("Pre-Y X-Limit Checks: %i, %i > %i\n", home_Y,
+    //               abs(MOTOR_X.currentPosition()), 0);
+    if (home_Y && MOTORS_HOMED[0] && abs(MOTOR_X.currentPosition()) > 0) {
+      // Enforce X-axis is at far right edge (step 0) before tracking back
+      MOTOR_X.setMaxSpeed(HOMING_SPEEDS[0]);  // slowly
+      MOTOR_X.moveTo(0);                      // safe homing edge pad
+      MOTOR_X.runToPosition();                // BLOCKING
+    }
     if (home_Y && !home_stepper('Y')) return;
     if (home_B && !home_stepper('B')) return;
     if (home_C && !home_stepper('C')) return;
