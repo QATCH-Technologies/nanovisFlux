@@ -34,15 +34,9 @@ AlashUltrasonic::AlashUltrasonic(uint8_t oneWirePin, ConnectionType type) {
 // Инициализация
 void AlashUltrasonic::begin() {
   switch (_connectionType) {
-    case I2C_MODE:
-      Wire.begin();
-      break;
-    case UART_MODE:
-      _serial->begin(9600);
-      break;
-    case ONEWIRE_MODE:
-      pinMode(_oneWirePin, OUTPUT);
-      break;
+    case I2C_MODE: Wire.begin(); break;
+    case UART_MODE: _serial->begin(9600); break;
+    case ONEWIRE_MODE: pinMode(_oneWirePin, OUTPUT); break;
     case GPIO_MODE:
     default:
       pinMode(_triggerPin, OUTPUT);
@@ -53,21 +47,15 @@ void AlashUltrasonic::begin() {
 
 // Измерение расстояния
 float AlashUltrasonic::getDistance() {
-  if (millis() - _lastReadTime < 30) {
-    delay(millis() - _lastReadTime);
-  }
+  if (millis() - _lastReadTime < 30) { delay(millis() - _lastReadTime); }
   _lastReadTime = millis();
 
   switch (_connectionType) {
-    case I2C_MODE:
-      return getDistanceI2C();
-    case UART_MODE:
-      return getDistanceUART();
-    case ONEWIRE_MODE:
-      return getDistanceOneWire();
+    case I2C_MODE: return getDistanceI2C();
+    case UART_MODE: return getDistanceUART();
+    case ONEWIRE_MODE: return getDistanceOneWire();
     case GPIO_MODE:
-    default:
-      return getDistanceGPIO();
+    default: return getDistanceGPIO();
   }
 }
 
@@ -86,7 +74,7 @@ float AlashUltrasonic::getDistanceI2C() {
   Wire.beginTransmission(_i2cAddress);
   Wire.write(0x01);
   Wire.endTransmission();
-  
+
   delay(150);
 
   byte response[3];
@@ -103,14 +91,14 @@ float AlashUltrasonic::getDistanceI2C() {
 float AlashUltrasonic::getDistanceUART() {
   _serial->flush();
   _serial->write(0xA0);
-  
+
   delay(150);
-  
+
   byte response[3];
   for (byte i = 0; _serial->available() && (i < 3); i++) {
     response[i] = _serial->read();
   }
-  
+
   float micrometers = ((response[0] * 65536UL) + (response[1] * 256UL) + response[2]);
   return micrometers / 1000000.0 * 100.0;
 }

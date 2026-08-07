@@ -17,10 +17,13 @@ class Controller:
     """
 
     def __init__(self, transport: Transport, *, timeout: float = 30.0,
-                 on_send: Callable[[str], None] | None = None):
+                 on_send: Callable[[str, Command], None] | None = None):
         self._t = transport
         self._timeout = timeout
-        self.on_send = on_send          # hook for logging the rendered G-code
+        #: hook fired with (rendered line, source Command) just before it's
+        #: written -- e.g. logging, or capturing a move's intended target
+        #: (see RoutineRunner) rather than the rendered string.
+        self.on_send = on_send
         self.banner: list[str] = []
 
     # -- lifecycle ----------------------------------------------------
@@ -50,7 +53,7 @@ class Controller:
         so that eventual late reply doesn't get parsed as its answer."""
         line = command.render()
         if self.on_send:
-            self.on_send(line)
+            self.on_send(line, command)
         self._t.write_line(line)
         should_wait = command.acknowledges if wait_for_ok is None else wait_for_ok
         if not should_wait:

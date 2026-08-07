@@ -117,6 +117,8 @@ class MainWindow(QMainWindow):
         self.routine_builder = RoutineBuilderWidget(self.routine)
         self.routine_runner_widget = RoutineRunnerWidget(lambda: self.routine)
         self.routine_runner_widget.run_state_changed.connect(self._on_routine_run_state_changed)
+        self.routine_runner_widget.step_motion.connect(self._on_routine_step_motion)
+        self.routine_runner_widget.step_home.connect(self._on_routine_step_home)
         routine_tabs.addTab(self.routine_builder, "Build")
         routine_tabs.addTab(self.routine_runner_widget, "Run")
         self.tabs.addTab(routine_tabs, "Routine")
@@ -168,6 +170,24 @@ class MainWindow(QMainWindow):
         self._homing_t0 = 0.0
         self._homing_display: dict = {}
 
+        # Routine motion sweep: a routine step's G0/G1 acks long before (or,
+        # in simulation, entirely unrelated to) the real move actually
+        # finishing -- see FakeTransport and RoutineRunner.step_motion's
+        # docstrings -- so there's no honest position to poll mid-step.
+        # Same idea as the homing sweep above, but timed per move from the
+        # distance it was actually commanded to cover (tracked from one
+        # fresh poll at run start, then advanced by each move's own target
+        # -- see _on_routine_step_motion) and its own feed rate, queued so
+        # a burst of near-instant simulated steps still plays back one at a
+        # time instead of overlapping.
+        self._routine_anim_timer = QTimer(self)
+        self._routine_anim_timer.setInterval(_HOMING_ANIM_INTERVAL_MS)
+        self._routine_anim_timer.timeout.connect(self._tick_routine_animation)
+        self._routine_anim_queue: list = []   # pending (before, after, duration) legs
+        self._routine_anim_leg = None         # currently-playing (before, after, duration, t0)
+        self._routine_display_pos: dict = {}  # last-known position, advanced leg by leg
+        self._routine_run_active = False      # True while a routine Run/Step session is active
+
         self.setFocusPolicy(Qt.StrongFocus)
         self.conn_bar.set_status("disconnected")
 
@@ -211,6 +231,7 @@ class MainWindow(QMainWindow):
         self.deck_view.set_robot(robot)
         self.manual_panel.set_context(robot, self.jog, self.tracer)
         self.routine_runner_widget.set_context(robot, self.tracer)
+        self.routine_builder.set_robot(robot)
         self.btn_mounts.setEnabled(True)
         self.btn_calibrate.setEnabled(True)
         self._refresh_labware_list()
@@ -227,6 +248,7 @@ class MainWindow(QMainWindow):
         self._homing_anim_timer.stop()
         self.routine_runner_widget.set_context(None, None)
         self.manual_panel.set_context(None, None, None)
+        self.routine_builder.set_robot(None)
         if self.jog is not None:
             try:
                 self.jog.__exit__(None, None, None)
@@ -279,16 +301,19 @@ class MainWindow(QMainWindow):
         self._start_homing_animation(start_pos)
 
     # -- homing animation --------------------------------------------------
-    def _start_homing_animation(self, start_pos: dict) -> None:
-        """Replay the known homing order/speed as a sweep back to zero, axis
-        by axis, once ``robot.home()`` (a single blocking G28) has returned.
-        Pure GUI polish -- doesn't talk to the robot -- so it can't race the
-        real position poll; that timer is paused for the duration and
-        restarted (with an immediate poll) once the sweep finishes."""
+    def _build_home_schedule(self, start_pos: dict, axes) -> list:
+        """Sequential per-axis sweep back to zero, in HOMING_ORDER (matching
+        real firmware behavior -- a G28 homes axes one at a time, not all
+        together), each timed by its own configured homing speed. Shared by
+        the manual Home button's sweep (all axes) and a routine-embedded
+        Home step's (whichever axes it actually asked for)."""
+        want = set(axes)
         schedule = []
         t = 0.0
         for axis in HOMING_ORDER:
-            axis_obj = self.robot.axes.get(axis)
+            if axis not in want:
+                continue
+            axis_obj = self.robot.axes.get(axis) if self.robot else None
             if axis_obj is None:
                 continue
             start_val = start_pos.get(axis, 0) or 0
@@ -296,6 +321,15 @@ class MainWindow(QMainWindow):
             duration = abs(start_val) / speed if speed > 0 else 0.0
             schedule.append((axis, start_val, t, t + duration))
             t += duration
+        return schedule
+
+    def _start_homing_animation(self, start_pos: dict) -> None:
+        """Replay the known homing order/speed as a sweep back to zero, axis
+        by axis, once ``robot.home()`` (a single blocking G28) has returned.
+        Pure GUI polish -- doesn't talk to the robot -- so it can't race the
+        real position poll; that timer is paused for the duration and
+        restarted (with an immediate poll) once the sweep finishes."""
+        schedule = self._build_home_schedule(start_pos, tuple(AxisId))
         self._position_timer.stop()
         if not schedule:
             self._position_timer.start()
@@ -343,6 +377,166 @@ class MainWindow(QMainWindow):
     def _on_routine_run_state_changed(self, active: bool) -> None:
         self.manual_panel.set_routine_active(active)
         self.routine_builder.set_locked(active)
+        self._routine_run_active = active
+        if active:
+            # A routine step's controller calls share the CommandTracer lock
+            # with this timer's own M114 poll -- left running, a poll landing
+            # mid-step would just block the whole GUI thread until the step's
+            # commands release the lock. Pause it for the run; the per-step
+            # motion sweep (see _on_routine_step_motion) covers the display
+            # in the meantime, starting from one fresh poll (each leg after
+            # that is derived from the step's own commanded targets, not
+            # polled -- see RoutineRunner.step_motion).
+            self._position_timer.stop()
+            try:
+                self._routine_display_pos = self.robot.controller.report_position()
+            except Exception:
+                self._routine_display_pos = {}
+            self._routine_anim_timer.stop()
+            self._routine_anim_queue = []
+            self._routine_anim_leg = None
+        elif not self._routine_anim_queue and self._routine_anim_leg is None:
+            # Nothing left to sweep -- resume real polling right away.
+            # Otherwise leave it paused: the routine itself can finish (in
+            # simulation, near-instantly) well before the sweep timed to its
+            # real feed rate has finished playing -- _advance_routine_animation
+            # resumes polling once the queue actually drains, so a live poll
+            # never fights the sweep over the same display.
+            self._position_timer.start()
+            self._poll_position()
+
+    # -- routine motion sweep ---------------------------------------------------
+    #: Axes with real deck-space travel -- the ones the deck view actually
+    #: draws from (see _update_deck_markers/_mount_deck_z). Plunger axes
+    #: (B/C) are excluded: they move during Aspirate/Dispense too, but
+    #: animating them would just make e.g. a slow, feed-less aspirate hold
+    #: the sweep open long after the marker itself has already arrived.
+    _SPATIAL_AXES = (AxisId.X, AxisId.Y, AxisId.Z, AxisId.A)
+
+    def _routine_leg_duration(self, before: dict, after: dict, feed) -> float:
+        """How long this one G0/G1 would really take, from the distance it
+        actually covers and its feed rate: the command's own explicit feed
+        if it had one (a G1 with F given), else the relevant axis's
+        configured travel speed (a bare G0 rapid move, or a feed-less G1,
+        both leave the firmware to use its own default). Distance and rate
+        are both already in microsteps/<time>, so the ratio comes out in
+        real seconds without a separate mm/s conversion -- steps_per_mm
+        only matters if you want to *display* the rate, not time the sweep.
+        """
+        durations = []
+        for axis in self._SPATIAL_AXES:
+            start, end = before.get(axis), after.get(axis)
+            if start is None or end is None:
+                continue
+            distance = abs(end - start)
+            if distance == 0:
+                continue
+            axis_obj = self.robot.axes.get(axis) if self.robot else None
+            rate = feed or (axis_obj.config.travel_speed if axis_obj is not None else None)
+            if rate:
+                durations.append(distance / rate)
+        return max(durations) if durations else 0.0
+
+    def _on_routine_step_motion(self, legs: list) -> None:
+        if not legs:
+            # Nothing to sweep (Wait, a raw line, ...) -- resync so the next
+            # real leg's "before" reflects what actually happened.
+            try:
+                self._routine_display_pos = self.robot.controller.report_position()
+            except Exception:
+                pass
+            return
+        for targets, feed in legs:
+            before = dict(self._routine_display_pos)
+            after = {**before, **targets}
+            duration = self._routine_leg_duration(before, after, feed)
+            self._routine_anim_queue.append(("move", before, after, duration))
+            self._routine_display_pos = after
+        if self._routine_anim_leg is None:
+            self._advance_routine_animation()
+
+    def _on_routine_step_home(self, axes: tuple) -> None:
+        """A routine-embedded Home step homed ``axes`` -- queue the same
+        sequential, per-axis sweep the manual Home button uses (see
+        _build_home_schedule), filtered to whichever axes this step
+        actually asked for. Starts from the tracked display position, not
+        a live poll: a live poll here would race a still-settling
+        preceding move exactly like step_motion's legs do (see its
+        docstring), and G28 is instant in FakeTransport, so by the time
+        one could be taken it'd already show the post-home result."""
+        before = dict(self._routine_display_pos)
+        schedule = self._build_home_schedule(before, axes)
+        if not schedule:
+            return
+        for axis, *_rest in schedule:
+            self._routine_display_pos[axis] = 0
+        self._routine_anim_queue.append(("home", schedule))
+        if self._routine_anim_leg is None:
+            self._advance_routine_animation()
+
+    def _advance_routine_animation(self) -> None:
+        if not self._routine_anim_queue:
+            self._routine_anim_leg = None
+            self._routine_anim_timer.stop()
+            if not self._routine_run_active:
+                # The routine session already ended while this last leg was
+                # still sweeping -- resume real polling now that it's done.
+                self._position_timer.start()
+                self._poll_position()
+            return
+        leg = self._routine_anim_queue.pop(0)
+        if leg[0] == "move":
+            _, before, after, duration = leg
+            if duration <= 0:
+                # No rate to time a sweep against (or no real distance) --
+                # just show where it ended up and move on to the next leg.
+                self.manual_panel.update_positions(after)
+                self._update_deck_markers(after)
+                self._advance_routine_animation()
+                return
+            self._routine_anim_leg = ("move", before, after, duration, time.monotonic())
+        else:   # "home"
+            _, schedule = leg
+            if schedule[-1][3] <= 0:
+                display = {**self._routine_display_pos, **{axis: 0 for axis, *_ in schedule}}
+                self.manual_panel.update_positions(display)
+                self._update_deck_markers(display)
+                self._advance_routine_animation()
+                return
+            self._routine_anim_leg = ("home", schedule, time.monotonic())
+        if not self._routine_anim_timer.isActive():
+            self._routine_anim_timer.start()
+
+    def _tick_routine_animation(self) -> None:
+        if self._routine_anim_leg is None:
+            return
+        if self._routine_anim_leg[0] == "move":
+            _, before, after, duration, t0 = self._routine_anim_leg
+            frac = min(1.0, (time.monotonic() - t0) / duration)
+            display = {}
+            for axis in set(before) | set(after):
+                start = before.get(axis, after.get(axis))
+                end = after.get(axis, start)
+                display[axis] = int(round(start + (end - start) * frac))
+            finished = frac >= 1.0
+        else:   # "home"
+            _, schedule, t0 = self._routine_anim_leg
+            elapsed = time.monotonic() - t0
+            total = schedule[-1][3]
+            display = dict(self._routine_display_pos)
+            for axis, start_val, t_start, t_end in schedule:
+                if elapsed >= t_end:
+                    display[axis] = 0
+                elif elapsed <= t_start:
+                    display[axis] = start_val
+                else:
+                    frac = (elapsed - t_start) / (t_end - t_start)
+                    display[axis] = int(round(start_val * (1.0 - frac)))
+            finished = elapsed >= total
+        self.manual_panel.update_positions(display)
+        self._update_deck_markers(display)
+        if finished:
+            self._advance_routine_animation()
 
     # -- dialogs ------------------------------------------------------------------
     def _open_calibration_dialog(self) -> None:
@@ -421,6 +615,7 @@ class MainWindow(QMainWindow):
         for name, lw in self.robot.labware.items():
             slot = lw.slot.name if lw.slot else "?"
             self.labware_list.addItem(f"S{slot} · {name} ({len(lw.wells)} wells)")
+        self.routine_builder.set_robot(self.robot)   # refresh labware/well choices
 
     def _refresh_mounts_list(self) -> None:
         self.mounts_list.clear()
