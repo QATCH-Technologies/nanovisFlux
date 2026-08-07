@@ -192,8 +192,11 @@ class FakeTransport(Transport):
         if line.startswith("M911"):
             return ["Movement safety guards OFF.", "ok"]
         if line.startswith("M412"):
-            val = self.ultrasonic_mm if self.ultrasonic_mm is not None else -1
-            return [f"[RNG:{val}]", "ok"]
+            # Only Z (the one physically wired sensor, see tools/ultrasonic.py)
+            # ever reports a real reading; X/Y always read -1, matching real
+            # firmware today -- see firmware/docs/protocol.md.
+            z = self.ultrasonic_mm if (self.ultrasonic_mm is not None and "Z" in line) else -1
+            return [f"[RNG:-1,-1,{z}]", "ok"]
         if line.startswith(_SILENT):
             return []
         return ["ok"]

@@ -22,5 +22,5 @@ class TouchProbe(Tool):
         if not result.contacted:
             return None
         pos = self._robot.controller.report_position()
-        x_mm, y_mm = cal.motor_to_deck_xy(pos.get(AxisId.X, 0), pos.get(AxisId.Y, 0))
+        x_mm, y_mm = cal.motor_to_deck_xy(pos.get(AxisId.X, 0), pos.get(AxisId.Y, 0), side)
         return DeckPoint(x_mm, y_mm, to_z_mm)

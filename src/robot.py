@@ -122,10 +122,10 @@ class Robot:
 
     def safe_move_to(self, point: DeckPoint, side: MountSide,
                      clearance_mm: float | None = None, feed: int | None = None) -> None:
-        """Lift to clearance, traverse in XY, then descend -- so a mounted tip
-        never drags across labware."""
+        """Move in the order X/Y-safe arc: (1) raise this mount's Z/A to
+        clearance height, (2) cross to the target's X/Y, (3) descend Z/A to
+        the target -- so a mounted tip never drags across labware."""
         cal = self._require_cal()
-        axis = cal.vertical_axis(side)
         clr = clearance_mm if clearance_mm is not None else self.travel_z_mm
         self.raise_z(side, clr)                                 # 1. up
         xy = cal.deck_to_motor(DeckPoint(point.x, point.y, clr), side, self.tip_offset(side))

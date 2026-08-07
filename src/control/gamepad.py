@@ -1,11 +1,11 @@
 from __future__ import annotations
+
 from .inputs import InputSource
 
 #: gamepad button index -> action; analog sticks drive XY continuously.
 DEFAULT_PAD_MAP = {
-    "buttons": {0: "mount_toggle", 1: "home", 2: "zero_z",
-                4: "step_down", 5: "step_up", 7: "quit"},
-    "hat_to_z": True,                 # d-pad up/down -> z+/z-
+    "buttons": {0: "mount_toggle", 1: "home", 2: "zero_z", 4: "step_down", 5: "step_up", 7: "quit"},
+    "hat_to_z": True,  # d-pad up/down -> z+/z-
     "deadzone": 0.35,
 }
 
@@ -26,6 +26,7 @@ class GamepadInput(InputSource):
 
     def run(self, session) -> None:
         import time
+
         import pygame  # lazy import
 
         pygame.init()
@@ -54,7 +55,7 @@ class GamepadInput(InputSource):
                 session.release("x+")
                 session.release("x-")
             if abs(y) > dead:
-                session.press("y-" if y > 0 else "y+", speed=abs(y))   # up is -y on sticks
+                session.press("y-" if y > 0 else "y+", speed=abs(y))  # up is -y on sticks
                 session.release("y+" if y > 0 else "y-")
             else:
                 session.release("y+")
@@ -75,5 +76,5 @@ class GamepadInput(InputSource):
                     prev_hy = hy
             time.sleep(self.dt)
 
-        session.c.end_jog()   # safety: make sure nothing is left moving
+        session.c.end_jog()  # safety: make sure nothing is left moving
         pygame.quit()

@@ -288,7 +288,7 @@ class ManualControlPanel(QWidget):
         btn.setFixedSize(34, 34)
         btn.setStyleSheet(
             f"QPushButton {{ border-radius: 17px; background: {color}; color: white; "
-            "font-weight: 700; border: none; }}"
+            "font-weight: 700; border: none; }"
             f"QPushButton:hover {{ background: {color}; }}"
         )
         btn.clicked.connect(on_click)

@@ -19,8 +19,12 @@ class ProbeResult:
 
 @dataclass
 class DistanceResult:
-    in_range: bool
-    distance_mm: float | None
+    """One reading per M412 slot -- see commands.MeasureDistance. Each is
+    ``None`` when that slot echoed no signal, was out of range, or simply
+    wasn't queried in the command that produced this result."""
+    x_mm: float | None
+    y_mm: float | None
+    z_mm: float | None
 
 
 def extract_reason(status_line: str) -> str | None:
@@ -64,12 +68,17 @@ def parse_probe(info: list[str]) -> ProbeResult | None:
 
 
 def parse_distance(info: list[str]) -> DistanceResult | None:
-    """Parse '[RNG:<mm>]'; a negative value (e.g. -1) means no echo / out of
-    range. See MeasureDistance's docstring -- the exact wire format is
-    provisional pending firmware/hardware finalization."""
+    """Parse '[RNG:<x_mm>,<y_mm>,<z_mm>]' (see MeasureDistance's docstring).
+    A negative value (e.g. -1) in any slot means no echo / out of range /
+    not queried."""
     for line in info:
         s = line.strip()
         if s.startswith("[RNG:") and s.endswith("]"):
-            value = float(s[len("[RNG:"):-1])
-            return DistanceResult(in_range=value >= 0, distance_mm=value if value >= 0 else None)
+            values = [float(v) for v in s[len("[RNG:"):-1].split(",")]
+            x, y, z = (values + [-1.0, -1.0, -1.0])[:3]
+            return DistanceResult(
+                x_mm=x if x >= 0 else None,
+                y_mm=y if y >= 0 else None,
+                z_mm=z if z >= 0 else None,
+            )
     return None

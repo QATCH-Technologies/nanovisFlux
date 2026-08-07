@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from ..core import AxisId, MountSide
+from ..motion.mounts import MOUNT_OFFSET_MM
 from .coordinates import DeckPoint
 from .transform import AffineTransform2D
 from .units import AxisScale
@@ -36,6 +37,23 @@ class DeckCalibration:
             return AxisId.A
         return None
 
+    def _reference_xy(self, point: DeckPoint, side: MountSide) -> tuple:
+        """Motor (X, Y) that places ``side``'s mount at deck ``point``.
+
+        ``self.xy`` maps the gantry's shared X/Y *reference* point (not any
+        particular mount) between deck mm and motor microsteps. Each mount
+        sits at a fixed mechanical offset from that reference (see
+        ``motion.mounts.MOUNT_OFFSET_MM``): ``mount_deck_pos =
+        reference_deck_pos + offset``, so placing the mount at ``point``
+        means driving the reference to ``point - offset`` first. Subtracting
+        the offset *before* ``xy.apply`` (rather than converting it via a
+        flat per-axis mm/microstep scale) carries it through the affine's
+        own rotation/scale, so this stays exact even for a rotated
+        calibration -- not just the axis-aligned case.
+        """
+        ox, oy = MOUNT_OFFSET_MM.get(side, (0.0, 0.0))
+        return self.xy.apply(point.x - ox, point.y - oy)
+
     def deck_to_motor(self, point: DeckPoint, side: MountSide,
                       tip_length_mm: float = 0.0) -> dict:
         """Motor targets that place the *working point* at ``point`` (deck mm).
@@ -45,11 +63,13 @@ class DeckCalibration:
         ``point.z`` the nozzle must sit ``tip_length_mm`` higher, i.e. fewer
         microsteps (home is up). One calibration serves every tip length.
         """
-        mx, my = self.xy.apply(point.x, point.y)
+        mx, my = self._reference_xy(point, side)
+        targets = {AxisId.X: round(mx), AxisId.Y: round(my)}
         vertical = self.vertical_axis(side)
-        zref = self.z_zero.get(side, 0)
-        mz = zref - self.z_scale.to_microsteps(point.z + tip_length_mm)
-        return {AxisId.X: round(mx), AxisId.Y: round(my), vertical: int(mz)}
+        if vertical is not None:
+            zref = self.z_zero.get(side, 0)
+            targets[vertical] = int(zref - self.z_scale.to_microsteps(point.z + tip_length_mm))
+        return targets
 
     def z_zero_from_contact(self, contact_microsteps: int,
                             tip_length_mm: float = 0.0) -> int:
@@ -61,8 +81,18 @@ class DeckCalibration:
         """
         return int(contact_microsteps + self.z_scale.to_microsteps(tip_length_mm))
 
-    def motor_to_deck_xy(self, mx: float, my: float) -> tuple:
-        return self.xy.inverse().apply(mx, my)
+    def motor_to_deck_xy(self, mx: float, my: float, side: MountSide | None = None) -> tuple:
+        """Inverse of ``_reference_xy``: the deck (x, y) under raw motor
+        position ``(mx, my)``. ``side=None`` (the default) reports the
+        gantry reference point itself, as before. Passing ``side`` instead
+        reports where THAT mount's tip actually is -- add its fixed offset
+        back on top of the reference point (mirrors ``_reference_xy``'s
+        subtraction)."""
+        rx, ry = self.xy.inverse().apply(mx, my)
+        if side is None:
+            return rx, ry
+        ox, oy = MOUNT_OFFSET_MM.get(side, (0.0, 0.0))
+        return rx + ox, ry + oy
 
     # -- z calibration: finding z_zero is calibrating the deck's Z ------
     #
@@ -94,7 +124,7 @@ class DeckCalibration:
 
         # 1. Lift to a safe height, then position over the target in XY.
         ctrl.rapid_move({vertical: safe_up_microsteps})
-        mx, my = self.xy.apply(xy.x, xy.y)
+        mx, my = self._reference_xy(xy, side)
         ctrl.rapid_move({AxisId.X: round(mx), AxisId.Y: round(my)})
 
         # 2. Probe down (error if it never touches).

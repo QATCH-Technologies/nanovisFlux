@@ -110,9 +110,9 @@ class Controller:
         resp = self.execute(cmd.Probe(axis, target, feed, mode))
         return parse_probe(resp.info) or ProbeResult(False, {})
 
-    def measure_distance(self) -> DistanceResult:
-        resp = self.execute(cmd.MeasureDistance())
-        return parse_distance(resp.info) or DistanceResult(False, None)
+    def measure_distance(self, *axes: AxisId) -> DistanceResult:
+        resp = self.execute(cmd.MeasureDistance(tuple(axes)))
+        return parse_distance(resp.info) or DistanceResult(None, None, None)
 
     def set_hard_limits(self, limits: Mapping[AxisId, int]) -> None:
         self.execute(cmd.SetHardLimits(dict(limits)))

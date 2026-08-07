@@ -2,6 +2,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from ..core import AxisId, MountSide
 
+#: Fixed mechanical offset from the gantry's single X/Y reference point to
+#: each mount, in deck mm -- LEFT/RIGHT are two carriages 32.5 mm apart
+#: straddling that reference point; REAR (the fixed ultrasonic sensor mount)
+#: sits 50 mm behind them, centered. ``mount_deck_pos = reference_deck_pos +
+#: MOUNT_OFFSET_MM[side]``. The single source of truth for this geometry --
+#: consumed by DeckCalibration (deck_to_motor/motor_to_deck_xy, so real
+#: motion actually lands on the commanded mount instead of always landing
+#: where LEFT would) and by the deck view (marker rendering).
+MOUNT_OFFSET_MM: dict = {
+    MountSide.LEFT: (-16.25, 0.0),
+    MountSide.RIGHT: (16.25, 0.0),
+    MountSide.REAR: (0.0, 50.0),
+}
+
 
 @dataclass
 class Mount:

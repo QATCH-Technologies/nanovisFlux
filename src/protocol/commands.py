@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar, Mapping, Sequence
+
 from ..core import AxisId
 
 
@@ -21,6 +23,7 @@ class Command:
     the library where the wire format is written; everything above deals in
     these objects, never strings. New firmware command -> new Command class.
     """
+
     #: Does the firmware reply with a terminal 'ok'/'NOT ok'? The config
     #: setters (M201/M204/M210/M220/M421) and the stop/reset codes are silent,
     #: so the driver must NOT block waiting on them.
@@ -58,9 +61,9 @@ class Home(Command):
 
 class ProbeMode(Enum):
     TOWARD_OR_FAIL = "G38.2"  # error if target reached without contact
-    TOWARD = "G38.3"          # no error on no-contact
-    AWAY_OR_FAIL = "G38.4"    # error if contact never released
-    AWAY = "G38.5"            # no error
+    TOWARD = "G38.3"  # no error on no-contact
+    AWAY_OR_FAIL = "G38.4"  # error if contact never released
+    AWAY = "G38.5"  # no error
 
 
 @dataclass
@@ -156,13 +159,20 @@ class DisableLimits(Command):
 
 @dataclass
 class MeasureDistance(Command):
-    """Trigger the rear-mounted ultrasonic sensor and report its range.
-
-    Wire format (M412, replying with a single ``[RNG:<mm>]`` line before
-    ``ok`` -- mirroring the G38 probe's ``[PRB:...]`` line) is provisional:
-    the firmware side (trigger/echo timing or whatever protocol the chosen
-    sensor actually uses) has not been finalized. Update this alongside
-    ``responses.parse_distance`` and the firmware M412 handler once it is.
+    """Query one or more ultrasonic sensor slots (see firmware/docs/
+    protocol.md's "Ultrasonic Distance Commands"): ``M412 [X] [Y] [Z]``,
+    replying with a single ``[RNG:<x_mm>,<y_mm>,<z_mm>]`` line before ``ok``
+    (mirroring the G38 probe's ``[PRB:...]`` line) -- ``-1`` per slot means
+    no echo *or* that slot wasn't queried. The X/Y/Z letters here are M412's
+    own slot namespace, not the G0/G1 motion axes of the same name (only
+    the REAR mount's sensor is physically wired today, answering on the Z
+    slot -- see tools.ultrasonic.UltrasonicSensor).
     """
+
+    axes: tuple = ()  # which slot letters to query, e.g. (AxisId.Z,); () queries none
+
     def render(self) -> str:
-        return "M412"
+        s = "M412"
+        if self.axes:
+            s += " " + " ".join(a.letter for a in self.axes)
+        return s

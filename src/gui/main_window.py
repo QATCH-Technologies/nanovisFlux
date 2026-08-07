@@ -13,6 +13,7 @@ from ..core import AxisId, MountSide
 from ..transport import FakeTransport, SerialTransport
 from ..control.jog import JogController
 from ..motion.axis import HOMING_ORDER
+from ..motion.mounts import MOUNT_OFFSET_MM
 from ..geometry.coordinates import DeckPoint
 from .connection_bar import ConnectionBar
 from .deck_view import DeckView
@@ -25,16 +26,6 @@ from .trace import CommandTracer
 from .robot_factory import build_robot
 from .calibration_dialog import CalibrationDialog
 from .mounts_dialog import MountsDialog
-
-#: Fixed mechanical offsets between the gantry's single X/Y reference point
-#: and each mount, in deck mm -- left/right are two separate carriages
-#: 32.5 mm apart astride the reference point; the rear (ultrasonic) mount
-#: sits 50 mm behind them, centered. Applied directly in deck space (not
-#: motor space), which assumes the deck calibration's XY transform has
-#: negligible rotation -- fine for visualization, see DeckCalibration if
-#: this ever needs to be exact for a rotated calibration.
-_LR_HALF_SPACING_MM = 32.5 / 2
-_REAR_BEHIND_MM = 50.0
 
 _HOMING_ANIM_INTERVAL_MS = 40  # 25 Hz -- smooth enough for a multi-second sweep
 
@@ -542,7 +533,7 @@ class MainWindow(QMainWindow):
     def _open_calibration_dialog(self) -> None:
         if self.robot is None:
             return
-        CalibrationDialog(self.robot, self).exec_()
+        CalibrationDialog(self.robot, self.jog, self).exec_()
 
     def _open_mounts_dialog(self) -> None:
         if self.robot is None:
@@ -599,13 +590,12 @@ class MainWindow(QMainWindow):
         except Exception:
             self.deck_view.update_positions({})
             return
-        markers = {
-            MountSide.LEFT: DeckPoint(gx - _LR_HALF_SPACING_MM, gy,
-                                      self._mount_deck_z(MountSide.LEFT, pos)),
-            MountSide.RIGHT: DeckPoint(gx + _LR_HALF_SPACING_MM, gy,
-                                       self._mount_deck_z(MountSide.RIGHT, pos)),
-            MountSide.REAR: DeckPoint(gx, gy + _REAR_BEHIND_MM),
-        }
+        markers = {}
+        for side in (MountSide.LEFT, MountSide.RIGHT, MountSide.REAR):
+            ox, oy = MOUNT_OFFSET_MM[side]
+            # _mount_deck_z returns 0.0 for REAR (no vertical axis of its
+            # own -- see its docstring), matching the previous hardcoded z.
+            markers[side] = DeckPoint(gx + ox, gy + oy, self._mount_deck_z(side, pos))
         self.deck_view.update_positions(markers)
 
     def _refresh_labware_list(self) -> None:

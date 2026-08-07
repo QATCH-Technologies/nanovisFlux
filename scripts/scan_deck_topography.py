@@ -28,9 +28,9 @@ import csv
 import math
 import time
 
-from src.core import AxisId, MountSide
+from src.core import MountSide
 from src.transport import FakeTransport, SerialTransport
-from src.geometry import DeckCalibration, AffineTransform2D, AxisScale
+from src.geometry import DeckCalibration, DeckPoint, AffineTransform2D, AxisScale
 from src.tools import UltrasonicSensor
 from src.robot import Robot
 from src.config.loader import load_robot
@@ -77,13 +77,11 @@ def scan_topography(robot: Robot, *, x_min: float, x_max: float, y_min: float, y
         cols = range(len(xs)) if row % 2 == 0 else range(len(xs) - 1, -1, -1)
         for col in cols:
             x = xs[col]
-            # Bypasses deck_to_motor/move_to on purpose: those require a
-            # MountSide with a vertical axis to embed a Z/A target, but the
-            # rear mount has none (Mount.vertical is None for it).
-            mx, my = robot.calibration.xy.apply(x, y)
-            targets = {AxisId.X: round(mx), AxisId.Y: round(my)}
-            (robot.controller.linear_move(targets, feed=feed) if feed
-             else robot.controller.rapid_move(targets))
+            # move_to now handles a vertical-axis-less mount (REAR) cleanly
+            # -- deck_to_motor omits the Z/A target instead of crashing --
+            # and applies REAR's fixed offset from the gantry reference, so
+            # this drives the sensor itself to (x, y), not just the gantry.
+            robot.move_to(DeckPoint(x, y), MountSide.REAR, feed=feed)
             if settle_s:
                 time.sleep(settle_s)
             if before_read:
