@@ -212,6 +212,22 @@ def write_yaml(path: str, *, pipette_name: str, side: str, tip: str, density: fl
         yaml.safe_dump(data, fh, sort_keys=False)
 
 
+def _default_strokes(available: int, num_points: int) -> list:
+    """Evenly spaced Phase A test strokes spanning most of the plunger's
+    usable travel from the empty reference (0) up toward `available` --
+    plunger_max minus bottom_microsteps, the room actually available
+    before the tip-detach safety ceiling -- but stopping at 90% of it and
+    starting at 5%, so an unattended default never tests right up against
+    either extreme. Deduplicates in case rounding collides two points for
+    a very small `available` or large `num_points`."""
+    lo = max(1, round(available * 0.05))
+    hi = max(lo + 1, round(available * 0.9))
+    if num_points < 2:
+        return [hi]
+    step = (hi - lo) / (num_points - 1)
+    return sorted({round(lo + i * step) for i in range(num_points)})
+
+
 def print_summary(aspirate_pairs: list, dispense_pairs: list) -> None:
     print("\n=== Calibration summary ===")
     print(f"{'microsteps':>12}  {'aspirate uL':>12}  {'dispense uL':>12}")
@@ -252,8 +268,13 @@ def main() -> None:
                         help="HARD SAFETY CEILING: the plunger (B on left, C on right) must never be "
                         "commanded past this -- doing so detaches the tip instead of dispensing")
 
-    parser.add_argument("--aspirate-microsteps", type=int, nargs="+", required=True,
-                        help="Phase A test strokes, microsteps from the empty reference (any order)")
+    parser.add_argument("--aspirate-microsteps", type=int, nargs="+", default=None,
+                        help="Phase A test strokes, microsteps from the empty reference (any order); "
+                        "default is --num-points evenly spaced strokes spanning most of the plunger's "
+                        "usable travel up to --plunger-max-microsteps, with a safety margin below it")
+    parser.add_argument("--num-points", type=int, default=7,
+                        help="how many evenly-spaced Phase A test strokes to auto-generate when "
+                        "--aspirate-microsteps isn't given")
     parser.add_argument("--dispense-targets", type=int, nargs="+",
                         help="Phase B partial-dispense targets, absolute microsteps; default is the "
                         "reverse of the Phase A absolute positions")
@@ -273,7 +294,6 @@ def main() -> None:
     if args.phase == "dispense" and not args.aspirate_from:
         raise SystemExit("--phase dispense requires --aspirate-from a prior Phase A result")
 
-    strokes = sorted(args.aspirate_microsteps)
     out_path = args.out or f"pipette_calibration_{args.side}_{args.tip_name}.yaml"
 
     robot = load_robot(args.config)
@@ -287,12 +307,6 @@ def main() -> None:
         tip = TipGeometry(name=args.tip_name, length_mm=args.tip_length_mm)
     pipette.current_tip = tip  # so Z travel accounts for the tip length while calibrating
 
-    bottom = pipette.plunger.bottom_microsteps
-    max_stroke = strokes[-1]
-    aspirate_positions = [bottom + s for s in strokes]
-    dispense_targets = (sorted(args.dispense_targets, reverse=True) if args.dispense_targets
-                        else list(reversed(aspirate_positions)))
-
     plunger_axis = robot.mounts[side].plunger
     vertical_axis = robot.mounts[side].vertical
     if vertical_axis is None:
@@ -302,6 +316,14 @@ def main() -> None:
         raise SystemExit(f"the {args.side} mount has no vertical axis")
     endstop_limit = robot.axes[plunger_axis].config.endstop_limit
     plunger_max = min(args.plunger_max_microsteps, endstop_limit)
+
+    bottom = pipette.plunger.bottom_microsteps
+    strokes = (sorted(args.aspirate_microsteps) if args.aspirate_microsteps
+              else _default_strokes(plunger_max - bottom, args.num_points))
+    max_stroke = strokes[-1]
+    aspirate_positions = [bottom + s for s in strokes]
+    dispense_targets = (sorted(args.dispense_targets, reverse=True) if args.dispense_targets
+                        else list(reversed(aspirate_positions)))
 
     all_plunger_targets = {bottom, *aspirate_positions, *dispense_targets}
     over_limit = sorted(t for t in all_plunger_targets if t > plunger_max)
