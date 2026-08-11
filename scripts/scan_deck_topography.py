@@ -255,7 +255,6 @@ def main() -> None:
             "no ultrasonic sensor attached to the rear mount -- "
             "attach one via --config, or see build_robot()"
         )
-    robot.home()
 
     x_min = args.x_min_steps if args.x_min_steps is not None else 0
     x_max = (
