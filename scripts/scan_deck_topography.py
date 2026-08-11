@@ -110,7 +110,9 @@ def scan_topography(
     """
     sensor = robot.rear()
     if sensor is None:
-        raise RuntimeError("no ultrasonic sensor attached to the rear mount (MountSide.REAR)")
+        raise RuntimeError(
+            "no ultrasonic sensor attached to the rear mount (MountSide.REAR)"
+        )
 
     xs, ys = _irange(x_min, x_max, step), _irange(y_min, y_max, step)
     grid = [[None] * len(xs) for _ in ys]
@@ -148,7 +150,11 @@ def render_ascii(grid: list, xs: list, ys: list) -> str:
     lines = []
     for row in reversed(grid):  # print with y increasing upward
         chars = [
-            "?" if v is None else _ASCII_RAMP[int((v - lo) / span * (len(_ASCII_RAMP) - 1))]
+            (
+                "?"
+                if v is None
+                else _ASCII_RAMP[int((v - lo) / span * (len(_ASCII_RAMP) - 1))]
+            )
             for v in row
         ]
         lines.append("".join(chars))
@@ -171,7 +177,11 @@ def save_png(path: str, grid: list, xs: list, ys: list) -> bool:
     arr = np.array([[float("nan") if v is None else v for v in row] for row in grid])
     fig, ax = plt.subplots()
     im = ax.imshow(
-        arr, origin="lower", extent=(xs[0], xs[-1], ys[0], ys[-1]), cmap="viridis", aspect="auto"
+        arr,
+        origin="lower",
+        extent=(xs[0], xs[-1], ys[0], ys[-1]),
+        cmap="viridis",
+        aspect="auto",
     )
     ax.set_xlabel("X (motor microsteps)")
     ax.set_ylabel("Y (motor microsteps)")
@@ -206,20 +216,27 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport"
+        "--port",
+        default="COM6",
+        help="serial port for real hardware (e.g. COM6); omit to use the fake transport",
     )
     parser.add_argument(
         "--config",
+        default="src/config/robot.example.yaml",
         help="robot config YAML to load (transport/axis overrides + rear ultrasonic mount); "
         "omit for a bare robot with a default-configured sensor",
     )
-    parser.add_argument("--x-min-steps", type=int, help="min X, motor microsteps; default 0")
+    parser.add_argument(
+        "--x-min-steps", type=int, help="min X, motor microsteps; default 0"
+    )
     parser.add_argument(
         "--x-max-steps",
         type=int,
         help="max X, motor microsteps; default the X axis's endstop_limit",
     )
-    parser.add_argument("--y-min-steps", type=int, help="min Y, motor microsteps; default 0")
+    parser.add_argument(
+        "--y-min-steps", type=int, help="min Y, motor microsteps; default 0"
+    )
     parser.add_argument(
         "--y-max-steps",
         type=int,
@@ -238,14 +255,18 @@ def main() -> None:
         help="feed rate for each step, microsteps/sec; omit to use the axis's configured travel speed",
     )
     parser.add_argument("--out", default="scan_topography.csv", help="CSV output path")
-    parser.add_argument("--png", help="optional PNG heatmap output path (needs matplotlib)")
+    parser.add_argument(
+        "--png", help="optional PNG heatmap output path (needs matplotlib)"
+    )
     parser.add_argument(
         "--skip-home",
         action="store_true",
         help="skip homing before the scan (only if already homed)",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="print the planned grid and exit without scanning"
+        "--dry-run",
+        action="store_true",
+        help="print the planned grid and exit without scanning",
     )
     args = parser.parse_args()
 

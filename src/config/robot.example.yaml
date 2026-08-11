@@ -2,9 +2,9 @@
 # Load with:  robot = openflux.config.load_robot("robot.example.yaml")
 
 transport:
-  type: fake              # fake | serial | tcp
-  # port: /dev/ttyACM0    # required when type: serial
-  # baudrate: 115200
+  type: serial              # fake | serial | tcp
+  port: "COM6"    # required when type: serial
+  baudrate: 115200
 
 travel_z_mm: 120           # safe clearance height used by safe_move_to
 timeout: 30
