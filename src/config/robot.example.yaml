@@ -32,23 +32,28 @@ axes:
 # hand-editing these numbers; they're left as a worked example of the
 # points/motor YAML shape (still valid with any count >= 3, not just 3).
 #
-# The gantry homes to motor (0, 0) at the back-right, near slot "12" and
-# the robot's outer frame (see deck: below) -- measured directly rather
-# than assumed: when homed, the LEFT mount sits 117.5 mm in from the
-# frame's right edge and 139 mm in from its rear edge, i.e. deck
-# (498.5 - 117.5, 514.5 - 139) = (381.0, 375.5) (frame bounds computed from
-# the deck/frame margins below). The left/right mounts straddle the
-# gantry's shared X/Y reference by 32.5 mm (see MainWindow's
-# _LR_HALF_SPACING_MM), so that reference -- what this calibration actually
-# maps motor (0, 0) to -- is 16.25 mm to the right of the left mount:
-# (397.25, 375.5). Deck x/y decrease as motor steps increase (home is the
-# far corner; moving into the deck heads toward slot "1"). Same
-# steps-per-mm scale as a straightforward reading either way (213.2 X,
-# 144.78 Y).
+# Deck-mm values below are re-derived from the corrected slot geometry
+# (see deck: below -- caliper-measured 4.5mm separators / 127.85x85.9mm
+# slots / 137x95mm pitch, replacing earlier rough estimates that were
+# off by ~5-6%). The gantry homes to motor (0, 0) at the back-right, near
+# slot "12" and the robot's outer frame (see deck: below) -- measured
+# directly rather than assumed: when homed, the LEFT mount sits 117.5 mm
+# in from the frame's right edge and 139 mm in from its rear edge, i.e.
+# deck (516.5 - 117.5, 541.5 - 139) = (399.0, 402.5) (frame bounds
+# computed from the deck/frame margins below, which now depend on the
+# corrected slot pitch). The left/right mounts straddle the gantry's
+# shared X/Y reference by 32.5 mm (see MainWindow's _LR_HALF_SPACING_MM),
+# so that reference -- what this calibration actually maps motor (0, 0)
+# to -- is 16.25 mm to the right of the left mount: (415.25, 402.5). Deck
+# x/y decrease as motor steps increase (home is the far corner; moving
+# into the deck heads toward slot "1"). Same steps-per-mm scale as a
+# straightforward reading either way (213.2 X, 144.78 Y) -- unchanged by
+# the geometry correction, since it only shifts *where* the 100mm-apart
+# example points sit, not the motor microsteps found for them.
 calibration:
   # Option A: three deck points (mm) and the microsteps found for them.
   points:
-    deck:  [ {x: 397.25, y: 375.5}, {x: 297.25, y: 375.5}, {x: 397.25, y: 275.5} ]
+    deck:  [ {x: 415.25, y: 402.5}, {x: 315.25, y: 402.5}, {x: 415.25, y: 302.5} ]
     motor: [ [0, 0],                [21320, 0],            [0, 14478] ]
   # Option B (instead of points): affine: [a, b, tx, c, d, ty]
   z_scale: { steps_per_mm: 25.0 }
@@ -63,13 +68,17 @@ tips:
   - { name: cal_probe, length_mm: 63.0 }   # dedicated calibration probe
 
 # Deck plate: an OT-2-style 3-column x 4-row slot grid, numbered "1".."12"
-# row-major from the front-left. Slots "1"-"11" are uniform (123 x 81 mm);
-# slot "12" (the trash) is oversized and extends further toward the
-# back-right plate edge, sharing its front-left inner corner with where a
-# regular slot would sit. 5 mm gap between every adjacent slot. The gantry
-# homes to the back-right, beyond slot "12"'s outer corner -- "oversized"
-# below (slot "12"'s own clearance to the plate edge) is what puts home
-# exactly there: 5 mm past its outer corner.
+# row-major from the front-left. Slots "1"-"11" are uniform (127.85 x
+# 85.9 mm usable cavity -- caliper-measured; supersedes an earlier rough
+# 123 x 81 mm estimate that was off by ~5-6%). Each slot carries its own
+# 4.5 mm separator wall on every side; two adjacent slots' walls abut, so
+# the gap between cavities is ~9.15 mm (x) / 9.1 mm (y) -- i.e. pitch
+# (137 x 95 mm, origin-to-origin) minus slot size. Slot "12" (the trash)
+# is oversized and extends further toward the back-right plate edge,
+# sharing its front-left inner corner with where a regular slot would
+# sit. The gantry homes to the back-right, beyond slot "12"'s outer
+# corner -- "oversized" below (slot "12"'s own clearance to the plate
+# edge) is what puts home exactly there: 5 mm past its outer corner.
 deck:
   margins: { front: 60, left: 40, right: 40, rear: 40, oversized: 5 }
   # Next layer out: clearance from the deck *plate*'s own edge to the
@@ -93,7 +102,7 @@ deck:
   # Each mark is named after its slot and sits `inset_mm` in from that
   # slot's corner nearest the deck's outer edge (see deck.corner_point /
   # deck.inset_corner_point) -- NOT the slot's on-center, and measured from
-  # the inside edge of the 0.5mm slot divider, i.e. already inside the
+  # the inside edge of the 4.5mm slot separator, i.e. already inside the
   # slot's own footprint (the x/y/size above). Only the corner-adjacent
   # slots of the 1-11 grid carry a mark (2, 5, 8 -- the interior column --
   # have none): slot "1"'s front-left mark is at deck (12, 9), i.e.
@@ -111,28 +120,31 @@ deck:
       - { name: "10", slot: "10", corner: rear_left }
       - { name: "11", slot: "11", corner: rear_right }
   slots:
-    - { name: "1",  x: 0,   y: 0,   size: [123, 81] }
-    - { name: "2",  x: 128, y: 0,   size: [123, 81] }
-    - { name: "3",  x: 256, y: 0,   size: [123, 81] }
-    - { name: "4",  x: 0,   y: 86,  size: [123, 81] }
-    - { name: "5",  x: 128, y: 86,  size: [123, 81] }
-    - { name: "6",  x: 256, y: 86,  size: [123, 81] }
-    - { name: "7",  x: 0,   y: 172, size: [123, 81] }
-    - { name: "8",  x: 128, y: 172, size: [123, 81] }
-    - { name: "9",  x: 256, y: 172, size: [123, 81] }
-    - { name: "10", x: 0,   y: 258, size: [123, 81] }
-    - { name: "11", x: 128, y: 258, size: [123, 81] }
+    - { name: "1",  x: 0,     y: 0,     size: [127.85, 85.9] }
+    - { name: "2",  x: 137.0, y: 0,     size: [127.85, 85.9] }
+    - { name: "3",  x: 274.0, y: 0,     size: [127.85, 85.9] }
+    - { name: "4",  x: 0,     y: 95.0,  size: [127.85, 85.9] }
+    - { name: "5",  x: 137.0, y: 95.0,  size: [127.85, 85.9] }
+    - { name: "6",  x: 274.0, y: 95.0,  size: [127.85, 85.9] }
+    - { name: "7",  x: 0,     y: 190.0, size: [127.85, 85.9] }
+    - { name: "8",  x: 137.0, y: 190.0, size: [127.85, 85.9] }
+    - { name: "9",  x: 274.0, y: 190.0, size: [127.85, 85.9] }
+    - { name: "10", x: 0,     y: 285.0, size: [127.85, 85.9] }
+    - { name: "11", x: 137.0, y: 285.0, size: [127.85, 85.9] }
     - name: "12"   # trash -- oversized, back-right
-      x: 256
-      y: 258
+      x: 274.0     # aligned with column 2 (slots 3/6/9) on the corrected 137mm pitch
+      y: 285.0     # aligned with row 3 (slots 10/11) on the corrected 95mm pitch
       size: [170, 164]
       # Physical trash-bin walls: 8.5 cm tall, 0.25 cm thick, standing on
       # this slot's own footprint perimeter (x/y/size above, unchanged --
       # those also anchor the deck calibration comment up top). NOTE: the
       # real measured gap from this bin to the slot 11/9 separators is
-      # 1 cm, but that's larger than the nominal 5 mm slot-to-slot spacing
-      # baked into this footprint -- confirm before moving this slot's
-      # origin, since real calibration points were measured against it.
+      # 1 cm -- now a close match to the corrected ~9.15mm/9.1mm regular
+      # inter-slot gap (see the deck plate comment above), unlike the old
+      # nominal 5mm assumption this used to be compared against. Still
+      # not re-measured directly against the corrected geometry -- confirm
+      # before relying on it, since real calibration points were measured
+      # against the previous origin.
       walls: { height_mm: 85, thickness_mm: 2.5 }
       # Solid square excursion in the bin's bottom-left (min x, min y,
       # i.e. front-left) corner; height assumed == wall height since none
