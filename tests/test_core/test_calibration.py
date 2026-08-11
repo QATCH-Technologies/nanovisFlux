@@ -81,6 +81,19 @@ def test_deck_to_motor_omits_vertical_key_for_rear():
     assert None not in targets
 
 
+def test_deck_calibration_from_points_accepts_more_than_three():
+    """DeckCalibration.from_points wires straight into
+    AffineTransform2D.from_point_pairs (now N>=3), so calibrating from every
+    checked mark in the dialog -- not just exactly 3 -- should just work."""
+    deck_pts = [DeckPoint(0.0, 0.0), DeckPoint(10.0, 0.0),
+               DeckPoint(0.0, 10.0), DeckPoint(10.0, 10.0)]
+    motor_xy = [(0.0, 0.0), (_SCALE * 10.0, 0.0), (0.0, _SCALE * 10.0), (_SCALE * 10.0, _SCALE * 10.0)]
+    cal = DeckCalibration.from_points(deck_pts, motor_xy, z_scale=AxisScale(steps_per_mm=25.0))
+    mx, my = cal.xy.apply(5.0, 5.0)
+    assert mx == pytest.approx(_SCALE * 5.0)
+    assert my == pytest.approx(_SCALE * 5.0)
+
+
 def test_measure_distance_render_and_parse_round_trip():
     assert MeasureDistance((AxisId.Z,)).render() == "M412 Z"
     assert MeasureDistance().render() == "M412"

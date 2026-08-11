@@ -8,7 +8,7 @@ lazily, so importing this module never requires it.
 from __future__ import annotations
 
 from ..core import AxisId, MountSide
-from ..deck import Deck, Labware, Slot, SlotObstacle
+from ..deck import Deck, Labware, Slot, SlotObstacle, Corner, CalibrationMark, inset_corner_point
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from ..motion.axis import AxisConfig, default_axis_configs
 from ..robot import Robot
@@ -85,6 +85,24 @@ def _build_slot_obstacles(cfg: list) -> list:
     ]
 
 
+def _build_calibration_marks(cfg: dict | None, slots: dict) -> dict:
+    """Named fixed reference points for the deck<->motor calibration wizard
+    (see gui/calibration_dialog.py) -- each is a slot corner inset by a
+    shared mm offset (see deck.inset_corner_point), so only the slot +
+    corner need naming in YAML rather than hand-computed absolute mm."""
+    if not cfg:
+        return {}
+    inset = cfg.get("inset_mm", {})
+    inset_x, inset_y = inset.get("x", 12.0), inset.get("y", 9.0)
+    marks = {}
+    for m in cfg.get("points", []):
+        slot = slots[str(m["slot"])]
+        corner = Corner(m["corner"])
+        point = inset_corner_point(slot, corner, inset_x, inset_y)
+        marks[m["name"]] = CalibrationMark(name=m["name"], slot=slot.name, corner=corner, point=point)
+    return marks
+
+
 def build_deck(cfg: dict) -> Deck:
     if "grid" in cfg:
         g = cfg["grid"]
@@ -112,6 +130,7 @@ def build_deck(cfg: dict) -> Deck:
     deck.margins = cfg.get("margins")
     deck.frame_margins = cfg.get("frame_margins")
     deck.enclosure_height_mm = cfg.get("enclosure_height_mm")
+    deck.calibration_marks = _build_calibration_marks(cfg.get("calibration_marks"), deck.slots)
     return deck
 
 

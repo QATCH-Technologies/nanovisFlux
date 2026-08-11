@@ -23,6 +23,15 @@ axes:
   A: { steps_per_mm: 25.0 }
 
 # Deck <-> motor calibration.
+#
+# The three example points below predate the deck.calibration_marks
+# rework above and were measured near the back-right home corner -- close
+# to slot "12", which the gantry cannot always reach in practice. Prefer
+# recapturing via the "Calibrate Deck..." dialog against 3+ of the
+# calibration_marks points instead (all reachable, on-deck) rather than
+# hand-editing these numbers; they're left as a worked example of the
+# points/motor YAML shape (still valid with any count >= 3, not just 3).
+#
 # The gantry homes to motor (0, 0) at the back-right, near slot "12" and
 # the robot's outer frame (see deck: below) -- measured directly rather
 # than assumed: when homed, the LEFT mount sits 117.5 mm in from the
@@ -71,6 +80,36 @@ deck:
   # Whole-machine enclosure height, floor to the top of the frame/housing --
   # descriptive only (drawn as the 3D deck view's frame uprights).
   enclosure_height_mm: 560
+  # Fixed physical reference marks etched into the deck, used by the
+  # calibration wizard (gui/calibration_dialog.py) to fit the deck<->motor
+  # transform: jog a mount's tip onto each mark, capture, repeat for at
+  # least 3 (up to all 8), then fit. Replaces the old convention of typing
+  # in free-hand deck-mm coordinates near the unreachable plate edge/home
+  # corner -- these marks sit inward on the deck itself, where the gantry
+  # can actually reach. Rendered in the deck view as a 5x5mm "+" etched
+  # 0.1mm into the deck surface (DeckCanvas), hidden automatically wherever
+  # labware currently covers that slot.
+  #
+  # Each mark is named after its slot and sits `inset_mm` in from that
+  # slot's corner nearest the deck's outer edge (see deck.corner_point /
+  # deck.inset_corner_point) -- NOT the slot's on-center, and measured from
+  # the inside edge of the 0.5mm slot divider, i.e. already inside the
+  # slot's own footprint (the x/y/size above). Only the corner-adjacent
+  # slots of the 1-11 grid carry a mark (2, 5, 8 -- the interior column --
+  # have none): slot "1"'s front-left mark is at deck (12, 9), i.e.
+  # 12mm/9mm in from the virtual origin (0, 0) at slot 1's own front-left
+  # corner.
+  calibration_marks:
+    inset_mm: { x: 12.0, y: 9.0 }
+    points:
+      - { name: "1",  slot: "1",  corner: front_left }
+      - { name: "3",  slot: "3",  corner: front_right }
+      - { name: "4",  slot: "4",  corner: front_left }
+      - { name: "6",  slot: "6",  corner: front_right }
+      - { name: "7",  slot: "7",  corner: rear_left }
+      - { name: "9",  slot: "9",  corner: rear_right }
+      - { name: "10", slot: "10", corner: rear_left }
+      - { name: "11", slot: "11", corner: rear_right }
   slots:
     - { name: "1",  x: 0,   y: 0,   size: [123, 81] }
     - { name: "2",  x: 128, y: 0,   size: [123, 81] }

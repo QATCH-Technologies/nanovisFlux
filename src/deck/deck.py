@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
+from enum import Enum
 from ..geometry.coordinates import DeckPoint
 
 
@@ -36,6 +37,58 @@ class Slot:
     obstacles: list = field(default_factory=list)   # list[SlotObstacle]
 
 
+class Corner(Enum):
+    """One corner of a slot's footprint, named the same way as
+    ``Deck.margins``'/``Deck.frame_margins``' front/rear/left/right keys:
+    front = min-y edge, rear = max-y edge, left = min-x edge, right = max-x
+    edge (see ``DeckCanvas._project``'s docstring for the y convention)."""
+    FRONT_LEFT = "front_left"
+    FRONT_RIGHT = "front_right"
+    REAR_LEFT = "rear_left"
+    REAR_RIGHT = "rear_right"
+
+
+def corner_point(slot: Slot, corner: Corner) -> DeckPoint:
+    """``slot``'s actual geometric corner in deck mm -- ``slot.origin``
+    itself for the left/front corners, offset by the slot's own footprint
+    for the right/rear ones. Requires ``slot.size`` (a corner is meaningless
+    for a dimensionless slot)."""
+    if not slot.size or not slot.size[0] or not slot.size[1]:
+        raise ValueError(f"slot {slot.name!r} has no footprint size; "
+                         "corners need slot.size")
+    w, h = slot.size
+    x = slot.origin.x if corner in (Corner.FRONT_LEFT, Corner.REAR_LEFT) else slot.origin.x + w
+    y = slot.origin.y if corner in (Corner.FRONT_LEFT, Corner.FRONT_RIGHT) else slot.origin.y + h
+    return DeckPoint(x, y, slot.origin.z)
+
+
+def inset_corner_point(slot: Slot, corner: Corner,
+                       inset_x_mm: float, inset_y_mm: float) -> DeckPoint:
+    """``corner_point`` nudged inward (into the slot) by a fixed mm inset on
+    each axis -- e.g. a physical reference mark etched inset from a slot's
+    corner rather than sitting right on the divider. The inset direction
+    flips with which side of the slot the corner is on, so it always moves
+    toward the slot's interior."""
+    pt = corner_point(slot, corner)
+    dx = inset_x_mm if corner in (Corner.FRONT_LEFT, Corner.REAR_LEFT) else -inset_x_mm
+    dy = inset_y_mm if corner in (Corner.FRONT_LEFT, Corner.FRONT_RIGHT) else -inset_y_mm
+    return DeckPoint(pt.x + dx, pt.y + dy, pt.z)
+
+
+@dataclass(frozen=True)
+class CalibrationMark:
+    """A named, fixed deck-mm reference point used to build the deck<->motor
+    calibration (see ``geometry.calibration.DeckCalibration.from_points``) --
+    e.g. a mark etched into a slot at a known inset from its corner. Purely
+    descriptive of *where* the mark is; capturing the motor position found
+    there is left to whatever runs the calibration (the GUI dialog, a
+    script, ...)."""
+    name: str
+    slot: str
+    corner: Corner
+    point: DeckPoint
+
+
 @dataclass
 class Deck:
     """A generic collection of slots addressed by name.
@@ -60,6 +113,7 @@ class Deck:
     margins: dict | None = None
     frame_margins: dict | None = None
     enclosure_height_mm: float | None = None
+    calibration_marks: dict = field(default_factory=dict)  # name -> CalibrationMark
 
     def add(self, slot: Slot) -> Slot:
         self.slots[slot.name] = slot

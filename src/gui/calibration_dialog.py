@@ -1,15 +1,14 @@
 """Calibration wizard.
 
-A deck origin plus two calibration points -- each captured by jogging a
-chosen *reference mount* to a physical reference point and reading back the
-controller's position -- build the deck<->motor affine transform (see
-geometry.transform.AffineTransform2D). By convention (see
-config/robot.example.yaml's calibration comment) the X calibration point
-shares the origin's deck Y (it defines the X axis's direction/scale) and the
-Y calibration point shares the origin's deck X (it defines the Y axis's).
-The dialog keeps those two fields synced to the origin automatically, up
-until an operator edits one directly -- after that it's a free 3-point fit,
-same as before.
+The deck<->motor XY affine (see geometry.transform.AffineTransform2D) is
+fit from a set of fixed, physically-marked reference points
+(``robot.deck.calibration_marks`` -- see config/robot.example.yaml's
+``deck.calibration_marks`` comment and deck.deck.inset_corner_point): jog a
+chosen *reference mount* to touch each mark you want to use, capture, check
+its box, repeat for at least 3 (up to however many marks the deck has), then
+fit. Unlike the old free-typed-deck-mm convention, every mark's nominal
+deck (x, y) is fixed and known ahead of time -- the operator only supplies
+the motor position found there.
 
 Whichever mount is actually touching each point (the "reference mount")
 almost never sits exactly on the gantry's own shared X/Y reference point --
@@ -28,14 +27,25 @@ those to build on.
 from __future__ import annotations
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
-                             QDoubleSpinBox, QPushButton, QGroupBox, QComboBox,
-                             QDialogButtonBox, QMessageBox, QFileDialog)
+                             QDoubleSpinBox, QPushButton, QGroupBox, QComboBox, QCheckBox,
+                             QScrollArea, QWidget, QDialogButtonBox, QMessageBox, QFileDialog)
 
 from ..core import AxisId, MountSide
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration
 from ..motion.mounts import MOUNT_OFFSET_MM
 
 _REF_MOUNT_CHOICES = (MountSide.LEFT, MountSide.RIGHT, MountSide.REAR)
+_MIN_CALIBRATION_POINTS = 3
+
+
+def _mark_sort_key(name: str):
+    """Numeric marks (slot names like "1", "10") sort in slot order rather
+    than lexicographic ("1", "10", "3", ...); anything non-numeric falls
+    back to plain string order after all the numeric ones."""
+    try:
+        return (0, int(name))
+    except ValueError:
+        return (1, name)
 
 
 class CalibrationDialog(QDialog):
@@ -43,7 +53,7 @@ class CalibrationDialog(QDialog):
         super().__init__(parent)
         self.robot = robot
         self.setWindowTitle("Calibrate Deck")
-        self.resize(640, 520)
+        self.resize(680, 620)
 
         root = QVBoxLayout(self)
 
@@ -57,72 +67,25 @@ class CalibrationDialog(QDialog):
         ref_row.addStretch(1)
         root.addLayout(ref_row)
 
-        xy_group = QGroupBox("XY calibration — deck origin + two calibration points")
-        xy_layout = QVBoxLayout(xy_group)
+        xy_group = QGroupBox(f"XY calibration — select {_MIN_CALIBRATION_POINTS}+ deck reference marks")
+        xy_outer = QVBoxLayout(xy_group)
 
-        def make_row(label_text: str):
-            row = QHBoxLayout()
-            deck_x = QDoubleSpinBox()
-            deck_x.setRange(-2000, 2000)
-            deck_x.setSuffix(" mm")
-            deck_y = QDoubleSpinBox()
-            deck_y.setRange(-2000, 2000)
-            deck_y.setSuffix(" mm")
-            captured_label = QLabel("not captured")
-            captured_label.setProperty("class", "mono")
-            btn = QPushButton("Capture motor XY")
-            state = {"motor": None}
-
-            def make_capture(state=state, label=captured_label):
-                def capture():
-                    pos = self.robot.controller.report_position()
-                    mx, my = pos.get(AxisId.X), pos.get(AxisId.Y)
-                    if mx is None or my is None:
-                        label.setText("no position (home first)")
-                        return
-                    state["motor"] = (mx, my)
-                    label.setText(f"X{mx} Y{my}")
-                return capture
-
-            btn.clicked.connect(make_capture())
-            row.addWidget(QLabel(label_text))
-            row.addWidget(deck_x)
-            row.addWidget(deck_y)
-            row.addWidget(btn)
-            row.addWidget(captured_label)
-            xy_layout.addLayout(row)
-            return deck_x, deck_y, state
-
-        self.origin_x, self.origin_y, self._origin_state = make_row("1. Deck origin")
-        self.xpt_x, self.xpt_y, self._xpt_state = make_row("2. X calibration point")
-        self.ypt_x, self.ypt_y, self._ypt_state = make_row("3. Y calibration point")
-        root.addWidget(xy_group)
-
-        # -- keep the X/Y calibration points' "shared" coordinate synced to
-        # the origin (see class docstring) until the operator overrides it
-        # directly -- a blockSignals()-guarded programmatic set never flips
-        # the touched flag, only a genuine edit does.
-        self._xpt_y_touched = False
-        self._ypt_x_touched = False
-
-        def sync_xpt_y():
-            if not self._xpt_y_touched:
-                self.xpt_y.blockSignals(True)
-                self.xpt_y.setValue(self.origin_y.value())
-                self.xpt_y.blockSignals(False)
-
-        def sync_ypt_x():
-            if not self._ypt_x_touched:
-                self.ypt_x.blockSignals(True)
-                self.ypt_x.setValue(self.origin_x.value())
-                self.ypt_x.blockSignals(False)
-
-        self.origin_y.valueChanged.connect(sync_xpt_y)
-        self.origin_x.valueChanged.connect(sync_ypt_x)
-        self.xpt_y.valueChanged.connect(lambda: setattr(self, "_xpt_y_touched", True))
-        self.ypt_x.valueChanged.connect(lambda: setattr(self, "_ypt_x_touched", True))
-        sync_xpt_y()
-        sync_ypt_x()
+        self._mark_rows = []
+        marks = getattr(robot.deck, "calibration_marks", None) if robot.deck is not None else None
+        if not marks:
+            xy_outer.addWidget(QLabel("no calibration marks configured on this deck "
+                                      "(see deck.calibration_marks in the robot config)"))
+        else:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll_body = QWidget()
+            rows_layout = QVBoxLayout(scroll_body)
+            for mark in sorted(marks.values(), key=lambda m: _mark_sort_key(m.name)):
+                rows_layout.addLayout(self._make_mark_row(mark))
+            rows_layout.addStretch(1)
+            scroll.setWidget(scroll_body)
+            xy_outer.addWidget(scroll)
+        root.addWidget(xy_group, 1)
 
         z_group = QGroupBox("Z calibration")
         z_layout = QFormLayout(z_group)
@@ -161,9 +124,10 @@ class CalibrationDialog(QDialog):
         root.addWidget(z_group)
 
         note = QLabel("Jog the reference mount's tip (or a dedicated calibration probe) down onto a "
-                      "known-flat reference surface before capturing its Z touch-off. The X calibration "
-                      "point's deck Y and the Y calibration point's deck X track the origin automatically "
-                      "until you edit them yourself.")
+                      "known-flat reference surface before capturing its Z touch-off. For XY, jog the "
+                      "same mount to touch each mark you want to use, capture its motor position, and "
+                      "make sure its checkbox is ticked -- at least 3 captured, checked points are "
+                      "required before you can apply or save.")
         note.setWordWrap(True)
         note.setProperty("class", "eyebrow")
         root.addWidget(note)
@@ -175,24 +139,65 @@ class CalibrationDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
+    # -- one row per configured calibration mark -------------------------
+    def _make_mark_row(self, mark) -> QHBoxLayout:
+        row = QHBoxLayout()
+        corner_label = mark.corner.value.replace("_", "-")
+        checkbox = QCheckBox(f"Slot {mark.slot} ({corner_label})")
+        checkbox.setChecked(True)
+        nominal = QLabel(f"deck ({mark.point.x:g}, {mark.point.y:g}) mm")
+        nominal.setProperty("class", "mono")
+        captured_label = QLabel("not captured")
+        captured_label.setProperty("class", "mono")
+        btn = QPushButton("Capture motor XY")
+        state = {"motor": None}
+
+        def capture():
+            pos = self.robot.controller.report_position()
+            mx, my = pos.get(AxisId.X), pos.get(AxisId.Y)
+            if mx is None or my is None:
+                captured_label.setText("no position (home first)")
+                return
+            state["motor"] = (mx, my)
+            captured_label.setText(f"X{mx} Y{my}")
+
+        btn.clicked.connect(capture)
+        row.addWidget(checkbox)
+        row.addWidget(nominal)
+        row.addWidget(btn)
+        row.addWidget(captured_label, 1)
+        self._mark_rows.append({"mark": mark, "checkbox": checkbox, "state": state})
+        return row
+
     # -- shared by Apply and Save-to-file --------------------------------
     def _reference_points(self):
-        """(deck_pts, motor_pts) for the 3 captured points, each deck point
-        shifted from "where the reference mount touched" to "what the
+        """(deck_pts, motor_pts) for the checked, captured marks, each deck
+        point shifted from "where the reference mount touched" to "what the
         gantry's own shared reference point was" -- see
         DeckCalibration._reference_xy for the matching math this mirrors.
-        Returns (None, None) if any point hasn't been captured yet."""
+        Returns (None, None) (after warning the operator why) if fewer than
+        _MIN_CALIBRATION_POINTS marks are checked-and-captured."""
+        if not self._mark_rows:
+            QMessageBox.warning(self, "No calibration marks",
+                                "this deck has no calibration_marks configured")
+            return None, None
+
         side = MountSide(self.ref_mount_combo.currentText())
         ox, oy = MOUNT_OFFSET_MM[side]
-        rows = ((self.origin_x, self.origin_y, self._origin_state),
-                (self.xpt_x, self.xpt_y, self._xpt_state),
-                (self.ypt_x, self.ypt_y, self._ypt_state))
-        deck_pts, motor_pts = [], []
-        for dx, dy, state in rows:
-            if state["motor"] is None:
-                return None, None
-            deck_pts.append((dx.value() - ox, dy.value() - oy))
-            motor_pts.append(state["motor"])
+        checked = [r for r in self._mark_rows if r["checkbox"].isChecked()]
+        missing = [r["mark"].name for r in checked if r["state"]["motor"] is None]
+        if missing:
+            QMessageBox.warning(self, "Incomplete",
+                                "capture motor XY for: " + ", ".join(missing))
+            return None, None
+        if len(checked) < _MIN_CALIBRATION_POINTS:
+            QMessageBox.warning(self, "Not enough points",
+                                f"select at least {_MIN_CALIBRATION_POINTS} calibration marks "
+                                f"({len(checked)} checked)")
+            return None, None
+
+        deck_pts = [(r["mark"].point.x - ox, r["mark"].point.y - oy) for r in checked]
+        motor_pts = [r["state"]["motor"] for r in checked]
         return deck_pts, motor_pts
 
     def _z_zero_microsteps(self) -> dict:
@@ -203,7 +208,6 @@ class CalibrationDialog(QDialog):
     def _apply(self) -> None:
         deck_pts, motor_pts = self._reference_points()
         if deck_pts is None:
-            QMessageBox.warning(self, "Incomplete", "capture all three point pairs first")
             return
         try:
             xy = AffineTransform2D.from_point_pairs(deck_pts, motor_pts)
@@ -218,7 +222,6 @@ class CalibrationDialog(QDialog):
     def _save_to_file(self) -> None:
         deck_pts, motor_pts = self._reference_points()
         if deck_pts is None:
-            QMessageBox.warning(self, "Incomplete", "capture all three point pairs first")
             return
         path, _ = QFileDialog.getSaveFileName(self, "Save calibration", "calibration.yaml",
                                               "YAML files (*.yaml *.yml)")

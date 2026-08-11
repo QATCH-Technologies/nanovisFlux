@@ -60,6 +60,9 @@ _GANTRY_HEIGHT_MM = 400.0   # ~40cm: fallback mount height when no live z is rep
 _WALL_COLOR = QColor("#B7AD93")        # a slot's own built-in bin walls (e.g. the trash slot)
 _OBSTACLE_COLOR = QColor("#8F8672")    # solid interior fixture inside a walled slot
 _ENCLOSURE_COLOR = QColor("#9AA0A6")   # machine frame uprights, drawn to enclosure_height_mm
+_CAL_MARK_COLOR = QColor("#B23A3A")    # deck.calibration_marks reference point ("+")
+_CAL_MARK_SIZE_MM = 5.0                # physical cross span (etched mark's real footprint)
+_CAL_MARK_INSET_Z_MM = -0.1            # etched slightly into the deck surface, not floating on top
 
 _ZOOM_MIN = 0.25
 _ZOOM_MAX = 8.0
@@ -709,6 +712,19 @@ class DeckCanvas(QWidget):
         if home_proj is not None:
             all_pts.append(home_proj)
 
+        # Marks whose slot currently holds labware are skipped outright --
+        # no need to render (or occlusion-sort against) a reference point
+        # that's physically covered.
+        visible_marks = []
+        if self.deck is not None:
+            for mark in self.deck.calibration_marks.values():
+                if mark.slot in self._labware_by_slot:
+                    continue
+                z = mark.point.z + _CAL_MARK_INSET_Z_MM
+                center_proj = self._project(mark.point.x, mark.point.y, z)
+                visible_marks.append((mark, z))
+                all_pts.append(center_proj)
+
         xs = [pt[0] for pt in all_pts]
         ys = [pt[1] for pt in all_pts]
         minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
@@ -896,6 +912,31 @@ class DeckCanvas(QWidget):
             hs = 5
             p.drawRect(QRectF(hx - hs, hy - hs, hs * 2, hs * 2))
             p.drawText(int(hx) + 8, int(hy) + 4, "⌂ home")
+
+        # Calibration reference marks -- physical points etched into the
+        # deck (see deck.calibration_marks / gui/calibration_dialog.py). No
+        # text label (the slot number already identifies them) and no fixed
+        # screen-space glyph size either: each arm's endpoints are real
+        # deck-mm coordinates run through the normal _project pipeline, so
+        # the cross is real deck-plane geometry -- it foreshortens/rotates
+        # with the 3D orbit like the slot floor or separator ribs do,
+        # rather than staying a fixed billboard like the HUD mount/home
+        # markers above. Still painted in this always-last pass (not fed
+        # into the depth-sorted `drawables`) since visibility is already
+        # decided by the labware-occlusion check above, not by depth math.
+        if visible_marks:
+            pen = QPen(_CAL_MARK_COLOR)
+            pen.setWidthF(1.6)
+            p.setPen(pen)
+            half = _CAL_MARK_SIZE_MM / 2
+            for mark, z in visible_marks:
+                cx, cy = mark.point.x, mark.point.y
+                x0, y0 = to_screen(self._project(cx - half, cy, z))
+                x1, y1 = to_screen(self._project(cx + half, cy, z))
+                p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+                x0, y0 = to_screen(self._project(cx, cy - half, z))
+                x1, y1 = to_screen(self._project(cx, cy + half, z))
+                p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
 
         tick_bounds = frame_bounds or plate_bounds or self._slots_bbox()
         if tick_bounds is not None:

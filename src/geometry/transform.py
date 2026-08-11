@@ -46,11 +46,25 @@ class AffineTransform2D:
 
     @classmethod
     def from_point_pairs(cls, src: Sequence, dst: Sequence) -> "AffineTransform2D":
-        """Build from exactly three non-collinear pairs src[i] -> dst[i].
-        For more (overdetermined) points, fit with numpy.lstsq instead."""
-        if len(src) != 3 or len(dst) != 3:
-            raise ValueError("need exactly three calibration point pairs")
+        """Least-squares affine fit from src[i] -> dst[i], for 3 or more
+        (non-collinear) pairs. Exact for exactly 3 points; a best fit for
+        more (overdetermined) points.
+
+        Both cases go through the same normal-equations 3x3 system --
+        ``(AtA) theta = At d``, solved with the dependency-free ``_solve3``
+        above -- rather than numpy.lstsq, so this stays a lightweight,
+        dependency-free module. For exactly 3 non-collinear points this
+        reduces to the same unique answer a direct solve would give (AtA is
+        then square and invertible, so the normal equations and the direct
+        system share one solution)."""
+        if len(src) != len(dst):
+            raise ValueError("src and dst must have the same number of points")
+        if len(src) < 3:
+            raise ValueError("need at least three calibration point pairs")
         rows = [[sx, sy, 1.0] for sx, sy in src]
-        abx = _solve3(rows, [d[0] for d in dst])
-        cdy = _solve3(rows, [d[1] for d in dst])
+        ata = [[sum(r[i] * r[j] for r in rows) for j in range(3)] for i in range(3)]
+        atx = [sum(r[i] * d[0] for r, d in zip(rows, dst)) for i in range(3)]
+        aty = [sum(r[i] * d[1] for r, d in zip(rows, dst)) for i in range(3)]
+        abx = _solve3(ata, atx)
+        cdy = _solve3(ata, aty)
         return cls(abx[0], abx[1], abx[2], cdy[0], cdy[1], cdy[2])
