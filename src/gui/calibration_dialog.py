@@ -33,13 +33,15 @@ survives a reconnect without the operator redoing anything.
 """
 from __future__ import annotations
 
+import math
+
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
                              QDoubleSpinBox, QPushButton, QGroupBox, QComboBox, QCheckBox,
                              QScrollArea, QWidget, QDialogButtonBox, QMessageBox, QFileDialog)
 
 from ..core import AxisId, MountSide
 from ..config.loader import calibration_sidecar_path
-from ..geometry import AffineTransform2D, AxisScale, DeckCalibration
+from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, MICROSTEPS_PER_STEP
 from ..motion.mounts import MOUNT_OFFSET_MM
 
 _REF_MOUNT_CHOICES = (MountSide.LEFT, MountSide.RIGHT, MountSide.REAR)
@@ -220,6 +222,61 @@ class CalibrationDialog(QDialog):
         return {side: int(z_scale.to_microsteps(state["tip_length"]) + state["contact"])
                 for side, state in self._z_zero.items() if state["contact"] is not None}
 
+    def _fit_residual_report(self, xy: AffineTransform2D, deck_pts, motor_pts) -> str:
+        """How well `xy` reproduces its OWN input points: run each captured
+        motor position back through the inverse transform and compare to
+        the deck point it was fit against. Exactly 0mm for exactly 3
+        points (they determine the fit precisely); nonzero for 4+ means
+        the marks disagree with each other under a single affine map --
+        e.g. a jog didn't land precisely on one mark.
+
+        This can NOT catch every marks' assumed nominal position being off
+        by the same consistent scale (they're all internally consistent
+        with each other in that case, since they all come from the same
+        deck.calibration_marks geometry) -- see _scale_sanity_check for
+        that class of error, which this dialog's real-world moves were
+        showing (see its module docstring)."""
+        inv = xy.inverse()
+        errors = [math.hypot(*(a - b for a, b in zip(inv.apply(*motor), deck)))
+                 for deck, motor in zip(deck_pts, motor_pts)]
+        rms = math.sqrt(sum(e * e for e in errors) / len(errors))
+        return f"fit residual: {rms:.2f} mm RMS, {max(errors):.2f} mm worst-case, {len(errors)} point(s)"
+
+    def _scale_sanity_check(self, xy: AffineTransform2D) -> str | None:
+        """Compare the fit's own implied microsteps-per-mm (from its a/b/c/d
+        coefficients -- the length of the transformed unit deck-x/deck-y
+        vectors) against each axis's independently-measured steps_per_mm
+        (AxisConfig, from a full-travel measurement -- see
+        geometry.units.MEASURED_AXIS_TRAVEL_MM / the robot config's own
+        axes: overrides). These come from two unrelated measurements, so
+        they should roughly agree. A consistent percentage mismatch on
+        BOTH axes -- as opposed to noisy per-point residuals -- points at
+        deck.calibration_marks' (or deck.slots') assumed geometry not
+        matching the physical deck, not a fit or code defect: every mark's
+        nominal position is derived from that same assumed geometry, so
+        they're all self-consistent with each other even when that whole
+        geometry is off. None if either axis has no configured
+        steps_per_mm to compare against, or both agree within 2%."""
+        x_axis, y_axis = self.robot.axes.get(AxisId.X), self.robot.axes.get(AxisId.Y)
+        if x_axis is None or y_axis is None:
+            return None
+        axis_x_scale = x_axis.config.steps_per_mm
+        axis_y_scale = y_axis.config.steps_per_mm
+        if not axis_x_scale or not axis_y_scale:
+            return None
+        fit_x = math.hypot(xy.a, xy.c) / MICROSTEPS_PER_STEP
+        fit_y = math.hypot(xy.b, xy.d) / MICROSTEPS_PER_STEP
+        dx_pct = (fit_x / axis_x_scale - 1) * 100
+        dy_pct = (fit_y / axis_y_scale - 1) * 100
+        if abs(dx_pct) < 2 and abs(dy_pct) < 2:
+            return None
+        return (f"note: this fit implies {fit_x:.2f}/{fit_y:.2f} steps/mm (X/Y) vs. the axis "
+               f"config's {axis_x_scale:.2f}/{axis_y_scale:.2f} ({dx_pct:+.1f}% / {dy_pct:+.1f}%). "
+               "A consistent mismatch on both axes usually means the calibration marks' assumed "
+               "deck geometry (deck.calibration_marks / deck.slots in the robot config) doesn't "
+               "match the physical deck -- verify the marks' real positions with calipers, or "
+               "recalibrate with more/further-spread marks.")
+
     def _apply(self) -> None:
         deck_pts, motor_pts = self._reference_points()
         if deck_pts is None:
@@ -232,7 +289,13 @@ class CalibrationDialog(QDialog):
 
         z_scale = AxisScale(steps_per_mm=self.z_steps_per_mm.value())
         self.robot.calibration = DeckCalibration(xy=xy, z_scale=z_scale, z_zero=self._z_zero_microsteps())
-        QMessageBox.information(self, "Calibration applied", "Deck calibration updated for this session.")
+
+        lines = ["Deck calibration updated for this session.",
+                "", self._fit_residual_report(xy, deck_pts, motor_pts)]
+        scale_note = self._scale_sanity_check(xy)
+        if scale_note:
+            lines += ["", scale_note]
+        QMessageBox.information(self, "Calibration applied", "\n".join(lines))
 
     def _save_to_file(self) -> None:
         deck_pts, motor_pts = self._reference_points()
