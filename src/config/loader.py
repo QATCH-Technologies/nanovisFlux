@@ -14,7 +14,7 @@ from ..deck import Deck, Labware, Slot, SlotObstacle, Corner, CalibrationMark, i
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from ..motion.axis import AxisConfig, default_axis_configs
 from ..robot import Robot
-from ..tools import Pipette, PlungerModel, TipGeometry, UltrasonicSensor
+from ..tools import Pipette, PlungerModel, PlungerCalibration, TipGeometry, UltrasonicSensor
 from ..transport import FakeTransport, SerialTransport
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
@@ -105,6 +105,20 @@ def build_calibration(cfg: dict) -> DeckCalibration:
     z_scale = AxisScale(steps_per_mm=cfg["z_scale"]["steps_per_mm"])
     z_zero = {_SIDES[k]: int(v) for k, v in cfg.get("z_zero", {}).items()}
     return DeckCalibration(xy=xy, z_scale=z_scale, z_zero=z_zero)
+
+
+def load_pipette_calibration(path: str) -> PlungerCalibration:
+    """Load a pipette_calibration: section either from a full robot config
+    or a standalone file -- as written by scripts/calibrate_pipette.py."""
+    cfg = load_config(path)
+    return build_pipette_calibration(cfg.get("pipette_calibration", cfg))
+
+
+def build_pipette_calibration(cfg: dict) -> PlungerCalibration:
+    return PlungerCalibration.from_pairs(
+        aspirate=[(p["microsteps"], p["volume_ul"]) for p in cfg["aspirate"]],
+        dispense=[(p["microsteps"], p["volume_ul"]) for p in cfg["dispense"]],
+    )
 
 
 def _build_slot_obstacles(cfg: list) -> list:

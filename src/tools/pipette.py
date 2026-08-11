@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 from ..geometry.coordinates import DeckPoint
 from .base import Tool
 from .tips import TipGeometry, TipPickup
@@ -9,11 +11,102 @@ from .tips import TipGeometry, TipPickup
 class PlungerModel:
     """Maps volume (uL) to plunger microsteps. Calibrate microsteps_per_ul
     and the fully-dispensed position for your specific pipette."""
+
     microsteps_per_ul: float
     bottom_microsteps: int = 0  # plunger position for 0 uL
 
     def volume_to_microsteps(self, ul: float) -> int:
         return int(self.bottom_microsteps + round(ul * self.microsteps_per_ul))
+
+
+def _sorted_monotonic(points: tuple, label: str) -> tuple:
+    """Sort `points` (PlungerCalibrationPoint) by volume_ul ascending and
+    check microsteps rise alongside it -- a plunger position has to
+    correspond to exactly one volume to be invertible, so a bad/out-of-
+    order measurement should fail loudly here rather than produce silently
+    wrong interpolation later."""
+    if len(points) < 2:
+        raise ValueError(f"{label} calibration needs at least 2 points, got {len(points)}")
+    ordered = tuple(sorted(points, key=lambda p: p.volume_ul))
+    for a, b in zip(ordered, ordered[1:]):
+        if b.microsteps <= a.microsteps:
+            raise ValueError(
+                f"{label} calibration is not monotonic: {a.volume_ul:g}uL -> {a.microsteps} "
+                f"microsteps, but {b.volume_ul:g}uL -> {b.microsteps} (expected more microsteps "
+                "for more volume)"
+            )
+    return ordered
+
+
+def _interp(points: list, x: float) -> float:
+    """Piecewise-linear interpolation through `points` ((x, y) pairs,
+    ascending by x) -- exact at each point, extrapolating past either end
+    using the nearest segment's own slope rather than a global fit that a
+    couple of noisy points could swing wildly."""
+    if x <= points[0][0]:
+        (x0, y0), (x1, y1) = points[0], points[1]
+    elif x >= points[-1][0]:
+        (x0, y0), (x1, y1) = points[-2], points[-1]
+    else:
+        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+            if x0 <= x <= x1:
+                break
+    return y0 + (x - x0) / (x1 - x0) * (y1 - y0)
+
+
+@dataclass(frozen=True)
+class PlungerCalibrationPoint:
+    """One measured calibration point: commanding the plunger to
+    ``microsteps`` (the same space as ``PlungerModel.bottom_microsteps``)
+    produced ``volume_ul`` of liquid, measured externally -- e.g. weighed
+    on a scale after a full dispense."""
+
+    microsteps: int
+    volume_ul: float
+
+
+@dataclass(frozen=True)
+class PlungerCalibration:
+    """Empirical steps<->volume mapping for one (pipette, tip) combination,
+    replacing ``PlungerModel``'s single linear factor with piecewise-linear
+    interpolation between measured points -- a real plunger's volume-per-
+    step is rarely perfectly linear or direction-symmetric (seal friction,
+    o-ring compliance, backlash).
+
+    Aspirate and dispense are calibrated SEPARATELY: seal friction/backlash
+    commonly make the two strokes disagree for the same nominal volume, so
+    a single shared curve would bake in a direction-dependent error.
+    ``Pipette._move_plunger_to`` picks whichever applies via `aspirating`.
+    """
+
+    aspirate_points: tuple  # tuple[PlungerCalibrationPoint, ...]
+    dispense_points: tuple  # tuple[PlungerCalibrationPoint, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "aspirate_points", _sorted_monotonic(tuple(self.aspirate_points), "aspirate")
+        )
+        object.__setattr__(
+            self, "dispense_points", _sorted_monotonic(tuple(self.dispense_points), "dispense")
+        )
+
+    def microsteps_for_volume(self, ul: float, *, aspirating: bool) -> int:
+        points = self.aspirate_points if aspirating else self.dispense_points
+        return round(_interp([(p.volume_ul, p.microsteps) for p in points], ul))
+
+    def volume_for_microsteps(self, microsteps: int, *, aspirating: bool) -> float:
+        points = self.aspirate_points if aspirating else self.dispense_points
+        return _interp([(p.microsteps, p.volume_ul) for p in points], microsteps)
+
+    @classmethod
+    def from_pairs(cls, aspirate, dispense) -> "PlungerCalibration":
+        """Build from raw ``(microsteps, volume_ul)`` tuples -- the shape a
+        measurement procedure produces directly, without needing the
+        caller to construct ``PlungerCalibrationPoint`` objects by hand."""
+        return cls(
+            aspirate_points=tuple(PlungerCalibrationPoint(m, v) for m, v in aspirate),
+            dispense_points=tuple(PlungerCalibrationPoint(m, v) for m, v in dispense),
+        )
 
 
 class Pipette(Tool):
@@ -24,13 +117,24 @@ class Pipette(Tool):
     subsequent Z moves by the tip length so the tip *end* lands on target.
     """
 
-    def __init__(self, name: str, plunger: PlungerModel, max_volume_ul: float):
+    def __init__(
+        self,
+        name: str,
+        plunger: PlungerModel,
+        max_volume_ul: float,
+        tip_calibrations: dict | None = None,
+    ):
         super().__init__()
         self.name = name
         self.plunger = plunger
         self.max_volume_ul = max_volume_ul
         self.current_volume_ul = 0.0
         self.current_tip: TipGeometry | None = None
+        #: tip name -> PlungerCalibration, empirically measured for this
+        #: specific pipette with that tip attached (see PlungerCalibration).
+        #: Any tip with no entry here falls back to the linear `plunger`
+        #: model -- e.g. before it's ever been characterized.
+        self.tip_calibrations: dict = tip_calibrations or {}
 
     def uses_plunger(self) -> bool:
         return True
@@ -41,25 +145,35 @@ class Pipette(Tool):
         return self.current_tip.length_mm if self.current_tip else 0.0
 
     # -- plunger --------------------------------------------------------
-    def _move_plunger_to(self, ul: float, feed=None) -> None:
+    def _calibration_for_current_tip(self) -> PlungerCalibration | None:
+        if self.current_tip is None:
+            return None
+        return self.tip_calibrations.get(self.current_tip.name)
+
+    def _move_plunger_to(self, ul: float, feed=None, *, aspirating: bool) -> None:
         axis = self._mount.plunger
-        target = self.plunger.volume_to_microsteps(ul)
+        calibration = self._calibration_for_current_tip()
+        target = (
+            calibration.microsteps_for_volume(ul, aspirating=aspirating)
+            if calibration is not None
+            else self.plunger.volume_to_microsteps(ul)
+        )
         self._robot.controller.linear_move({axis: target}, feed=feed)
 
     def aspirate(self, ul: float, feed=None) -> None:
         if self.current_volume_ul + ul > self.max_volume_ul:
             raise ValueError("aspirate would exceed pipette capacity")
         self.current_volume_ul += ul
-        self._move_plunger_to(self.current_volume_ul, feed)
+        self._move_plunger_to(self.current_volume_ul, feed, aspirating=True)
 
     def dispense(self, ul: float | None = None, feed=None) -> None:
         ul = self.current_volume_ul if ul is None else ul
         self.current_volume_ul = max(0.0, self.current_volume_ul - ul)
-        self._move_plunger_to(self.current_volume_ul, feed)
+        self._move_plunger_to(self.current_volume_ul, feed, aspirating=False)
 
     def blow_out(self, feed=None) -> None:
         self.current_volume_ul = 0.0
-        self._move_plunger_to(0.0, feed)
+        self._move_plunger_to(0.0, feed, aspirating=False)
 
     # -- tips -----------------------------------------------------------
     def pick_up_tip(self, xy: DeckPoint, tip: TipGeometry, pickup: TipPickup) -> None:
@@ -81,11 +195,12 @@ class Pipette(Tool):
             if stroke < pickup.presses - 1:
                 robot.move_vertical_to(top + pickup.retract_mm, side, feed=pickup.feed)
 
-        self.current_tip = tip                     # now tip-aware
-        robot.raise_z(side)                         # lift clear at travel height
+        self.current_tip = tip  # now tip-aware
+        robot.raise_z(side)  # lift clear at travel height
 
-    def drop_tip(self, xy: DeckPoint | None = None, eject_z_mm: float | None = None,
-                 side_offset=None) -> None:
+    def drop_tip(
+        self, xy: DeckPoint | None = None, eject_z_mm: float | None = None, side_offset=None
+    ) -> None:
         """Eject the tip. On the plunger axes, tip ejection happens at the
         extreme down position (per the hardware notes), so this drives the
         plunger fully down when at the drop location."""
@@ -99,5 +214,8 @@ class Pipette(Tool):
         robot.controller.linear_move({axis: limit})
         self.current_tip = None
         self.current_volume_ul = 0.0
-        self._move_plunger_to(0.0)                  # return plunger to top
+        # current_tip is already cleared, so this always uses the linear
+        # fallback regardless of `aspirating` -- False just names what
+        # "return to top/empty" actually is (a dispense-direction move).
+        self._move_plunger_to(0.0, aspirating=False)  # return plunger to top
         robot.raise_z(side)
