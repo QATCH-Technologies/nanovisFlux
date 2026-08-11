@@ -29,6 +29,15 @@ class FakeTransport(Transport):
     ``commands.RapidMove.render`` -- no F term), and routines/safe_move_to
     use it for point-to-point repositioning where instant completion is the
     existing, relied-upon behavior.
+
+    A real G1's "ok" isn't printed until the move itself finishes, not
+    merely once it's queued (see JogController's docstring) -- this
+    matters to anything that fires a G1 with ``wait_for_ok=False`` and
+    polls *other* commands (M114/M412) while it's still in flight, e.g. a
+    continuous topography sweep (scripts/scan_deck_topography.py): those
+    polls' own responses must come back before the G1's belated "ok",
+    not after. ``_pending_g1``/``_drain_pending_g1_oks`` reproduce that
+    ordering here instead of queuing the "ok" the instant the G1 is sent.
     """
 
     def __init__(self, probe_contact: dict | None = None, ultrasonic_mm: float | None = None,
@@ -39,6 +48,14 @@ class FakeTransport(Transport):
         self._queue: list[str] = []
         # in-flight G1 moves: axis -> (target, feed_steps_per_sec, start_pos, start_time)
         self._motion: dict[str, tuple] = {}
+        # un-acked G1s awaiting completion, oldest first -- each is the set
+        # of axes that move commanded. Real firmware doesn't print a G1's
+        # "ok" until the move itself finishes (not merely once it's queued
+        # -- see JogController's docstring), so a client that sent this
+        # with wait_for_ok=False and is polling other commands (M114/M412)
+        # in the meantime must see THEIR responses first, not this one
+        # jumping the queue. See _drain_pending_g1_oks.
+        self._pending_g1: list = []
         # microsteps at which each axis "contacts" during a G38 toward-probe
         self.probe_contact = {"Z": 120000, "A": 120000}
         if probe_contact:
@@ -68,6 +85,7 @@ class FakeTransport(Transport):
 
     def write_line(self, line: str) -> None:
         self._settle()
+        self._drain_pending_g1_oks()
         self._queue += self._handle(line.strip().upper())
 
     def read_line(self, timeout: float | None = None) -> str:
@@ -98,6 +116,17 @@ class FakeTransport(Transport):
                 self._pos[axis] = int(pos)
         for axis in finished:
             del self._motion[axis]
+
+    def _drain_pending_g1_oks(self) -> None:
+        """Queue "ok" for every pending G1 whose axes have all finished
+        moving (per the _settle() that just ran), oldest first -- called
+        right before handling whatever new line is being written, so an
+        un-awaited G1's belated "ok" lands on the wire ahead of that new
+        command's own response, exactly like real firmware interleaving
+        motion completion with the next serial line it happens to read."""
+        while self._pending_g1 and not (self._pending_g1[0] & self._motion.keys()):
+            self._pending_g1.pop(0)
+            self._queue.append("ok")
 
     @staticmethod
     def _axis_values(line: str) -> dict:
@@ -149,12 +178,14 @@ class FakeTransport(Transport):
             for a in axes:
                 self._motion.pop(a, None)
                 self._pos[a], self._homed[a] = 0, True
+            self._pending_g1.clear()  # homing takes over outright, same as G38 below
             return [f"Homed {a}." for a in axes] + ["ok"]
         if line.startswith("G38"):
             # A probe move takes over the axis outright; any jog it was
             # mid-flight on must stop first (mirrors real firmware
             # serializing motion commands).
             self._motion.clear()
+            self._pending_g1.clear()
             vals = self._axis_values(line)
             toward = line.startswith(("G38.2", "G38.3"))
             for a, target in vals.items():
@@ -166,13 +197,21 @@ class FakeTransport(Transport):
             return [self._prb_line(False), "ok"]
         if line.startswith("G1"):
             feed = self._feed_value(line)
+            axes_this_move = set()
             for a, v in self._axis_values(line).items():
                 target = self._clamp(a, (self._pos[a] + v) if not self._absolute else v)
                 if feed and feed > 0 and target != self._pos[a]:
                     self._motion[a] = (target, float(feed), self._pos[a], time.monotonic())
+                    axes_this_move.add(a)
                 else:
                     self._pos[a] = target
                     self._motion.pop(a, None)
+            if axes_this_move:
+                # "ok" deferred until every one of these axes finishes --
+                # see _drain_pending_g1_oks, called at the top of the next
+                # write_line -- rather than queued right away.
+                self._pending_g1.append(axes_this_move)
+                return []
             return ["ok"]
         if line.startswith("G0"):
             for a, v in self._axis_values(line).items():
@@ -186,15 +225,27 @@ class FakeTransport(Transport):
         if line.startswith("M410"):
             # _settle() (called from write_line before we got here) already
             # froze _pos at wherever each move had actually gotten to; just
-            # drop the in-flight targets so nothing keeps progressing.
+            # drop the in-flight targets so nothing keeps progressing. Also
+            # drop any now-truncated G1's pending "ok" -- it's cut short,
+            # not completed, so real firmware never sends it either.
             self._motion.clear()
+            self._pending_g1.clear()
             return []
         if line.startswith("M911"):
             return ["Movement safety guards OFF.", "ok"]
         if line.startswith("M412"):
             # Only Z (the one physically wired sensor, see tools/ultrasonic.py)
             # ever reports a real reading; X/Y always read -1, matching real
-            # firmware today -- see firmware/docs/protocol.md.
+            # firmware today -- see firmware/docs/protocol.md. Real M412
+            # isn't free -- the firmware averages 10 ultrasonic samples,
+            # each rate-limited to >=30ms (AlashUltrasonic::getDistance) --
+            # so a real query costs at least ~300ms. A small sleep here
+            # approximates that, so a continuous-sweep polling loop (see
+            # scripts/scan_deck_topography.py) paces similarly to real
+            # hardware against this transport instead of spinning as fast
+            # as Python can loop and needing thousands of iterations to
+            # cover one simulated G1's real-time travel.
+            time.sleep(0.05)
             z = self.ultrasonic_mm if (self.ultrasonic_mm is not None and "Z" in line) else -1
             return [f"[RNG:-1,-1,{z}]", "ok"]
         if line.startswith(_SILENT):
