@@ -557,7 +557,22 @@ class ManualControlPanel(QWidget):
         side = self.jog.side
         safe = self.goto_safe_check.isChecked()
         try:
-            (self.robot.safe_move_to if safe else self.robot.move_to)(point, side)
+            # Robot.move_to/safe_move_to send absolute deck-mm targets but
+            # don't set the positioning mode themselves -- they trust the
+            # caller to already be in G90 (see RoutineRunner.run's own
+            # set_absolute/set_relative bracketing around a routine's
+            # moves). The ambient mode is G91 for the whole connection
+            # (JogController.__enter__, so held-key jogging stays
+            # relative), so without switching here first, the firmware
+            # would treat this target as a RELATIVE move by that many
+            # microsteps -- usually slamming into an endstop instead of
+            # landing on the requested point. Always restore relative
+            # mode afterward so jogging keeps working.
+            self.robot.controller.set_absolute()
+            try:
+                (self.robot.safe_move_to if safe else self.robot.move_to)(point, side)
+            finally:
+                self.robot.controller.set_relative()
             if self.tracer:
                 self.tracer.note(f"moved {side.value} to ({point.x:g}, {point.y:g}, "
                                  f"{point.z:g}) mm{' (safe)' if safe else ''}")
