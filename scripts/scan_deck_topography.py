@@ -22,13 +22,27 @@ fixed and small relative to the scan's own resolution.
 Real continuous sweeps, no settling pauses, no stepped moves: each row is
 ONE G1 move covering the whole row (min X to max X or back, depending on
 snake direction) at a steady `--feed` microsteps/sec, fired with
-wait_for_ok=False (see Controller.execute) so it doesn't block -- then
-polled (M114 position + M412 distance) back-to-back, as fast as the round
-trip allows, until the reported position reaches the row's far end. There
-is no time.sleep anywhere; M412's own real cost (the firmware averages 10
-ultrasonic samples, each rate-limited to >=30ms -- see
-firmware/OT2-stepper-controller/AlashUltrasonic.cpp) is what naturally
-paces the polls at roughly consistent intervals.
+wait_for_ok=False (see Controller.execute) so it doesn't block.
+
+M412 is NOT asynchronous on this firmware -- confirmed by reading
+firmware/OT2-stepper-controller/OT2-stepper-controller.ino: the M412
+handler runs its 10-sample ultrasonic average (each sample floor-limited
+to >=30ms by AlashUltrasonic::getDistance's own delay(), so ~300ms+ per
+call) entirely synchronously, and the MOTOR_X.run()/MOTOR_Y.run() calls
+that actually advance a stepper sit LATER in the same single-threaded
+loop() -- unreached until the M412 handler's block finishes. So every
+M412 call fully pauses all motor motion for its own duration; there is no
+way to poll the sensor for free. M114 (position) is cheap by comparison
+(no external timing, just a stored-counter readback) and doesn't
+meaningfully interrupt stepping.
+
+Given that, this polls M114 (cheap, doesn't pause motion) at a small
+`_POLL_INTERVAL_S` throttle -- not a settling delay, just avoiding a
+genuinely unthrottled busy-wait loop that would peg the CPU and hammer the
+serial line for no benefit -- and calls M412 sparingly: `--samples-per-row`
+times per row, spaced out via wall-clock time so the gantry gets real,
+uninterrupted stretches of travel between each ~300ms sensor pause instead
+of stalling almost continuously.
 
 This firmware doesn't ack a G1 until the move itself finishes (not merely
 once it's queued -- see control/jog.py's JogController, which uses the same
@@ -66,6 +80,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import time
 
 from src.config.loader import load_robot
 from src.core import AxisId, MountSide
@@ -75,7 +90,21 @@ from src.tools import UltrasonicSensor
 from src.transport import FakeTransport, SerialTransport
 
 _ASCII_RAMP = " .:-=+*#%@"
-_MAX_POLLS_PER_ROW = 5000  # safety net against a stuck/never-arriving row
+#: A real M412 costs at least this long (10 ultrasonic samples, each
+#: floor-limited to >=30ms -- see AlashUltrasonic::getDistance). Sample
+#: intervals shorter than this are pointless: M412 itself won't return any
+#: faster, so the gantry would stall back-to-back regardless of the target
+#: spacing -- see module docstring.
+_M412_MIN_INTERVAL_S = 0.3
+#: M114 (position) doesn't pause motion the way M412 does, but polling it
+#: in a genuinely unthrottled tight loop just busy-waits the CPU (and, on
+#: real hardware, contends the serial line) for no benefit -- position
+#: doesn't need microsecond-fresh updates to detect "have we arrived" or
+#: "is it time for the next M412 yet". This is a poll-loop throttle, not a
+#: settling delay: it's not waiting for anything physical, just spacing out
+#: otherwise-pointless-to-repeat status checks.
+_POLL_INTERVAL_S = 0.02
+_MAX_POLLS_PER_ROW = 6000  # safety net against a stuck/never-arriving row (~2 minutes at _POLL_INTERVAL_S)
 
 
 def _irange(start: int, stop: int, step: int) -> list:
@@ -104,34 +133,61 @@ def synthetic_height_mm(x_usteps: float, y_usteps: float) -> float:
     return max(20.0, base - bump)
 
 
-def _sweep_row(robot: Robot, sensor, x_end: int, y: int, feed: int | None,
-               tolerance: int, before_sample=None, on_sample=None) -> list:
-    """Continuously sweep X to `x_end` (the gantry is already at the row's
-    start X and at this row's Y), polling as fast as the round trip allows
-    until arrival. Returns this row's (x, y, distance_mm) samples.
+def _read_distance_mm(robot: Robot) -> float | None:
+    """Query M412 for all three slots and return whichever came back
+    valid, preferring Z (the REAR mount's documented, physically-wired
+    slot -- see tools/ultrasonic.py's _MOUNT_RANGE_SLOT and
+    firmware/docs/protocol.md, which says X/Y "will always return -1").
+    The wire reply is a 3-tuple, [RNG:<x_mm>,<y_mm>,<z_mm>] -- querying
+    all three and falling back across them is a defensive read in case a
+    given board actually answers on a different slot than documented,
+    rather than trusting Z alone."""
+    result = robot.controller.measure_distance(AxisId.X, AxisId.Y, AxisId.Z)
+    for value in (result.z_mm, result.x_mm, result.y_mm):
+        if value is not None:
+            return value
+    return None
 
-    The un-awaited G1's own "ok" isn't consumed here (see module
-    docstring); a poll that lands exactly as that "ok" surfaces reads it
-    instead of its own response, so report_position can come back missing
-    X entirely -- that specific shape (a report with no X in it at all,
-    never a wrong-but-present value) is treated as "we just arrived,
-    stop", not an error, since that's exactly when it can happen.
+
+def _sweep_row(robot: Robot, x_end: int, y: int, feed: int | None,
+               tolerance: int, sample_interval_s: float,
+               before_sample=None, on_sample=None) -> list:
+    """Continuously sweep X to `x_end` (the gantry is already at the row's
+    start X and at this row's Y). Position (M114) is polled back-to-back
+    the whole way -- cheap, doesn't interrupt stepping -- but the sensor
+    (M412) is only queried once every `sample_interval_s` of real elapsed
+    time, since M412 itself pauses all motion for its own duration (see
+    module docstring): querying it less often means fewer, shorter pauses
+    instead of one almost every poll. Returns this row's (x, y,
+    distance_mm) samples.
+
+    The un-awaited G1's own "ok" isn't consumed here; a poll that lands
+    exactly as that "ok" surfaces reads it instead of its own response, so
+    report_position can come back missing X entirely -- that specific
+    shape (a report with no X in it at all, never a wrong-but-present
+    value) is treated as "we just arrived, stop", not an error, since
+    that's exactly when it can happen.
     """
     robot.controller.linear_move({AxisId.X: x_end}, feed=feed, wait_for_ok=False)
     samples = []
+    next_sample_at = time.monotonic()
     for _ in range(_MAX_POLLS_PER_ROW):
         pos = robot.controller.report_position()
         x_now = pos.get(AxisId.X)
         if x_now is None:
             break
-        if before_sample:
-            before_sample(x_now, y)
-        distance = sensor.read_distance_mm()
-        samples.append((x_now, y, distance))
-        if on_sample:
-            on_sample(x_now, y, distance)
-        if abs(x_now - x_end) <= tolerance:
+        arrived = abs(x_now - x_end) <= tolerance
+        if arrived or time.monotonic() >= next_sample_at:
+            if before_sample:
+                before_sample(x_now, y)
+            distance = _read_distance_mm(robot)
+            samples.append((x_now, y, distance))
+            if on_sample:
+                on_sample(x_now, y, distance)
+            next_sample_at = time.monotonic() + sample_interval_s
+        if arrived:
             break
+        time.sleep(_POLL_INTERVAL_S)  # throttle -- see _POLL_INTERVAL_S's own comment
     # Whatever's left of this row's G1 (arrived, raced, or -- via the
     # safety net -- still short) gets cut off and drained the same way
     # JogController.end_jog cleans up a continuous jog: quick_stop first
@@ -152,13 +208,16 @@ def scan_topography(
     y_max: int,
     row_step: int,
     feed: int | None = None,
+    samples_per_row: int = 10,
     before_sample=None,
     on_row_start=None,
     on_sample=None,
 ):
     """Boustrophedon (snake) raster over raw motor [x_min, x_max] x
     [y_min, y_max] microsteps: each row is one continuous sweep (see
-    _sweep_row), Y stepped by `row_step` between rows.
+    _sweep_row), Y stepped by `row_step` between rows, sampling the sensor
+    `samples_per_row` times per row (spaced by wall-clock time, not
+    position -- see _sweep_row for why).
 
     Returns a flat list of (x_usteps, y_usteps, distance_mm_or_None)
     samples in collection order -- irregularly spaced along X (real
@@ -171,6 +230,15 @@ def scan_topography(
 
     ys = _irange(y_min, y_max, row_step)
     tolerance = max(2, (x_max - x_min) // 500)
+
+    # Estimate row travel time from the configured/overridden feed, so
+    # samples_per_row spreads out over roughly the whole row instead of
+    # bunching at one end -- floored at _M412_MIN_INTERVAL_S since M412
+    # can't return any faster than that regardless of the target spacing.
+    feed_effective = feed or robot.axes[AxisId.X].config.travel_speed
+    row_duration_s = (x_max - x_min) / feed_effective if feed_effective else 0.0
+    sample_interval_s = max(_M412_MIN_INTERVAL_S, row_duration_s / max(1, samples_per_row))
+
     samples = []
     forward = True
     for row_idx, y in enumerate(ys):
@@ -190,7 +258,7 @@ def scan_topography(
             if on_sample:
                 on_sample(row_idx, x, y_, distance)
 
-        samples.extend(_sweep_row(robot, sensor, x_end, y, feed, tolerance,
+        samples.extend(_sweep_row(robot, x_end, y, feed, tolerance, sample_interval_s,
                                   before_sample=before, on_sample=sample))
         forward = not forward
     return samples
@@ -332,8 +400,16 @@ def main() -> None:
     parser.add_argument(
         "--feed",
         type=int,
-        help="row sweep speed, microsteps/sec; omit to use the axis's configured travel speed -- "
-        "slower means denser sampling along a row, since polls happen at roughly a fixed rate",
+        help="row sweep speed, microsteps/sec; omit to use the axis's configured travel speed",
+    )
+    parser.add_argument(
+        "--samples-per-row",
+        type=int,
+        default=10,
+        help="ultrasonic (M412) queries per row, spaced by wall-clock time. M412 fully pauses "
+        "motion for ~0.3s+ every time it's called (see module docstring) -- fewer samples means "
+        "longer uninterrupted stretches of travel between pauses, more means denser data at the "
+        "cost of a choppier sweep",
     )
     parser.add_argument("--out", default="scan_topography.csv", help="CSV output path")
     parser.add_argument("--png", help="optional PNG heatmap output path (needs matplotlib)")
@@ -360,10 +436,19 @@ def main() -> None:
     y_max = args.y_max_steps if args.y_max_steps is not None else robot.axes[AxisId.Y].config.endstop_limit
 
     ys = _irange(y_min, y_max, args.row_step_microsteps)
+    feed_effective = args.feed or robot.axes[AxisId.X].config.travel_speed
+    row_duration_s = (x_max - x_min) / feed_effective if feed_effective else 0.0
     print(
-        f"Planned scan: {len(ys)} continuous row sweeps, X[{x_min}, {x_max}] each, "
-        f"Y[{y_min}, {y_max}] @ {args.row_step_microsteps} step"
+        f"Planned scan: {len(ys)} continuous row sweeps, X[{x_min}, {x_max}] each "
+        f"(~{row_duration_s:.1f}s/row @ feed {feed_effective:g}), Y[{y_min}, {y_max}] "
+        f"@ {args.row_step_microsteps} step, {args.samples_per_row} samples/row"
     )
+    if row_duration_s < args.samples_per_row * _M412_MIN_INTERVAL_S:
+        print(
+            f"  note: a row only takes ~{row_duration_s:.1f}s but {args.samples_per_row} samples "
+            f"need >={args.samples_per_row * _M412_MIN_INTERVAL_S:.1f}s of M412 time alone -- "
+            "the sweep will be mostly pauses. Lower --samples-per-row or --feed to fix."
+        )
     if args.dry_run:
         return
 
@@ -390,6 +475,7 @@ def main() -> None:
             y_max=y_max,
             row_step=args.row_step_microsteps,
             feed=args.feed,
+            samples_per_row=args.samples_per_row,
             before_sample=before_sample,
             on_row_start=on_row_start,
             on_sample=on_sample,
