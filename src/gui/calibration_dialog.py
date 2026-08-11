@@ -23,6 +23,13 @@ capture) finds that mount's nozzle-reference z_zero the same way
 JogController.capture_z_zero / DeckCalibration.touch_off_z_zero do, just
 walked through explicitly here since there may be no calibration yet for
 those to build on.
+
+"Save calibration..." persists to a *sidecar* file next to whatever config
+was used to connect (see config.loader.calibration_sidecar_path) rather
+than the config itself, so it never strips that file's own comments -- and
+connecting again with that same config picks the sidecar back up
+automatically (config.loader.load_calibration_override), so a recalibration
+survives a reconnect without the operator redoing anything.
 """
 from __future__ import annotations
 
@@ -31,6 +38,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLa
                              QScrollArea, QWidget, QDialogButtonBox, QMessageBox, QFileDialog)
 
 from ..core import AxisId, MountSide
+from ..config.loader import calibration_sidecar_path
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration
 from ..motion.mounts import MOUNT_OFFSET_MM
 
@@ -49,9 +57,10 @@ def _mark_sort_key(name: str):
 
 
 class CalibrationDialog(QDialog):
-    def __init__(self, robot, jog=None, parent=None):
+    def __init__(self, robot, jog=None, parent=None, config_path: str | None = None):
         super().__init__(parent)
         self.robot = robot
+        self.config_path = config_path
         self.setWindowTitle("Calibrate Deck")
         self.resize(680, 620)
 
@@ -123,18 +132,24 @@ class CalibrationDialog(QDialog):
             self._z_zero[side] = state
         root.addWidget(z_group)
 
-        note = QLabel("Jog the reference mount's tip (or a dedicated calibration probe) down onto a "
-                      "known-flat reference surface before capturing its Z touch-off. For XY, jog the "
-                      "same mount to touch each mark you want to use, capture its motor position, and "
-                      "make sure its checkbox is ticked -- at least 3 captured, checked points are "
-                      "required before you can apply or save.")
+        note_text = ("Jog the reference mount's tip (or a dedicated calibration probe) down onto a "
+                    "known-flat reference surface before capturing its Z touch-off. For XY, jog the "
+                    "same mount to touch each mark you want to use, capture its motor position, and "
+                    "make sure its checkbox is ticked -- at least 3 captured, checked points are "
+                    "required before you can apply or save. \"Apply\" only affects this session; "
+                    "\"Save calibration...\" persists it")
+        note_text += (f" to {calibration_sidecar_path(self.config_path).name} next to the loaded "
+                      "config, so it's picked up automatically the next time you connect with it."
+                      if self.config_path else
+                      " to a file -- connect with a config to have it picked up automatically next time.")
+        note = QLabel(note_text)
         note.setWordWrap(True)
         note.setProperty("class", "eyebrow")
         root.addWidget(note)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Apply | QDialogButtonBox.Close)
         buttons.button(QDialogButtonBox.Apply).clicked.connect(self._apply)
-        save_btn = buttons.addButton("Save calibration to file…", QDialogButtonBox.ActionRole)
+        save_btn = buttons.addButton("Save calibration…", QDialogButtonBox.ActionRole)
         save_btn.clicked.connect(self._save_to_file)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
@@ -223,7 +238,15 @@ class CalibrationDialog(QDialog):
         deck_pts, motor_pts = self._reference_points()
         if deck_pts is None:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save calibration", "calibration.yaml",
+        # Default to the sidecar path for whatever config we connected
+        # with, so accepting the dialog's default is enough to make this
+        # calibration reload automatically next connect (see
+        # config.loader.calibration_sidecar_path / load_calibration_override
+        # and this class's docstring) -- falls back to a bare filename if
+        # there's no known config (e.g. connected without one).
+        default_path = (str(calibration_sidecar_path(self.config_path))
+                        if self.config_path else "calibration.yaml")
+        path, _ = QFileDialog.getSaveFileName(self, "Save calibration", default_path,
                                               "YAML files (*.yaml *.yml)")
         if not path:
             return
@@ -244,5 +267,12 @@ class CalibrationDialog(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
             return
-        QMessageBox.information(self, "Calibration saved", f"Wrote {path}\n\n"
-                                "Load it later via the connection bar's config path field.")
+        from pathlib import Path
+        is_sidecar = (self.config_path is not None
+                     and Path(path) == calibration_sidecar_path(self.config_path))
+        detail = ("It will be picked up automatically next time you connect with this config."
+                  if is_sidecar else
+                  "Load it later via the connection bar's config path field, or move/rename it to "
+                  f"{calibration_sidecar_path(self.config_path).name if self.config_path else '<config>.calibration.yaml'} "
+                  "next to your robot config to have it load automatically.")
+        QMessageBox.information(self, "Calibration saved", f"Wrote {path}\n\n{detail}")

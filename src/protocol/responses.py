@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+
 from ..core import AxisId
 
 
@@ -22,6 +24,7 @@ class DistanceResult:
     """One reading per M412 slot -- see commands.MeasureDistance. Each is
     ``None`` when that slot echoed no signal, was out of range, or simply
     wasn't queried in the command that produced this result."""
+
     x_mm: float | None
     y_mm: float | None
     z_mm: float | None
@@ -30,7 +33,7 @@ class DistanceResult:
 def extract_reason(status_line: str) -> str | None:
     """'NOT ok (axis Z not homed)' -> 'axis Z not homed'."""
     if "(" in status_line and ")" in status_line:
-        return status_line[status_line.index("(") + 1: status_line.rindex(")")]
+        return status_line[status_line.index("(") + 1 : status_line.rindex(")")]
     return None
 
 
@@ -57,7 +60,7 @@ def parse_probe(info: list[str]) -> ProbeResult | None:
     for line in info:
         s = line.strip()
         if s.startswith("[PRB:") and s.endswith("]"):
-            coords, _, flag = s[len("[PRB:"):-1].rpartition(":")
+            coords, _, flag = s[len("[PRB:") : -1].rpartition(":")
             xs = [int(v) for v in coords.split(",")]
             axes = [AxisId.X, AxisId.Y, AxisId.A]
             return ProbeResult(
@@ -74,7 +77,7 @@ def parse_distance(info: list[str]) -> DistanceResult | None:
     for line in info:
         s = line.strip()
         if s.startswith("[RNG:") and s.endswith("]"):
-            values = [float(v) for v in s[len("[RNG:"):-1].split(",")]
+            values = [float(v) for v in s[len("[RNG:") : -1].split(",")]
             x, y, z = (values + [-1.0, -1.0, -1.0])[:3]
             return DistanceResult(
                 x_mm=x if x >= 0 else None,

@@ -43,6 +43,8 @@ logs/
 *.run.log
 .dev_ports
 *.device_cfg
+*.calibration.yaml
+*.calibration.yml
 .vscode/
 .idea/
 .DS_Store

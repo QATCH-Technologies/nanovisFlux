@@ -7,6 +7,8 @@ lazily, so importing this module never requires it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..core import AxisId, MountSide
 from ..deck import Deck, Labware, Slot, SlotObstacle, Corner, CalibrationMark, inset_corner_point
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
@@ -23,6 +25,33 @@ def load_config(path: str) -> dict:
 
     with open(path, "r") as fh:
         return yaml.safe_load(fh)
+
+
+def calibration_sidecar_path(config_path) -> Path:
+    """Where a calibration persisted from the GUI's "Save calibration..."
+    button (see gui/calibration_dialog.py) lives for ``config_path`` --
+    e.g. "robot.yaml" -> "robot.calibration.yaml", sitting right next to
+    it. Deliberately a separate file rather than writing back into the
+    config itself: config files like robot.example.yaml are hand-authored
+    and heavily commented, and round-tripping one through yaml.safe_load /
+    safe_dump to patch in a new calibration would silently strip every
+    comment. Connecting with the same config_path picks this sidecar up
+    automatically (see load_calibration_override) if one exists, so a
+    recalibration persists across reconnects without ever touching the
+    original file."""
+    p = Path(config_path)
+    return p.with_suffix(f".calibration{p.suffix}")
+
+
+def load_calibration_override(config_path) -> dict | None:
+    """The ``calibration:`` section from config_path's sidecar file (see
+    calibration_sidecar_path), or None if there isn't one yet -- the normal
+    case before the deck has ever been calibrated from the GUI."""
+    sidecar = calibration_sidecar_path(config_path)
+    if not sidecar.exists():
+        return None
+    cfg = load_config(str(sidecar))
+    return cfg.get("calibration", cfg)
 
 
 # -- individual sections ----------------------------------------------------
@@ -172,6 +201,13 @@ def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
 # -- top level --------------------------------------------------------------
 def load_robot(path: str) -> Robot:
     cfg = load_config(path)
+    # A calibration persisted from the GUI (see calibration_sidecar_path)
+    # always wins over whatever the config file itself says -- the whole
+    # point is that recalibrating from the dialog, then reconnecting with
+    # this same config, never needs the operator to redo it.
+    override = load_calibration_override(path)
+    if override is not None:
+        cfg = {**cfg, "calibration": override}
     transport = build_transport(cfg.get("transport", {"type": "fake"}))
     calibration = build_calibration(cfg["calibration"]) if "calibration" in cfg else None
     deck = build_deck(cfg["deck"]) if "deck" in cfg else None

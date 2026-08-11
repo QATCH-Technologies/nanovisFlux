@@ -22,18 +22,20 @@ heatmap/PNG output can be exercised end-to-end. Pass --port for real
 hardware, or --config to load a full robot (calibration + a configured rear
 ultrasonic mount -- see src/config/robot.example.yaml).
 """
+
 from __future__ import annotations
+
 import argparse
 import csv
 import math
 import time
 
-from src.core import MountSide
-from src.transport import FakeTransport, SerialTransport
-from src.geometry import DeckCalibration, DeckPoint, AffineTransform2D, AxisScale
-from src.tools import UltrasonicSensor
-from src.robot import Robot
 from src.config.loader import load_robot
+from src.core import MountSide
+from src.geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
+from src.robot import Robot
+from src.tools import UltrasonicSensor
+from src.transport import FakeTransport, SerialTransport
 
 _ASCII_RAMP = " .:-=+*#%@"
 
@@ -57,9 +59,19 @@ def synthetic_height_mm(x: float, y: float) -> float:
     return max(20.0, base - bump)
 
 
-def scan_topography(robot: Robot, *, x_min: float, x_max: float, y_min: float, y_max: float,
-                    step_mm: float, feed: int | None = None, settle_s: float = 0.05,
-                    before_read=None, on_point=None):
+def scan_topography(
+    robot: Robot,
+    *,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+    step_mm: float,
+    feed: int | None = None,
+    settle_s: float = 0.05,
+    before_read=None,
+    on_point=None,
+):
     """Boustrophedon (snake) raster scan over [x_min, x_max] x [y_min, y_max].
 
     Returns (grid, xs, ys) where grid[row][col] is the distance_mm (or None
@@ -111,17 +123,22 @@ def render_ascii(grid: list, xs: list, ys: list) -> str:
     span = (hi - lo) or 1.0
     lines = []
     for row in reversed(grid):  # print with y increasing upward
-        chars = ["?" if v is None else _ASCII_RAMP[int((v - lo) / span * (len(_ASCII_RAMP) - 1))]
-                for v in row]
+        chars = [
+            "?" if v is None else _ASCII_RAMP[int((v - lo) / span * (len(_ASCII_RAMP) - 1))]
+            for v in row
+        ]
         lines.append("".join(chars))
-    lines.append(f"(range {lo:.1f}-{hi:.1f} mm; closer = '{_ASCII_RAMP[0]}', farther = '{_ASCII_RAMP[-1]}'; "
-                 f"'?' = no echo)")
+    lines.append(
+        f"(range {lo:.1f}-{hi:.1f} mm; closer = '{_ASCII_RAMP[0]}', farther = '{_ASCII_RAMP[-1]}'; "
+        f"'?' = no echo)"
+    )
     return "\n".join(lines)
 
 
 def save_png(path: str, grid: list, xs: list, ys: list) -> bool:
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import numpy as np
@@ -129,8 +146,9 @@ def save_png(path: str, grid: list, xs: list, ys: list) -> bool:
         return False
     arr = np.array([[float("nan") if v is None else v for v in row] for row in grid])
     fig, ax = plt.subplots()
-    im = ax.imshow(arr, origin="lower", extent=(xs[0], xs[-1], ys[0], ys[-1]),
-                   cmap="viridis", aspect="auto")
+    im = ax.imshow(
+        arr, origin="lower", extent=(xs[0], xs[-1], ys[0], ys[-1]), cmap="viridis", aspect="auto"
+    )
     ax.set_xlabel("X (mm)")
     ax.set_ylabel("Y (mm)")
     ax.set_title("Deck topography (ultrasonic range, mm)")
@@ -154,10 +172,11 @@ def build_robot(port: str | None, config: str | None):
     # Only the XY affine actually matters for this script.
     calibration = DeckCalibration(
         xy=AffineTransform2D.from_point_pairs(
-            [(0, 0), (100, 0), (0, 100)],
-            [(0, 0), (21320, 0), (0, 14478)]),
+            [(0, 0), (100, 0), (0, 100)], [(0, 0), (21320, 0), (0, 14478)]
+        ),
         z_scale=AxisScale(steps_per_mm=25.0),
-        z_zero={MountSide.LEFT: 144000, MountSide.RIGHT: 144000})
+        z_zero={MountSide.LEFT: 144000, MountSide.RIGHT: 144000},
+    )
 
     robot = Robot(transport, calibration=calibration, travel_z_mm=120)
     robot.attach(MountSide.REAR, UltrasonicSensor())
@@ -165,34 +184,61 @@ def build_robot(port: str | None, config: str | None):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport")
-    parser.add_argument("--config", help="robot config YAML to load (calibration + rear ultrasonic mount); "
-                                        "omit for a bare placeholder-calibration robot")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport"
+    )
+    parser.add_argument(
+        "--config",
+        help="robot config YAML to load (calibration + rear ultrasonic mount); "
+        "omit for a bare placeholder-calibration robot",
+    )
     parser.add_argument("--x-min", type=float, default=0.0)
     parser.add_argument("--x-max", type=float, default=360.0)
     parser.add_argument("--y-min", type=float, default=0.0)
     parser.add_argument("--y-max", type=float, default=310.0)
     parser.add_argument("--step-mm", type=float, default=20.0, help="grid spacing between readings")
-    parser.add_argument("--feed", type=int, help="travel feed rate, microsteps/sec, between points; omit for rapid (G0) moves")
-    parser.add_argument("--settle-s", type=float, default=0.05, help="pause after each move before reading, to let vibration settle")
+    parser.add_argument(
+        "--feed",
+        type=int,
+        help="travel feed rate, microsteps/sec, between points; omit for rapid (G0) moves",
+    )
+    parser.add_argument(
+        "--settle-s",
+        type=float,
+        default=0.05,
+        help="pause after each move before reading, to let vibration settle",
+    )
     parser.add_argument("--out", default="scan_topography.csv", help="CSV output path")
     parser.add_argument("--png", help="optional PNG heatmap output path (needs matplotlib)")
-    parser.add_argument("--skip-home", action="store_true", help="skip homing before the scan (only if already homed)")
-    parser.add_argument("--dry-run", action="store_true", help="print the planned grid and exit without connecting")
+    parser.add_argument(
+        "--skip-home",
+        action="store_true",
+        help="skip homing before the scan (only if already homed)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print the planned grid and exit without connecting"
+    )
     args = parser.parse_args()
 
-    xs, ys = _frange(args.x_min, args.x_max, args.step_mm), _frange(args.y_min, args.y_max, args.step_mm)
-    print(f"Planned scan: {len(xs)} x {len(ys)} = {len(xs) * len(ys)} points over "
-         f"x[{args.x_min}, {args.x_max}] y[{args.y_min}, {args.y_max}] @ {args.step_mm} mm")
+    xs, ys = _frange(args.x_min, args.x_max, args.step_mm), _frange(
+        args.y_min, args.y_max, args.step_mm
+    )
+    print(
+        f"Planned scan: {len(xs)} x {len(ys)} = {len(xs) * len(ys)} points over "
+        f"x[{args.x_min}, {args.x_max}] y[{args.y_min}, {args.y_max}] @ {args.step_mm} mm"
+    )
     if args.dry_run:
         return
 
     robot, fake_transport = build_robot(args.port, args.config)
     if robot.rear() is None:
-        raise SystemExit("no ultrasonic sensor attached to the rear mount -- "
-                        "attach one via --config, or see build_robot()")
+        raise SystemExit(
+            "no ultrasonic sensor attached to the rear mount -- "
+            "attach one via --config, or see build_robot()"
+        )
 
     total = len(xs) * len(ys)
 
@@ -212,9 +258,17 @@ def main() -> None:
         robot.raise_z(MountSide.RIGHT)
 
         grid, xs, ys = scan_topography(
-            robot, x_min=args.x_min, x_max=args.x_max, y_min=args.y_min, y_max=args.y_max,
-            step_mm=args.step_mm, feed=args.feed, settle_s=args.settle_s,
-            before_read=before_read, on_point=on_point)
+            robot,
+            x_min=args.x_min,
+            x_max=args.x_max,
+            y_min=args.y_min,
+            y_max=args.y_max,
+            step_mm=args.step_mm,
+            feed=args.feed,
+            settle_s=args.settle_s,
+            before_read=before_read,
+            on_point=on_point,
+        )
 
     write_csv(args.out, grid, xs, ys)
     print(f"\nWrote {args.out}")

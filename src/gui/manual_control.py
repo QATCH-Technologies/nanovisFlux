@@ -14,11 +14,15 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-                             QPushButton, QButtonGroup, QFrame, QStackedWidget)
+                             QPushButton, QButtonGroup, QFrame, QStackedWidget,
+                             QDoubleSpinBox, QCheckBox, QFormLayout)
 
 from ..core import AxisId, MountSide
+from ..geometry.coordinates import DeckPoint
 from ..geometry.units import default_axis_scale
 from .gamepad_input import GamepadInput
+
+_GOTO_MM_RANGE = (-100.0, 1000.0)   # generous bound around a typical deck's extent
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
@@ -121,6 +125,7 @@ class ManualControlPanel(QWidget):
         root.addWidget(self.content_stack)
 
         root.addWidget(self._build_position_box())
+        root.addWidget(self._build_goto_box())
         root.addLayout(self._build_bottom_buttons())
 
         legend = QLabel("keyboard: arrows = X/Y · PgUp/PgDn = Z · [ ] = plunger · "
@@ -393,6 +398,42 @@ class ManualControlPanel(QWidget):
         pos_layout.addLayout(pos_grid)
         return pos_box
 
+    def _build_goto_box(self) -> QFrame:
+        """Immediate "go to deck mm" for the active mount (see the header's
+        mount selector) -- a blocking robot.safe_move_to/move_to call fired
+        straight from the button handler, same as the Home button
+        (MainWindow._on_home_requested): a single manual move is treated as
+        an acceptable one-off block on the GUI thread, unlike a full
+        multi-step Routine (see routine_runner.py's own docstring for why
+        *that* gets a worker QThread instead)."""
+        goto_box = QFrame()
+        goto_box.setProperty("class", "card")
+        goto_layout = QVBoxLayout(goto_box)
+        goto_title = QLabel("GO TO (deck mm)")
+        goto_title.setProperty("class", "eyebrow")
+        goto_layout.addWidget(goto_title)
+
+        form = QFormLayout()
+        self.goto_spins: dict = {}
+        for label in ("X", "Y", "Z"):
+            spin = QDoubleSpinBox()
+            spin.setRange(*_GOTO_MM_RANGE)
+            spin.setDecimals(2)
+            spin.setSuffix(" mm")
+            form.addRow(label, spin)
+            self.goto_spins[label] = spin
+        goto_layout.addLayout(form)
+
+        bottom_row = QHBoxLayout()
+        self.goto_safe_check = QCheckBox("safe move (raise / cross / descend)")
+        self.goto_safe_check.setChecked(True)
+        bottom_row.addWidget(self.goto_safe_check, 1)
+        self.btn_goto = QPushButton("Go")
+        self.btn_goto.clicked.connect(self._go_to_point)
+        bottom_row.addWidget(self.btn_goto)
+        goto_layout.addLayout(bottom_row)
+        return goto_box
+
     def _build_bottom_buttons(self) -> QVBoxLayout:
         rows = QVBoxLayout()
         row1 = QHBoxLayout()
@@ -464,6 +505,10 @@ class ManualControlPanel(QWidget):
         self.btn_cycle_mount.setEnabled(connected and not locked)
         self.btn_y.setEnabled(connected and not locked)
         self.btn_home.setEnabled(connected and not locked)
+        self.btn_goto.setEnabled(connected and not locked)
+        for spin in self.goto_spins.values():
+            spin.setEnabled(connected and not locked)
+        self.goto_safe_check.setEnabled(connected and not locked)
         self.btn_stop.setEnabled(connected)
         self.btn_esc.setEnabled(connected)
         self.btn_a.setEnabled(connected)
@@ -503,6 +548,22 @@ class ManualControlPanel(QWidget):
         except Exception as exc:
             if self.tracer:
                 self.tracer.note(f"zero Z failed: {exc}")
+
+    def _go_to_point(self) -> None:
+        if self.robot is None or self.jog is None or self._input_locked:
+            return
+        point = DeckPoint(self.goto_spins["X"].value(), self.goto_spins["Y"].value(),
+                          self.goto_spins["Z"].value())
+        side = self.jog.side
+        safe = self.goto_safe_check.isChecked()
+        try:
+            (self.robot.safe_move_to if safe else self.robot.move_to)(point, side)
+            if self.tracer:
+                self.tracer.note(f"moved {side.value} to ({point.x:g}, {point.y:g}, "
+                                 f"{point.z:g}) mm{' (safe)' if safe else ''}")
+        except Exception as exc:
+            if self.tracer:
+                self.tracer.note(f"go-to failed: {exc}")
 
     def _read_sensor(self) -> None:
         if self.robot is None:

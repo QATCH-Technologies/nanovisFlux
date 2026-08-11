@@ -26,6 +26,7 @@ from .trace import CommandTracer
 from .robot_factory import build_robot
 from .calibration_dialog import CalibrationDialog
 from .mounts_dialog import MountsDialog
+from ..config.loader import load_calibration_override
 
 _HOMING_ANIM_INTERVAL_MS = 40  # 25 Hz -- smooth enough for a multi-second sweep
 
@@ -39,6 +40,7 @@ class MainWindow(QMainWindow):
         self.robot = None
         self.jog: JogController | None = None
         self.tracer: CommandTracer | None = None
+        self._config_path: str | None = None   # for the calibration dialog's persist-to-sidecar
         self.routine = Routine(name="untitled routine")
 
         central = QWidget()
@@ -191,6 +193,15 @@ class MainWindow(QMainWindow):
                 import yaml
                 with open(opts["config_path"], "r") as fh:
                     cfg = yaml.safe_load(fh)
+                # A calibration persisted from a previous "Save calibration"
+                # (see calibration_dialog.py / config.loader's
+                # calibration_sidecar_path) always wins over the config
+                # file's own calibration: -- that's the whole point of
+                # persisting it, so recalibrating once means never redoing
+                # it on a later connect with this same config.
+                override = load_calibration_override(opts["config_path"])
+                if override is not None:
+                    cfg = {**cfg, "calibration": override}
 
             if opts["mode"] == "real":
                 if not opts["port"]:
@@ -207,6 +218,7 @@ class MainWindow(QMainWindow):
             return
 
         self.robot = robot
+        self._config_path = opts.get("config_path")
         self.tracer = CommandTracer(robot)
         self.tracer.bus.event.connect(self.console.append_trace)
         self.jog = JogController(robot)
@@ -255,6 +267,7 @@ class MainWindow(QMainWindow):
         self.robot = None
         self.jog = None
         self.tracer = None
+        self._config_path = None
         self.deck_view.set_robot(None)
         self.btn_mounts.setEnabled(False)
         self.btn_calibrate.setEnabled(False)
@@ -533,7 +546,7 @@ class MainWindow(QMainWindow):
     def _open_calibration_dialog(self) -> None:
         if self.robot is None:
             return
-        CalibrationDialog(self.robot, self.jog, self).exec_()
+        CalibrationDialog(self.robot, self.jog, self, config_path=self._config_path).exec_()
 
     def _open_mounts_dialog(self) -> None:
         if self.robot is None:
