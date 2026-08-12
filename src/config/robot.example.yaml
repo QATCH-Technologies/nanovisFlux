@@ -220,36 +220,48 @@ labware:
   # Used by scripts/calibrate_pipette.py's default --aspirate-slot/
   # --dispense-slot -- aspirate always from A1 of one, dispense (onto a
   # scale's vessel) always at A1 of the other.
+  #
+  # Single-well rectangular reservoir plate (measured, not a catalog part):
+  # outer footprint 123 x 80.7 x 19.7mm (l/w/h), one centered rectangular
+  # well 120.9 x 78.5 x 18.6mm (l/w/h) -- a uniform 1.1mm wall all around
+  # ((123-120.9)/2 = 1.05, (80.7-78.5)/2 = 1.1) and the same 1.1mm for the
+  # floor (19.7 plate height - 18.6 well depth), consistent with one molded
+  # wall thickness throughout. "length" (123/120.9, the longer figure) is
+  # the deck X axis, "width" (80.7/78.5) is Y, matching every other plate
+  # in this file (e.g. footprint_mm=(127.76, 85.48) elsewhere) and the
+  # slots' own [X, Y] size ordering. Single well "A1" centered in the
+  # plate, x=123/2=61.5, y=80.7/2=40.35 -- ASSUMES the plate itself sits
+  # flush with the slot's front-left corner (no measured centering gap is
+  # known, so this doesn't invent one, unlike every other plate here which
+  # instead uses a directly-measured A1 offset); adjust x/y below if the
+  # plate actually sits centered (or otherwise offset) within the slot's
+  # 127.85 x 85.9mm cavity. z=19.7 (plate height) since well top = the
+  # plate's own top surface. max_volume_ul = 120.9 * 78.5 * 18.6mm^3, the
+  # full-to-the-brim theoretical capacity, not a practical fill line.
   - name: aspirate_plate
     slot: "7"
     well_geometry:
-      shape: circular
-      diameter_mm: 6.9
-      depth_mm: 10.9
-      bottom: round
+      shape: rectangular
+      width_mm: 120.9
+      length_mm: 78.5
+      depth_mm: 18.6
+      bottom: flat
       bottom_clearance_mm: 1.5
-      max_volume_ul: 360
-    grid:
-      rows: 8
-      cols: 12
-      origin: { x: 14.4, y: 11.2, z: 14.4 }
-      row_spacing_mm: 9
-      col_spacing_mm: 9
+      max_volume_ul: 176526
+    wells:
+      A1: { x: 61.5, y: 40.35, z: 19.7 }
   - name: dispense_plate
     slot: "8"
     well_geometry:
-      shape: circular
-      diameter_mm: 6.9
-      depth_mm: 10.9
-      bottom: round
+      shape: rectangular
+      width_mm: 120.9
+      length_mm: 78.5
+      depth_mm: 18.6
+      bottom: flat
       bottom_clearance_mm: 1.5
-      max_volume_ul: 360
-    grid:
-      rows: 8
-      cols: 12
-      origin: { x: 14.4, y: 11.2, z: 14.4 }
-      row_spacing_mm: 9
-      col_spacing_mm: 9
+      max_volume_ul: 176526
+    wells:
+      A1: { x: 61.5, y: 40.35, z: 19.7 }
 
 # Tools on the mounts.
 mounts:
