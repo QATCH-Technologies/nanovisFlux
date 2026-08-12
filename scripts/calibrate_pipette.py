@@ -154,13 +154,25 @@ def _labware_on_slot(robot, slot_name: str):
     )
 
 
-def _log_at(robot, label: str, loc: WellLocation) -> None:
-    """Logs which labware/well and resolved deck-mm point a move targeted --
-    the routine-based equivalent of reading back raw motor microsteps: lets
-    a run's log make it undeniable that source and destination really are
-    two distinct places, not just trusted blindly."""
+def _log_at(robot, side: MountSide, label: str, loc: WellLocation) -> None:
+    """Logs which labware/well and resolved deck-mm point a move targeted,
+    the RAW MOTOR target that deck-mm point computes to, and the ACTUAL
+    measured raw position (M114) after the move -- three separate numbers
+    on purpose: deck-mm alone can't tell you whether a calibration/tip-
+    length miscalculation put the raw target somewhere wrong, or whether
+    the move itself didn't reach a correctly-computed target."""
     pt = loc.resolve(robot)
-    logger.info(f"  at {label}: {loc.labware}:{loc.well} -> ({pt.x:.1f}, {pt.y:.1f}, {pt.z:.1f}) mm")
+    cal = robot.calibration
+    vertical = cal.vertical_axis(side)
+    computed = cal.deck_to_motor(pt, side, robot.tip_offset(side))
+    actual = robot.controller.report_position()
+    logger.info(
+        f"  at {label}: {loc.labware}:{loc.well} -> ({pt.x:.1f}, {pt.y:.1f}, {pt.z:.1f}) mm  |  "
+        f"computed raw X={computed.get(AxisId.X)} Y={computed.get(AxisId.Y)} "
+        f"{vertical.letter if vertical else '?'}={computed.get(vertical)}  |  "
+        f"actual raw X={actual.get(AxisId.X)} Y={actual.get(AxisId.Y)} "
+        f"{vertical.letter if vertical else '?'}={actual.get(vertical)}"
+    )
 
 
 def run_phase_a(
@@ -197,11 +209,11 @@ def run_phase_a(
             )
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 1. empty
             robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)  # 2. to source
-            _log_at(robot, "source (aspirate)", aspirate_loc)
+            _log_at(robot, side, "source (aspirate)", aspirate_loc)
             move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
             time.sleep(dwell_s)  # hold at the bottom, submerged, so the aspirate actually draws up
             robot.safe_move_to(dispense_loc.resolve(robot), side, feed=feed, verify=True)  # 4. to scale
-            _log_at(robot, "scale (dispense)", dispense_loc)
+            _log_at(robot, side, "scale (dispense)", dispense_loc)
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 5. full purge
             time.sleep(dwell_s)  # hold before lifting so the dispensed droplet fully releases
             robot.raise_z(side, verify=True)  # 6. lift clear (travel_z_mm)
@@ -253,12 +265,12 @@ def run_phase_b(
         logger.info(f"[Phase B] replicate {rep}/{replicates}")
         move_plunger(robot, plunger_axis, bottom, plunger_max, feed)
         robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)
-        _log_at(robot, "source (aspirate)", aspirate_loc)
+        _log_at(robot, side, "source (aspirate)", aspirate_loc)
         move_plunger(robot, plunger_axis, fixed_position, plunger_max, feed)
         time.sleep(dwell_s)  # hold at the bottom, submerged, so the aspirate actually draws up
         dispense_point = dispense_loc.resolve(robot)
         robot.safe_move_to(dispense_point, side, feed=feed, verify=True)
-        _log_at(robot, "scale (dispense)", dispense_loc)
+        _log_at(robot, side, "scale (dispense)", dispense_loc)
         logger.info(
             "place/tare the vessel now -- it returns to this same spot between every step below."
         )
