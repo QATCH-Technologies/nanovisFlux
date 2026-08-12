@@ -68,8 +68,24 @@ calibration:
       - 14326
   z_scale:
     steps_per_mm: 25.0
+  # z_zero must be the TIP-INDEPENDENT nozzle reference (see
+  # DeckCalibration.deck_to_motor's own docstring: "z_zero is the nozzle-
+  # reference position... one calibration serves every tip length"), not
+  # the raw contact reading itself. On this machine the bare nozzle can't
+  # physically reach the deck -- calibration is necessarily done with a
+  # tip attached (a 300uL tip, 59mm long) -- so the raw microstep count at
+  # contact (156706) is where the TIP END touched z=0, not the nozzle.
+  # Feeding that raw value straight in as z_zero double-counts the tip
+  # length in deck_to_motor (which separately subtracts the currently-
+  # attached tip's own length), landing every Z target ~59mm too high --
+  # this was the "tip is ~7cm from the well" bug. Correct via
+  # DeckCalibration.z_zero_from_contact(156706, tip_length_mm=59.0) =
+  # 156706 + round(59.0 * 25.0 * 32) = 203906. The GUI's Manual Control
+  # "Zero Z" button (JogController.capture_z_zero -> touch_off_z_zero)
+  # already applies this conversion automatically -- prefer recapturing
+  # that way over hand-editing this number, same as the XY points above.
   z_zero:
-    left: 156706
+    left: 203906
 
 
 # Named tip geometries. length_mm shifts every Z target once a tip is on.
