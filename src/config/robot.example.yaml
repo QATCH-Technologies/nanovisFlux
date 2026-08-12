@@ -51,15 +51,26 @@ axes:
 # the geometry correction, since it only shifts *where* the 100mm-apart
 # example points sit, not the motor microsteps found for them.
 calibration:
-  # Option A: three deck points (mm) and the microsteps found for them.
   points:
-    deck:  [ {x: 415.25, y: 402.5}, {x: 315.25, y: 402.5}, {x: 415.25, y: 302.5} ]
-    motor: [ [0, 0],                [21320, 0],            [0, 14478] ]
-  # Option B (instead of points): affine: [a, b, tx, c, d, ty]
-  z_scale: { steps_per_mm: 25.0 }
-  z_zero:                  # nozzle-reference microsteps at deck z=0 (from probe cal)
-    left: 144000
-    right: 144000
+    deck:
+    - x: 28.25
+      y: 9.0
+    - x: 28.25
+      y: 266.9
+    - x: 406.1
+      y: 266.9
+    motor:
+    - - 60409
+      - 54000
+    - - 60460
+      - 14043
+    - - 1401
+      - 14326
+  z_scale:
+    steps_per_mm: 25.0
+  z_zero:
+    left: 156706
+
 
 # Named tip geometries. length_mm shifts every Z target once a tip is on.
 tips:
