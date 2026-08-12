@@ -123,11 +123,25 @@ def move_plunger(
 def raw_safe_move(
     robot, vertical_axis: AxisId, safe_z: int, x: int, y: int, z: int, feed: int | None = None
 ) -> None:
-    """Raise/cross/descend in raw motor microsteps -- mirrors
-    Robot.safe_move_to's own order (see module docstring) without needing
-    DeckCalibration: 1) vertical axis to safe_z, 2) X/Y, 3) vertical axis
-    down to z."""
-    robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)
+    """Cross/descend in raw motor microsteps -- mirrors Robot.safe_move_to's
+    own order (see module docstring) without needing DeckCalibration, but
+    only raises to safe_z first when the mount is actually BELOW it.
+
+    Home is up, so a smaller microstep count is higher/safer (same
+    convention DeckCalibration uses, which holds for raw addressing too --
+    see geometry/calibration.py). Right after homing the mount sits at 0,
+    already higher/safer than safe_z -- unconditionally "raising" to
+    safe_z there is actually a net DESCENT while still at the home X/Y
+    position, which is exactly what nearly collided with nearby labware
+    (e.g. the trash) before ever crossing away from home. Skipping the
+    raise whenever the mount is already at or above safe_z means the very
+    first move of a run crosses at the safest height it's already at
+    (home) instead of needlessly descending first; every later call still
+    raises for real, since by then the mount is genuinely down at the
+    previous aspirate/dispense depth."""
+    current = robot.controller.report_position().get(vertical_axis)
+    if current is None or current > safe_z:
+        robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)
     robot.controller.linear_move({AxisId.X: x, AxisId.Y: y}, feed=feed)
     robot.controller.linear_move({vertical_axis: z}, feed=feed)
 
