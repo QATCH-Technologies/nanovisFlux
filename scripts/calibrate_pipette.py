@@ -25,16 +25,28 @@ direction's error you're looking at:
   cumulative), so Phase A must run first (or be supplied via
   --aspirate-from a prior result) before Phase B can run.
 
-Positioning is entirely in RAW MOTOR MICROSTEPS, not deck millimetres --
-this procedure doesn't need (and doesn't touch) DeckCalibration, same
-reasoning as scan_deck_topography.py. --aspirate-x/y/z and
---dispense-x/y/z are the two fixed (X, Y, Z) positions -- over the source
-well and over the scale's vessel, respectively -- and --safe-z is the
-raised Z used both to cross between them (raise/cross/descend, mirroring
-Robot.safe_move_to's own order but in raw steps -- see raw_safe_move) and,
-after every dispense, to lift clear so the operator can physically remove
-the vessel to weigh it (the "raise again in between dispenses" step) --
-this codebase has no integrated scale, so mass is entered interactively
+GANTRY MOTION goes through the same deck-calibrated, well-addressed
+routine machinery as the rest of the app (src.routines.WellLocation +
+Robot.safe_move_to/raise_z/move_vertical_to) -- --aspirate-slot/
+--dispense-slot name which deck slots hold the source and destination
+labware (7 and 8 by default), and --aspirate-well/--dispense-well pick a
+well on each (A1 by default). This needs the config's deck to actually be
+calibrated (a real `calibration:` section) and to have labware loaded on
+both slots -- see src/config/robot.example.yaml's `labware:` section for
+the shape. Every move is safe by construction (Robot.safe_move_to always
+raises to the mount's travel_z_mm clearance height before crossing, and
+only descends once already over the target XY -- the same primitive the
+GUI's manual "Go To" and every routine step already use, not a bespoke
+raw-coordinate implementation with its own edge cases to re-discover).
+
+The ONE thing that stays in raw motor microsteps is the plunger (B on the
+left mount, C on the right) -- that conversion is literally what this
+script is calibrating, so it is deliberately never routed through
+Pipette.aspirate/dispense (which would use the PlungerModel/
+PlungerCalibration being measured to decide the very microsteps this
+script needs to control directly and precisely).
+
+This codebase has no integrated scale, so mass is entered interactively
 after each weighing. Pass --simulate to generate synthetic readings
 instead (deliberately different, mildly nonlinear "true" curves for
 aspirate vs. dispense) -- lets the whole two-phase flow, the YAML output,
@@ -58,6 +70,7 @@ from loguru import logger
 
 from src.config.loader import load_config, load_robot
 from src.core import AxisId, MountSide
+from src.routines import WellLocation
 from src.tools import PlungerCalibration, TipGeometry
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
@@ -120,80 +133,45 @@ def move_plunger(
     robot.controller.linear_move({axis: target}, feed=feed)
 
 
-def raw_safe_move(
-    robot,
-    vertical_axis: AxisId,
-    safe_z: int,
-    x: int,
-    y: int,
-    z: int,
-    feed: int | None = None,
-    *,
-    raise_first: bool = True,
-) -> None:
-    """Raise/cross/descend in raw motor microsteps -- mirrors
-    Robot.safe_move_to's own order (see module docstring) without needing
-    DeckCalibration: 1) vertical axis to safe_z (unless raise_first is
-    False), 2) X/Y, 3) vertical axis down to z. Lifting clear on the
-    DEPARTURE side before crossing, and only descending once already at
-    the arrival X/Y, is what keeps the tip from dragging through or into
-    whatever sits between the two positions (a labware wall, a container
-    rim, ...) -- so raise_first defaults True and every ordinary call
-    (aspirate<->dispense, in either direction) always genuinely raises
-    first, unconditionally.
-
-    raise_first=False exists for exactly one caller: the very first move
-    of a run, right after homing, where the mount is already at its
-    safest possible height (home) -- lowering to safe_z there, before
-    ever crossing away from the home X/Y position, is what nearly
-    collided with nearby labware (e.g. the trash) sitting right at home.
-    See run_phase_a/run_phase_b's own skip_first_raise plumbing for how
-    this is threaded through from main() -- only ever the one true first
-    move of the whole run, never a regular aspirate<->dispense leg."""
-    if raise_first:
-        robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)
-    robot.controller.linear_move({AxisId.X: x, AxisId.Y: y}, feed=feed)
-    robot.controller.linear_move({vertical_axis: z}, feed=feed)
+def _labware_on_slot(robot, slot_name: str):
+    """The Labware placed on deck slot `slot_name` -- lets --aspirate-slot/
+    --dispense-slot name a slot the way the operator thinks about the deck,
+    rather than needing to know that slot's labware's config `name:`."""
+    for lw in robot.labware.values():
+        if lw.slot is not None and lw.slot.name == slot_name:
+            return lw
+    raise SystemExit(
+        f"no labware loaded on slot {slot_name!r} -- add a labware: entry with "
+        f'slot: "{slot_name}" to the config (see src/config/robot.example.yaml)'
+    )
 
 
-def _log_position(robot, vertical_axis: AxisId, label: str) -> None:
-    """Logs the ACTUAL measured X/Y/vertical position (via M114), not just
-    the commanded target -- so a run's log makes it undeniable whether the
-    gantry really reached a distinct spot at each checkpoint, rather than
-    trusting the raw_safe_move call blindly. Added specifically because the
-    aspirate leg has no operator-facing pause (unlike the dispense leg's
-    "lifted clear -- weigh it" prompt), so it's easy to not notice it
-    happened at all."""
-    pos = robot.controller.report_position()
-    x, y, z = pos.get(AxisId.X), pos.get(AxisId.Y), pos.get(vertical_axis)
-    logger.info(f"  at {label}: X={x} Y={y} {vertical_axis.letter}={z}")
+def _log_at(robot, label: str, loc: WellLocation) -> None:
+    """Logs which labware/well and resolved deck-mm point a move targeted --
+    the routine-based equivalent of reading back raw motor microsteps: lets
+    a run's log make it undeniable that source and destination really are
+    two distinct places, not just trusted blindly."""
+    pt = loc.resolve(robot)
+    logger.info(f"  at {label}: {loc.labware}:{loc.well} -> ({pt.x:.1f}, {pt.y:.1f}, {pt.z:.1f}) mm")
 
 
 def run_phase_a(
     robot,
-    vertical_axis: AxisId,
+    side: MountSide,
     plunger_axis: AxisId,
     plunger_max: int,
     bottom: int,
     strokes: list,
-    safe_z: int,
-    aspirate_xyz: tuple[int, int, int],
-    dispense_xyz: tuple[int, int, int],
+    aspirate_loc: WellLocation,
+    dispense_loc: WellLocation,
     replicates: int,
     density: float,
     feed: int | None,
     *,
     simulate: bool,
-    skip_first_raise: bool = False,
 ) -> list:
-    """See module docstring. Returns [(bottom + stroke, volume_ul), ...].
-
-    skip_first_raise: True only when this is the very first phase to run
-    right after a real robot.home() -- see raw_safe_move's own docstring.
-    Applies to (at most) the single very first raw_safe_move call below;
-    every other call in this function always raises, unconditionally."""
+    """See module docstring. Returns [(bottom + stroke, volume_ul), ...]."""
     pairs = []
-    first_move = skip_first_raise
     for stroke in strokes:
         measurements = []
         for rep in range(1, replicates + 1):
@@ -202,15 +180,13 @@ def run_phase_a(
                 f"replicate {rep}/{replicates}"
             )
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 1. empty
-            raw_safe_move(robot, vertical_axis, safe_z, *aspirate_xyz, feed,
-                         raise_first=not first_move)  # 2. to source
-            first_move = False
-            _log_position(robot, vertical_axis, "source (aspirate)")
+            robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed)  # 2. to source
+            _log_at(robot, "source (aspirate)", aspirate_loc)
             move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
-            raw_safe_move(robot, vertical_axis, safe_z, *dispense_xyz, feed)  # 4. to scale -- always raises
-            _log_position(robot, vertical_axis, "scale (dispense)")
+            robot.safe_move_to(dispense_loc.resolve(robot), side, feed=feed)  # 4. to scale
+            _log_at(robot, "scale (dispense)", dispense_loc)
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 5. full purge
-            robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)  # 6. lift clear
+            robot.raise_z(side)  # 6. lift clear (travel_z_mm)
             logger.info(
                 "lifted clear -- remove the vessel, weigh it, and empty/replace it before continuing."
             )
@@ -229,28 +205,22 @@ def run_phase_a(
 
 def run_phase_b(
     robot,
-    vertical_axis: AxisId,
+    side: MountSide,
     plunger_axis: AxisId,
     plunger_max: int,
     bottom: int,
     max_stroke: int,
     targets: list,
-    safe_z: int,
-    aspirate_xyz: tuple[int, int, int],
-    dispense_xyz: tuple[int, int, int],
+    aspirate_loc: WellLocation,
+    dispense_loc: WellLocation,
     aspirate_calibration: PlungerCalibration,
     replicates: int,
     density: float,
     feed: int | None,
     *,
     simulate: bool,
-    skip_first_raise: bool = False,
 ) -> list:
-    """See module docstring. Returns [(target, remaining_volume_ul), ...].
-
-    skip_first_raise: True only when this is the very first phase to run
-    right after a real robot.home() -- see raw_safe_move's own docstring
-    (relevant when --phase dispense skips Phase A entirely)."""
+    """See module docstring. Returns [(target, remaining_volume_ul), ...]."""
     fixed_position = bottom + max_stroke
     total_ul = aspirate_calibration.volume_for_microsteps(fixed_position, aspirating=True)
     logger.info(
@@ -258,25 +228,22 @@ def run_phase_b(
         "(from the Phase A curve)"
     )
 
-    dispense_z = dispense_xyz[2]
     accum = {t: [] for t in targets}
-    first_move = skip_first_raise
     for rep in range(1, replicates + 1):
         logger.info(f"[Phase B] replicate {rep}/{replicates}")
         move_plunger(robot, plunger_axis, bottom, plunger_max, feed)
-        raw_safe_move(robot, vertical_axis, safe_z, *aspirate_xyz, feed,
-                     raise_first=not first_move)
-        first_move = False
-        _log_position(robot, vertical_axis, "source (aspirate)")
+        robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed)
+        _log_at(robot, "source (aspirate)", aspirate_loc)
         move_plunger(robot, plunger_axis, fixed_position, plunger_max, feed)
-        raw_safe_move(robot, vertical_axis, safe_z, *dispense_xyz, feed)  # always raises
-        _log_position(robot, vertical_axis, "scale (dispense)")
+        dispense_point = dispense_loc.resolve(robot)
+        robot.safe_move_to(dispense_point, side, feed=feed)
+        _log_at(robot, "scale (dispense)", dispense_loc)
         logger.info(
             "place/tare the vessel now -- it returns to this same spot between every step below."
         )
         for target in targets:
             move_plunger(robot, plunger_axis, target, plunger_max, feed)  # partial dispense
-            robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)  # lift clear
+            robot.raise_z(side)  # lift clear (travel_z_mm)
             logger.info("lifted clear -- remove the vessel and weigh it (do NOT empty it or re-tare).")
             simulate_fn = (
                 (lambda t=target: _synthetic_cumulative_mass_mg(bottom, fixed_position, t, density))
@@ -288,9 +255,7 @@ def run_phase_b(
             )
             remaining_ul = max(0.0, total_ul - cumulative_mg / density)
             accum[target].append(remaining_ul)
-            robot.controller.linear_move(
-                {vertical_axis: dispense_z}, feed=feed
-            )  # back down for next step
+            robot.move_vertical_to(dispense_point.z, side, feed=feed)  # back down for next step
             logger.info("place the vessel back in the same spot before the next step.")
     return [(t, sum(vals) / len(vals)) for t, vals in accum.items()]
 
@@ -360,9 +325,10 @@ def main() -> None:
     parser.add_argument(
         "--config",
         default="src/config/robot.example.yaml",
-        help="robot config YAML (needs a mounted pipette on --side; deck calibration "
-        "is NOT needed -- positioning here is all raw motor microsteps). Point this at "
-        "a transport: {type: fake} config to --simulate without touching real hardware.",
+        help="robot config YAML -- needs a mounted pipette on --side, a real deck "
+        "calibration, and labware loaded on --aspirate-slot/--dispense-slot. Point "
+        "this at a transport: {type: fake} config to --simulate without touching "
+        "real hardware.",
     )
     parser.add_argument("--side", choices=sorted(_SIDES), default="left")
     parser.add_argument(
@@ -379,18 +345,20 @@ def main() -> None:
         "isn't already a known tip in the config",
     )
 
-    parser.add_argument("--aspirate-x", type=int, default=52976, help="raw motor microsteps")
-    parser.add_argument("--aspirate-y", type=int, default=19661, help="raw motor microsteps")
-    parser.add_argument("--aspirate-z", type=int, default=156012, help="raw motor microsteps")
-    parser.add_argument("--dispense-x", type=int, default=31193, help="raw motor microsteps")
-    parser.add_argument("--dispense-y", type=int, default=20831, help="raw motor microsteps")
-    parser.add_argument("--dispense-z", type=int, default=154441, help="raw motor microsteps")
     parser.add_argument(
-        "--safe-z",
-        type=int,
-        default=130000,
-        help="raw motor microsteps -- used both to cross between the aspirate/dispense "
-        "positions and to lift clear after every dispense so the vessel can be weighed",
+        "--aspirate-slot", default="7", help="deck slot holding the source (aspirate) labware"
+    )
+    parser.add_argument(
+        "--dispense-slot", default="8", help="deck slot holding the destination (dispense) labware"
+    )
+    parser.add_argument("--aspirate-well", default="A1")
+    parser.add_argument("--dispense-well", default="A1")
+    parser.add_argument(
+        "--well-ref",
+        choices=("top", "bottom", "clearance"),
+        default="clearance",
+        help="reference height within each well -- \"clearance\" (default) is a safe "
+        "standoff above the bottom, same as a normal aspirate/dispense routine step",
     )
 
     parser.add_argument(
@@ -429,7 +397,7 @@ def main() -> None:
         "--density-mg-per-ul", type=float, default=0.998, help="water ~0.998 at 20C"
     )
     parser.add_argument(
-        "--feed", type=int, help="plunger/axis feed rate, microsteps/sec; omit for default"
+        "--feed", type=int, help="plunger/final-approach feed rate, microsteps/sec; omit for default"
     )
     parser.add_argument("--phase", choices=("aspirate", "dispense", "both"), default="both")
     parser.add_argument(
@@ -460,6 +428,12 @@ def main() -> None:
     pipette = robot.mounts[side].tool
     if pipette is None or not hasattr(pipette, "plunger"):
         raise SystemExit(f"no pipette attached to the {args.side} mount in {args.config!r}")
+    if robot.calibration is None:
+        raise SystemExit(
+            f"{args.config!r} has no deck calibration -- gantry motion here goes through "
+            "the same calibrated, well-addressed routine machinery as the rest of the app "
+            "(see the module docstring), which needs a real calibration: section"
+        )
 
     tip = robot.tips.get(args.tip_name)
     if tip is None:
@@ -467,14 +441,13 @@ def main() -> None:
     pipette.current_tip = tip  # so Z travel accounts for the tip length while calibrating
 
     plunger_axis = robot.mounts[side].plunger
-    vertical_axis = robot.mounts[side].vertical
-    if vertical_axis is None:
-        # Unreachable given --side only offers left/right (see _SIDES) --
-        # REAR is the only mount with no vertical axis -- but this keeps
-        # the invariant explicit rather than implicit in argparse choices.
-        raise SystemExit(f"the {args.side} mount has no vertical axis")
     endstop_limit = robot.axes[plunger_axis].config.endstop_limit
     plunger_max = min(args.plunger_max_microsteps, endstop_limit)
+
+    aspirate_labware = _labware_on_slot(robot, args.aspirate_slot)
+    dispense_labware = _labware_on_slot(robot, args.dispense_slot)
+    aspirate_loc = WellLocation(aspirate_labware.name, args.aspirate_well, ref=args.well_ref)
+    dispense_loc = WellLocation(dispense_labware.name, args.dispense_well, ref=args.well_ref)
 
     bottom = pipette.plunger.bottom_microsteps
     strokes = (
@@ -498,14 +471,11 @@ def main() -> None:
             f"axis endstop_limit {endstop_limit}) and would detach the tip: {over_limit}"
         )
 
-    aspirate_xyz = (args.aspirate_x, args.aspirate_y, args.aspirate_z)
-    dispense_xyz = (args.dispense_x, args.dispense_y, args.dispense_z)
-
     logger.info(
         f"Plan: {args.side} mount, pipette={pipette.name!r}, tip={args.tip_name!r}, bottom={bottom}\n"
-        f"  Aspirate position (raw): {aspirate_xyz}\n"
-        f"  Dispense position (raw): {dispense_xyz}\n"
-        f"  Safe Z (raw): {args.safe_z}   Plunger ceiling: {plunger_max}\n"
+        f"  Aspirate: slot {args.aspirate_slot} ({aspirate_labware.name}) well {args.aspirate_well}\n"
+        f"  Dispense: slot {args.dispense_slot} ({dispense_labware.name}) well {args.dispense_well}\n"
+        f"  Well ref: {args.well_ref}   Plunger ceiling: {plunger_max}\n"
         f"  Phase A strokes:  {strokes}  -> positions {aspirate_positions}\n"
         f"  Phase B targets:  {dispense_targets}\n"
         f"  phase={args.phase}  replicates={args.replicates}  density={args.density_mg_per_ul} mg/uL"
@@ -519,35 +489,24 @@ def main() -> None:
         # Defensive, even though this script never jogs and so never puts
         # the controller in G91: see the ambient-relative-mode bug fixed in
         # gui/manual_control.py's _go_to_point -- raw linear_move calls
-        # trust the caller is already in G90.
+        # (move_plunger) trust the caller is already in G90.
         robot.controller.set_absolute()
-
-        # Only the very first gantry move of the whole run, immediately
-        # after a REAL home(), is known to start from the mount's safest
-        # possible height -- see raw_safe_move's docstring. Whichever
-        # phase actually runs first gets this; skip_home means we don't
-        # actually know the current height is safe, so neither phase gets
-        # it in that case (always raise defensively instead).
-        just_homed = not args.skip_home
 
         if args.phase in ("aspirate", "both"):
             aspirate_pairs = [(bottom, 0.0)] + run_phase_a(
                 robot,
-                vertical_axis,
+                side,
                 plunger_axis,
                 plunger_max,
                 bottom,
                 strokes,
-                args.safe_z,
-                aspirate_xyz,
-                dispense_xyz,
+                aspirate_loc,
+                dispense_loc,
                 args.replicates,
                 args.density_mg_per_ul,
                 args.feed,
                 simulate=args.simulate,
-                skip_first_raise=just_homed,
             )
-            just_homed = False
         else:
             aspirate_pairs = [(bottom, 0.0)] + _load_points(args.aspirate_from, "aspirate")
 
@@ -562,21 +521,19 @@ def main() -> None:
             )
             dispense_pairs += run_phase_b(
                 robot,
-                vertical_axis,
+                side,
                 plunger_axis,
                 plunger_max,
                 bottom,
                 max_stroke,
                 dispense_targets,
-                args.safe_z,
-                aspirate_xyz,
-                dispense_xyz,
+                aspirate_loc,
+                dispense_loc,
                 aspirate_only,
                 args.replicates,
                 args.density_mg_per_ul,
                 args.feed,
                 simulate=args.simulate,
-                skip_first_raise=just_homed,
             )
 
     if args.phase == "aspirate":

@@ -217,6 +217,39 @@ labware:
       origin: { x: 14.4, y: 11.2, z: 14.4 }
       row_spacing_mm: 9
       col_spacing_mm: 9
+  # Used by scripts/calibrate_pipette.py's default --aspirate-slot/
+  # --dispense-slot -- aspirate always from A1 of one, dispense (onto a
+  # scale's vessel) always at A1 of the other.
+  - name: aspirate_plate
+    slot: "7"
+    well_geometry:
+      shape: circular
+      diameter_mm: 6.9
+      depth_mm: 10.9
+      bottom: round
+      bottom_clearance_mm: 1.5
+      max_volume_ul: 360
+    grid:
+      rows: 8
+      cols: 12
+      origin: { x: 14.4, y: 11.2, z: 14.4 }
+      row_spacing_mm: 9
+      col_spacing_mm: 9
+  - name: dispense_plate
+    slot: "8"
+    well_geometry:
+      shape: circular
+      diameter_mm: 6.9
+      depth_mm: 10.9
+      bottom: round
+      bottom_clearance_mm: 1.5
+      max_volume_ul: 360
+    grid:
+      rows: 8
+      cols: 12
+      origin: { x: 14.4, y: 11.2, z: 14.4 }
+      row_spacing_mm: 9
+      col_spacing_mm: 9
 
 # Tools on the mounts.
 mounts:
