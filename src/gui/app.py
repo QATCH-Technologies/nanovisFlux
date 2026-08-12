@@ -16,7 +16,7 @@ from . import style as S
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setStyleSheet(S.QSS)
+    app.setStyleSheet(S.load_stylesheet())
     window = MainWindow()
     window.show()
     return app.exec_()

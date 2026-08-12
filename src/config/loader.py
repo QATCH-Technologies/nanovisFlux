@@ -10,11 +10,25 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..core import AxisId, MountSide
-from ..deck import Deck, Labware, Slot, SlotObstacle, Corner, CalibrationMark, inset_corner_point
+from ..deck import (
+    CalibrationMark,
+    Corner,
+    Deck,
+    Labware,
+    Slot,
+    SlotObstacle,
+    inset_corner_point,
+)
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from ..motion.axis import AxisConfig, default_axis_configs
 from ..robot import Robot
-from ..tools import Pipette, PlungerModel, PlungerCalibration, TipGeometry, UltrasonicSensor
+from ..tools import (
+    Pipette,
+    PlungerCalibration,
+    PlungerModel,
+    TipGeometry,
+    UltrasonicSensor,
+)
 from ..transport import FakeTransport, SerialTransport
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
@@ -142,7 +156,9 @@ def _build_calibration_marks(cfg: dict | None, slots: dict) -> dict:
         slot = slots[str(m["slot"])]
         corner = Corner(m["corner"])
         point = inset_corner_point(slot, corner, inset_x, inset_y)
-        marks[m["name"]] = CalibrationMark(name=m["name"], slot=slot.name, corner=corner, point=point)
+        marks[m["name"]] = CalibrationMark(
+            name=m["name"], slot=slot.name, corner=corner, point=point
+        )
     return marks
 
 

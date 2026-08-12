@@ -12,12 +12,17 @@ item's stored ``id(step)``) into ``routine.steps`` rather than rebuilding.
 from __future__ import annotations
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal
+from PyQt5.QtCore import Qt, QMimeData, QSize, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
                              QPushButton, QListWidget, QListWidgetItem, QAbstractItemView,
                              QCheckBox, QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QFrame)
 
+from . import icon_utils
 from .routine_model import REGISTRY, Routine
+from .tokens import TOKENS
+
+_INK = QColor(*TOKENS["flat_text"][:3])
 
 _SIDE_CHOICES = ("left", "right", "rear")
 _REF_CHOICES = ("clearance", "top", "bottom")
@@ -71,7 +76,9 @@ class StepRow(QWidget):
         text_col.addWidget(self.subtitle)
         layout.addLayout(text_col, 1)
 
-        self.btn_delete = QPushButton("✕")
+        self.btn_delete = QPushButton()
+        self.btn_delete.setIcon(icon_utils.icon("minus_circle", _INK, size=16))
+        self.btn_delete.setIconSize(QSize(16, 16))
         self.btn_delete.setFixedWidth(24)
         self.btn_delete.setToolTip("remove this step")
         layout.addWidget(self.btn_delete)

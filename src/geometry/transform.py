@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -24,6 +25,7 @@ def _solve3(a: list, b: list) -> list:
 class AffineTransform2D:
     """Maps (x, y) -> (a x + b y + tx, c x + d y + ty). Rich enough to absorb
     offset, scale, rotation and skew between the deck and motor frames."""
+
     a: float
     b: float
     tx: float
@@ -32,8 +34,7 @@ class AffineTransform2D:
     ty: float
 
     def apply(self, x: float, y: float) -> tuple[float, float]:
-        return (self.a * x + self.b * y + self.tx,
-                self.c * x + self.d * y + self.ty)
+        return (self.a * x + self.b * y + self.tx, self.c * x + self.d * y + self.ty)
 
     def inverse(self) -> "AffineTransform2D":
         det = self.a * self.d - self.b * self.c
@@ -41,8 +42,9 @@ class AffineTransform2D:
             raise ValueError("non-invertible transform")
         ia, ib = self.d / det, -self.b / det
         ic, id_ = -self.c / det, self.a / det
-        return AffineTransform2D(ia, ib, -(ia * self.tx + ib * self.ty),
-                                 ic, id_, -(ic * self.tx + id_ * self.ty))
+        return AffineTransform2D(
+            ia, ib, -(ia * self.tx + ib * self.ty), ic, id_, -(ic * self.tx + id_ * self.ty)
+        )
 
     @classmethod
     def from_point_pairs(cls, src: Sequence, dst: Sequence) -> "AffineTransform2D":

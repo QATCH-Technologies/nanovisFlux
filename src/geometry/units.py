@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 from ..core import AxisId
 
 MICROSTEPS_PER_STEP = 32  # firmware runs at 1/32 microstepping
@@ -10,6 +12,7 @@ class AxisScale:
     """Converts millimetres to firmware microsteps for a single axis. Used
     mainly for the vertical (Z/A) and plunger (B/C) axes; the XY plane gets
     its scale from the calibrated affine transform instead."""
+
     steps_per_mm: float  # full motor steps per mm of travel
 
     @property

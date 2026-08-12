@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import math
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -43,8 +43,12 @@ from PyQt5.QtWidgets import (
 )
 
 from ..core import MountSide
+from . import icon_utils
 from . import style as S
 from .slot_detail_view import SlotDetailView
+from .tokens import TOKENS
+
+_ICON_SIZE = QSize(16, 16)
 
 _MOUNT_COLOR = {
     MountSide.LEFT: QColor("#3E6E8E"),
@@ -102,6 +106,7 @@ class DeckCanvas(QWidget):
         self.positions: dict = {}  # MountSide -> DeckPoint | None
         self.selected_slot: str | None = None
         self._slot_paths: dict = {}  # name -> (QPainterPath, centroid)
+        self._home_pixmap = None  # lazily built, tinted -- see _home_icon_pixmap()
 
         # -- camera: zoom/pan/orbit, layered on top of the auto-fit view
         # computed fresh each paint (see paintEvent) -- works the same in
@@ -119,6 +124,16 @@ class DeckCanvas(QWidget):
         self._drag_pan_origin = (0.0, 0.0)
         self._drag_azimuth_origin = 0.0
         self._drag_elevation_origin = _ELEVATION_DEFAULT_DEG
+
+    def _home_icon_pixmap(self):
+        """Tinted home.svg for the canvas-painted home marker (see
+        paintEvent) -- built once and cached, rather than re-rendering the
+        icon on every repaint."""
+        if self._home_pixmap is None:
+            self._home_pixmap = icon_utils.icon(
+                "home", QColor(*TOKENS["flat_text"][:3]), size=12
+            ).pixmap(QSize(12, 12))
+        return self._home_pixmap
 
     # -- data -----------------------------------------------------------
     def set_robot(self, robot) -> None:
@@ -911,7 +926,8 @@ class DeckCanvas(QWidget):
             p.setBrush(QColor(S.INK))
             hs = 5
             p.drawRect(QRectF(hx - hs, hy - hs, hs * 2, hs * 2))
-            p.drawText(int(hx) + 8, int(hy) + 4, "⌂ home")
+            p.drawPixmap(int(hx) + 8, int(hy) - 8, self._home_icon_pixmap())
+            p.drawText(int(hx) + 22, int(hy) + 4, "home")
 
         # Calibration reference marks -- physical points etched into the
         # deck (see deck.calibration_marks / gui/calibration_dialog.py). No
@@ -1038,6 +1054,9 @@ class DeckView(QWidget):
         header.addWidget(self.btn_2d)
         header.addWidget(self.btn_iso)
         self.btn_reset_view = QPushButton("Reset View")
+        self.btn_reset_view.setIcon(
+            icon_utils.icon("restart_circle", QColor(*TOKENS["flat_text"][:3]), size=16))
+        self.btn_reset_view.setIconSize(_ICON_SIZE)
         self.btn_reset_view.clicked.connect(lambda: self.canvas.reset_view())
         header.addWidget(self.btn_reset_view)
         grid_layout.addLayout(header)

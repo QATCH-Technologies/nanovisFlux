@@ -1,12 +1,21 @@
 from __future__ import annotations
+
 from typing import Callable, Mapping
+
 from ..core import AxisId
 from ..transport.base import Transport
 from . import commands as cmd
 from .commands import Command
-from .responses import (Response, ProbeResult, DistanceResult, extract_reason,
-                        parse_position, parse_probe, parse_distance)
-from .errors import map_error, TransportError
+from .errors import TransportError, map_error
+from .responses import (
+    DistanceResult,
+    ProbeResult,
+    Response,
+    extract_reason,
+    parse_distance,
+    parse_position,
+    parse_probe,
+)
 
 
 class Controller:
@@ -16,8 +25,13 @@ class Controller:
     sees a G-code string; nothing below it understands one.
     """
 
-    def __init__(self, transport: Transport, *, timeout: float = 30.0,
-                 on_send: Callable[[str, Command], None] | None = None):
+    def __init__(
+        self,
+        transport: Transport,
+        *,
+        timeout: float = 30.0,
+        on_send: Callable[[str, Command], None] | None = None,
+    ):
         self._t = transport
         self._timeout = timeout
         #: hook fired with (rendered line, source Command) just before it's
@@ -92,8 +106,13 @@ class Controller:
     def rapid_move(self, targets: Mapping[AxisId, int]) -> Response:
         return self.execute(cmd.RapidMove(dict(targets)))
 
-    def linear_move(self, targets: Mapping[AxisId, int], feed: int | None = None,
-                    *, wait_for_ok: bool | None = None) -> Response:
+    def linear_move(
+        self,
+        targets: Mapping[AxisId, int],
+        feed: int | None = None,
+        *,
+        wait_for_ok: bool | None = None,
+    ) -> Response:
         return self.execute(cmd.LinearMove(dict(targets), feed), wait_for_ok=wait_for_ok)
 
     def set_absolute(self) -> Response:
@@ -105,8 +124,13 @@ class Controller:
     def report_position(self) -> dict[AxisId, int]:
         return parse_position(self.execute(cmd.ReportPosition()).info)
 
-    def probe(self, axis: AxisId, target: int, feed: int | None = None,
-              mode: cmd.ProbeMode = cmd.ProbeMode.TOWARD_OR_FAIL) -> ProbeResult:
+    def probe(
+        self,
+        axis: AxisId,
+        target: int,
+        feed: int | None = None,
+        mode: cmd.ProbeMode = cmd.ProbeMode.TOWARD_OR_FAIL,
+    ) -> ProbeResult:
         resp = self.execute(cmd.Probe(axis, target, feed, mode))
         return parse_probe(resp.info) or ProbeResult(False, {})
 

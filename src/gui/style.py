@@ -1,209 +1,60 @@
-"""Palette and QSS for the nanovisFlux control GUI.
+"""Loads and resolves app_theme.qss for the nanovisFlux control GUI.
 
-Kept monochrome (warm off-white ground, near-black ink) with exactly two
-semantic accents -- red for the e-stop, green for "connected" -- so those two
-things are the only color a operator's eye needs to find fast. Everything
-else (mount markers, step-block colors) uses muted, low-saturation tints so
-it never competes with the accents.
+The QSS itself lives in app_theme.qss (colors/typography as {{PLACEHOLDER}}
+tokens); this module is the substitution step -- mirrors NanovisQ's
+StyleLoader._substitute_tokens, scaled down for a single-theme app (no
+runtime theme switching, so no cache invalidation/reload machinery, and no
+icon-path substitution -- icons are loaded directly in Python via
+icon_utils.icon(), not through QSS).
 """
 from __future__ import annotations
 
-BG = "#EDEAE2"            # page ground -- warm, not pure grey
-PANEL = "#FBFAF7"         # card/panel surface
-PANEL_ALT = "#F2EFE8"     # recessed surface (console, disabled fields)
-BORDER = "#D9D4C7"
-BORDER_STRONG = "#3A382F"
-INK = "#232019"
-INK_MUTED = "#6B6858"
-ACCENT_RED = "#C13B2E"
-ACCENT_RED_HOVER = "#A62F24"
-ACCENT_GREEN = "#3E8E5B"
-ACCENT_AMBER = "#B18A3E"
-MONO_FONT = "Consolas"
-UI_FONT = "Segoe UI"
+from pathlib import Path
 
-QSS = f"""
-* {{
-    font-family: "{UI_FONT}";
-    color: {INK};
-}}
+from .tokens import TOKENS
+from .typography import FONT_MONO_STACK, FONT_SANS_STACK, QT_SANS_FAMILIES
 
-QWidget {{
-    background: transparent;
-}}
+_QSS_PATH = Path(__file__).parent / "app_theme.qss"
 
-/* Qt Style Sheets break ties between equally-specific type selectors by
-   source order, and QDialog IS-A QWidget -- so this rule MUST come after
-   the generic QWidget background-transparent rule above, or that one wins
-   for every QDialog too and the window renders with no background at all.
-   Top-level windows (QDialog and subclasses, e.g. QMessageBox) don't
-   inherit the app stylesheet's palette from Windows dark mode automatically
-   -- without an explicit background they show the OS's dark window
-   background while text stays the app's dark ink, i.e. unreadable. This app
-   commits to one light look regardless of OS theme, so every dialog and
-   combo popup gets that look forced explicitly. */
-QMainWindow, QWidget#centralRoot, QDialog {{
-    background: {BG};
-}}
-QComboBox QAbstractItemView {{
-    background: {PANEL};
-    color: {INK};
-    border: 1px solid {BORDER_STRONG};
-    selection-background-color: {INK};
-    selection-color: {PANEL};
-}}
 
-QFrame.panel, QWidget.panel {{
-    background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: 6px;
-}}
+def _tok_css(rgba) -> str:
+    """(r, g, b, a) -> a literal CSS color -- hex when fully opaque (the
+    common case; QSS `border-color`/selector shorthand reads better as hex),
+    rgba(...) otherwise."""
+    r, g, b, a = rgba
+    if a == 255:
+        return f"#{r:02X}{g:02X}{b:02X}"
+    return f"rgba({r}, {g}, {b}, {a})"
 
-QFrame.card {{
-    background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: 4px;
-}}
 
-QLabel.eyebrow {{
-    color: {INK_MUTED};
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 1px;
-}}
+# Plain hex/name constants for call sites that paint directly with QPainter
+# (deck_view.py, slot_detail_view.py) rather than through QSS -- QColor/QFont
+# need a literal string, not a {{PLACEHOLDER}}, so these are the same
+# tokens.TOKENS values pre-rendered once at import time.
+PANEL = _tok_css(TOKENS["flat_surface"])
+PANEL_ALT = _tok_css(TOKENS["flat_surface2"])
+INK = _tok_css(TOKENS["flat_text"])
+INK_MUTED = _tok_css(TOKENS["flat_text_muted"])
+BORDER = _tok_css(TOKENS["flat_border"])
+BORDER_STRONG = _tok_css(TOKENS["flat_border_strong"])
+ACCENT_GREEN = _tok_css(TOKENS["flat_success"])
+ACCENT_AMBER = _tok_css(TOKENS["flat_warning"])
+ACCENT_RED = _tok_css(TOKENS["flat_error"])
+UI_FONT = QT_SANS_FAMILIES[0]  # "Segoe UI" -- a single Qt-actionable family, not the whole CSS stack
+MONO_FONT = "Consolas"  # first entry of typography.FONT_MONO_STACK, same reasoning as UI_FONT
 
-QLabel.h1 {{
-    font-size: 15px;
-    font-weight: 700;
-}}
 
-QLabel.pill {{
-    background: {PANEL_ALT};
-    border: 1px solid {BORDER};
-    border-radius: 10px;
-    padding: 2px 10px;
-    font-size: 10px;
-    font-weight: 600;
-    color: {INK_MUTED};
-}}
-QLabel.pill-live {{
-    background: #E3F0E7;
-    border: 1px solid {ACCENT_GREEN};
-    color: {ACCENT_GREEN};
-}}
-QLabel.pill-warn {{
-    background: #F5EADC;
-    border: 1px solid {ACCENT_AMBER};
-    color: {ACCENT_AMBER};
-}}
-
-QLabel.mono {{
-    font-family: "{MONO_FONT}";
-}}
-
-QPushButton {{
-    background: {PANEL};
-    border: 1px solid {BORDER_STRONG};
-    border-radius: 4px;
-    padding: 5px 12px;
-}}
-QPushButton:hover {{ background: {PANEL_ALT}; }}
-QPushButton:pressed {{ background: {BORDER}; }}
-QPushButton:disabled {{ color: {INK_MUTED}; border-color: {BORDER}; }}
-QPushButton:checked {{ background: {INK}; color: {PANEL}; border-color: {INK}; }}
-
-QPushButton#estop {{
-    background: {ACCENT_RED};
-    color: white;
-    border: 1px solid {ACCENT_RED_HOVER};
-    border-radius: 4px;
-    font-weight: 700;
-    padding: 6px 18px;
-}}
-QPushButton#estop:hover {{ background: {ACCENT_RED_HOVER}; }}
-QPushButton#estop:disabled {{ background: #D9A79F; border-color: #D9A79F; color: #FBFAF7; }}
-
-QPushButton#primary {{
-    background: {INK};
-    color: {PANEL};
-    border-color: {INK};
-}}
-QPushButton#primary:hover {{ background: #3A362B; }}
-QPushButton#primary:disabled {{ background: {BORDER}; color: {INK_MUTED}; border-color: {BORDER}; }}
-
-QPushButton.jog {{
-    min-width: 40px;
-    min-height: 34px;
-    font-weight: 600;
-}}
-
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
-    background: {PANEL};
-    border: 1px solid {BORDER_STRONG};
-    border-radius: 4px;
-    padding: 3px 6px;
-    selection-background-color: {INK};
-}}
-
-QPlainTextEdit#console {{
-    background: {PANEL_ALT};
-    border: 1px solid {BORDER_STRONG};
-    font-family: "{MONO_FONT}";
-    font-size: 11px;
-}}
-
-QTabWidget::pane {{
-    border: 1px solid {BORDER};
-    border-radius: 6px;
-    background: {PANEL};
-    top: -1px;
-}}
-QTabBar::tab {{
-    background: transparent;
-    padding: 6px 14px;
-    color: {INK_MUTED};
-    border-bottom: 2px solid transparent;
-}}
-QTabBar::tab:selected {{
-    color: {INK};
-    border-bottom: 2px solid {INK};
-    font-weight: 600;
-}}
-
-QListWidget {{
-    background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: 4px;
-}}
-QListWidget::item {{
-    border-bottom: 1px solid {BORDER};
-    padding: 2px;
-}}
-QListWidget::item:selected {{
-    background: {PANEL_ALT};
-    color: {INK};
-}}
-
-QSplitter::handle {{
-    background: {BORDER};
-}}
-
-QScrollBar:vertical {{ width: 10px; background: transparent; }}
-QScrollBar::handle:vertical {{ background: {BORDER_STRONG}; border-radius: 5px; min-height: 24px; }}
-QScrollBar:horizontal {{ height: 10px; background: transparent; }}
-QScrollBar::handle:horizontal {{ background: {BORDER_STRONG}; border-radius: 5px; min-width: 24px; }}
-
-QGroupBox {{
-    border: 1px solid {BORDER};
-    border-radius: 6px;
-    margin-top: 10px;
-    padding-top: 8px;
-    font-weight: 600;
-}}
-QGroupBox::title {{
-    subcontrol-origin: margin;
-    left: 8px;
-    padding: 0 4px;
-    color: {INK_MUTED};
-}}
-"""
+def load_stylesheet() -> str:
+    """Reads app_theme.qss and substitutes every {{TOKEN}} placeholder --
+    color tokens from tokens.TOKENS, plus FONT_SANS/FONT_MONO from
+    typography's font stacks -- into the literal CSS QApplication.
+    setStyleSheet() expects."""
+    qss = _QSS_PATH.read_text(encoding="utf-8")
+    for key, value in TOKENS.items():
+        qss = qss.replace(f"{{{{{key.upper()}}}}}", _tok_css(value))
+    # FONT_SANS_STACK / FONT_MONO_STACK are already complete, validly-quoted
+    # CSS font-family values (e.g. "system-ui, ..., 'Segoe UI', ..."), so
+    # substituting as-is -- not wrapped in another quote pair -- is correct.
+    qss = qss.replace("{{FONT_SANS}}", FONT_SANS_STACK)
+    qss = qss.replace("{{FONT_MONO}}", FONT_MONO_STACK)
+    return qss

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
+
 from ..geometry.coordinates import DeckPoint
 
 
@@ -12,6 +14,7 @@ class WellShape(Enum):
 class BottomShape(Enum):
     """Profile of the well's deepest point -- affects how much dead volume
     sits below the safe aspirate clearance, not the motion math itself."""
+
     FLAT = "flat"
     ROUND = "round"
     V = "v"
@@ -28,10 +31,11 @@ class WellGeometry:
     reference for aspirating without dragging the tip through solids or
     crashing into a conical/round bottom.
     """
+
     shape: WellShape = WellShape.CIRCULAR
-    diameter_mm: float = 0.0          # circular wells
-    width_mm: float = 0.0             # rectangular wells, x
-    length_mm: float = 0.0            # rectangular wells, y
+    diameter_mm: float = 0.0  # circular wells
+    width_mm: float = 0.0  # rectangular wells, x
+    length_mm: float = 0.0  # rectangular wells, y
     depth_mm: float = 0.0
     bottom: BottomShape = BottomShape.FLAT
     bottom_clearance_mm: float = 1.0
@@ -58,6 +62,7 @@ class Well:
     measurable datum. Bottom and clearance heights are derived from
     ``geometry.depth_mm`` on resolve, never baked into the offset itself.
     """
+
     name: str
     offset: DeckPoint
     geometry: WellGeometry = field(default_factory=WellGeometry)
@@ -77,6 +82,7 @@ class Labware:
     hand-list ``wells`` for irregular spacing -- mixed pitches, a reservoir
     with one big well, per-well geometry overrides, etc.
     """
+
     name: str
     wells: dict = field(default_factory=dict)
     slot: object = None  # a deck.Slot once placed
@@ -106,9 +112,17 @@ class Labware:
         return self.slot.origin + self.wells[name].at(ref, clearance_mm)
 
     @classmethod
-    def grid(cls, name: str, *, rows: int, cols: int, origin: DeckPoint,
-             row_spacing_mm: float, col_spacing_mm: float,
-             geometry: WellGeometry | None = None) -> "Labware":
+    def grid(
+        cls,
+        name: str,
+        *,
+        rows: int,
+        cols: int,
+        origin: DeckPoint,
+        row_spacing_mm: float,
+        col_spacing_mm: float,
+        geometry: WellGeometry | None = None,
+    ) -> "Labware":
         """Uniform rows x cols grid, named the conventional way (A1, A2, ...,
         B1, ...). ``origin`` is well A1's centre (z at the well top), given
         as an offset from the labware's own TOP-LEFT corner: x to the right
@@ -124,8 +138,9 @@ class Labware:
         for r in range(rows):
             for c in range(cols):
                 well_name = f"{_ROW_LETTERS[r]}{c + 1}"
-                pos = DeckPoint(origin.x + c * col_spacing_mm,
-                                origin.y + r * row_spacing_mm, origin.z)
+                pos = DeckPoint(
+                    origin.x + c * col_spacing_mm, origin.y + r * row_spacing_mm, origin.z
+                )
                 wells[well_name] = Well(well_name, pos, geometry)
         labware = cls(name=name, wells=wells)
         labware._pending_row_flip = True
@@ -137,10 +152,14 @@ class Labware:
         if "grid" in data:
             g = data["grid"]
             return cls.grid(
-                name=data["name"], rows=g["rows"], cols=g["cols"],
+                name=data["name"],
+                rows=g["rows"],
+                cols=g["cols"],
                 origin=DeckPoint(g["origin"]["x"], g["origin"]["y"], g["origin"].get("z", 0.0)),
-                row_spacing_mm=g["row_spacing_mm"], col_spacing_mm=g["col_spacing_mm"],
-                geometry=default_geometry)
+                row_spacing_mm=g["row_spacing_mm"],
+                col_spacing_mm=g["col_spacing_mm"],
+                geometry=default_geometry,
+            )
         wells = {}
         for n, o in data.get("wells", {}).items():
             offset = DeckPoint(o["x"], o["y"], o.get("z", 0.0))
@@ -160,4 +179,5 @@ def _geometry_from_dict(d: dict) -> WellGeometry:
         depth_mm=d.get("depth_mm", 0.0),
         bottom=BottomShape(d.get("bottom", "flat")),
         bottom_clearance_mm=d.get("bottom_clearance_mm", 1.0),
-        max_volume_ul=d.get("max_volume_ul", 0.0))
+        max_volume_ul=d.get("max_volume_ul", 0.0),
+    )

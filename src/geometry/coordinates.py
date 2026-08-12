@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 class DeckPoint:
     """A location in deck space, in millimetres, with a conventional origin
     that is independent of where the motors happen to home."""
+
     x: float
     y: float
     z: float = 0.0

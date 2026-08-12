@@ -5,17 +5,25 @@ top-right always" direction from the original wireframe sketch."""
 from __future__ import annotations
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton, QComboBox, QSpinBox,
                              QLineEdit, QCheckBox, QFileDialog, QButtonGroup, QFrame)
 
+from . import icon_utils
+from . import style as S
+from .tokens import TOKENS
+
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "robot.example.yaml"
+_ICON_SIZE = QSize(16, 16)
+_INK = QColor(*TOKENS["flat_text"][:3])
+_ON_ACCENT = QColor(*TOKENS["flat_on_accent"][:3])
 
 _STATUS_COLORS = {
-    "disconnected": "#8A8780",
-    "connecting": "#B18A3E",
-    "connected": "#3E8E5B",
-    "error": "#C13B2E",
+    "disconnected": S.INK_MUTED,
+    "connecting": S.ACCENT_AMBER,
+    "connected": S.ACCENT_GREEN,
+    "error": S.ACCENT_RED,
 }
 
 
@@ -60,7 +68,9 @@ class ConnectionBar(QWidget):
         self.port_combo = QComboBox()
         self.port_combo.setEditable(True)
         self.port_combo.setMinimumWidth(90)
-        self.btn_refresh = QPushButton("⟳")
+        self.btn_refresh = QPushButton()
+        self.btn_refresh.setIcon(icon_utils.icon("restart_circle", _INK, size=16))
+        self.btn_refresh.setIconSize(_ICON_SIZE)
         self.btn_refresh.setFixedWidth(28)
         self.btn_refresh.setToolTip("rescan serial ports")
         self.btn_refresh.clicked.connect(self._refresh_ports)
@@ -88,18 +98,24 @@ class ConnectionBar(QWidget):
 
         self.btn_connect = QPushButton("Connect")
         self.btn_connect.setObjectName("primary")
+        self.btn_connect.setIcon(icon_utils.icon("usb", _ON_ACCENT, size=16))
+        self.btn_connect.setIconSize(_ICON_SIZE)
         self.btn_connect.clicked.connect(self._on_connect_clicked)
         outer.addWidget(self.btn_connect)
 
         outer.addWidget(self._vline())
 
-        self.btn_home = QPushButton("⌂ Home")
+        self.btn_home = QPushButton("Home")
+        self.btn_home.setIcon(icon_utils.icon("home", _INK, size=16))
+        self.btn_home.setIconSize(_ICON_SIZE)
         self.btn_home.setEnabled(False)
         self.btn_home.clicked.connect(self.home_requested.emit)
         outer.addWidget(self.btn_home)
 
-        self.btn_estop = QPushButton("⏻ E-STOP")
+        self.btn_estop = QPushButton("E-STOP")
         self.btn_estop.setObjectName("estop")
+        self.btn_estop.setIcon(icon_utils.icon("power", _ON_ACCENT, size=16))
+        self.btn_estop.setIconSize(_ICON_SIZE)
         self.btn_estop.setEnabled(False)
         self.btn_estop.clicked.connect(self.estop_requested.emit)
         outer.addWidget(self.btn_estop)

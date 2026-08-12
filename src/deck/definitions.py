@@ -6,11 +6,14 @@ volume, shape, spacing, and the fixed offset from the labware's own corner
 to well A1. Declare one per labware type, then ``place`` it on any slot --
 the well/tip offsets are computed from the definition, never hand-picked.
 """
+
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 from ..geometry.coordinates import DeckPoint
 from ..tools.tips import TipGeometry
-from .labware import Labware, WellGeometry, WellShape, BottomShape
+from .labware import BottomShape, Labware, WellGeometry, WellShape
 
 
 @dataclass(frozen=True)
@@ -31,8 +34,9 @@ class GridLabwareDefinition:
     Not meant to be instantiated directly -- use WellPlateDefinition,
     ReservoirDefinition, or TipRackDefinition.
     """
+
     identifier: str
-    footprint_mm: tuple           # (length_x_mm, width_y_mm)
+    footprint_mm: tuple  # (length_x_mm, width_y_mm)
     height_mm: float
     rows: int
     cols: int
@@ -50,35 +54,46 @@ class GridLabwareDefinition:
         if sx and sy and (lx > sx + 1e-6 or ly > sy + 1e-6):
             raise ValueError(
                 f"{self.identifier!r} footprint {self.footprint_mm} mm exceeds "
-                f"slot {slot.name!r} size {slot.size} mm")
+                f"slot {slot.name!r} size {slot.size} mm"
+            )
 
 
 @dataclass(frozen=True)
 class WellPlateDefinition(GridLabwareDefinition):
     """A standard well plate (e.g. a 96-well flat-bottom plate)."""
+
     well_volume_ul: float = 0.0
     well_shape: WellShape = WellShape.CIRCULAR
-    well_diameter_mm: float = 0.0     # circular wells
-    well_width_mm: float = 0.0        # rectangular wells, x
-    well_length_mm: float = 0.0       # rectangular wells, y
+    well_diameter_mm: float = 0.0  # circular wells
+    well_width_mm: float = 0.0  # rectangular wells, x
+    well_length_mm: float = 0.0  # rectangular wells, y
     well_depth_mm: float = 0.0
     well_bottom: BottomShape = BottomShape.FLAT
     bottom_clearance_mm: float = 1.0
 
     def well_geometry(self) -> WellGeometry:
-        return WellGeometry(shape=self.well_shape, diameter_mm=self.well_diameter_mm,
-                            width_mm=self.well_width_mm, length_mm=self.well_length_mm,
-                            depth_mm=self.well_depth_mm, bottom=self.well_bottom,
-                            bottom_clearance_mm=self.bottom_clearance_mm,
-                            max_volume_ul=self.well_volume_ul)
+        return WellGeometry(
+            shape=self.well_shape,
+            diameter_mm=self.well_diameter_mm,
+            width_mm=self.well_width_mm,
+            length_mm=self.well_length_mm,
+            depth_mm=self.well_depth_mm,
+            bottom=self.well_bottom,
+            bottom_clearance_mm=self.bottom_clearance_mm,
+            max_volume_ul=self.well_volume_ul,
+        )
 
     def place(self, slot, *, stacked: bool = False) -> Labware:
         self._check_fits(slot)
-        labware = Labware.grid(self.identifier, rows=self.rows, cols=self.cols,
-                               origin=self._grid_origin(stacked),
-                               row_spacing_mm=self.row_spacing_mm,
-                               col_spacing_mm=self.col_spacing_mm,
-                               geometry=self.well_geometry())
+        labware = Labware.grid(
+            self.identifier,
+            rows=self.rows,
+            cols=self.cols,
+            origin=self._grid_origin(stacked),
+            row_spacing_mm=self.row_spacing_mm,
+            col_spacing_mm=self.col_spacing_mm,
+            geometry=self.well_geometry(),
+        )
         labware.place(slot)
         return labware
 
@@ -94,23 +109,31 @@ class ReservoirDefinition(WellPlateDefinition):
 @dataclass(frozen=True)
 class TipRackDefinition(GridLabwareDefinition):
     """A standard tip rack."""
+
     tip_volume_ul: float = 0.0
-    tip_length_mm: float = 0.0    # nozzle-reference to tip end; feeds a TipGeometry
+    tip_length_mm: float = 0.0  # nozzle-reference to tip end; feeds a TipGeometry
 
     def tip_geometry(self) -> TipGeometry:
-        return TipGeometry(name=self.identifier, length_mm=self.tip_length_mm,
-                           max_volume_ul=self.tip_volume_ul)
+        return TipGeometry(
+            name=self.identifier, length_mm=self.tip_length_mm, max_volume_ul=self.tip_volume_ul
+        )
 
     def place(self, slot, *, stacked: bool = False) -> Labware:
         self._check_fits(slot)
         # Tip wells aren't liquid-handling wells -- no shape/bottom to model,
         # just the top (first-contact) height carried by the grid itself.
-        labware = Labware.grid(self.identifier, rows=self.rows, cols=self.cols,
-                               origin=self._grid_origin(stacked),
-                               row_spacing_mm=self.row_spacing_mm,
-                               col_spacing_mm=self.col_spacing_mm,
-                               geometry=WellGeometry(depth_mm=self.tip_length_mm,
-                                                      max_volume_ul=self.tip_volume_ul,
-                                                      bottom_clearance_mm=0.0))
+        labware = Labware.grid(
+            self.identifier,
+            rows=self.rows,
+            cols=self.cols,
+            origin=self._grid_origin(stacked),
+            row_spacing_mm=self.row_spacing_mm,
+            col_spacing_mm=self.col_spacing_mm,
+            geometry=WellGeometry(
+                depth_mm=self.tip_length_mm,
+                max_volume_ul=self.tip_volume_ul,
+                bottom_clearance_mm=0.0,
+            ),
+        )
         labware.place(slot)
         return labware

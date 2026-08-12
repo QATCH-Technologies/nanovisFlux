@@ -12,7 +12,9 @@ nudge() calls the way it used to.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from loguru import logger
+from PyQt5.QtCore import Qt, QSize, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QPushButton, QButtonGroup, QFrame, QStackedWidget,
                              QDoubleSpinBox, QCheckBox, QFormLayout)
@@ -20,9 +22,17 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLa
 from ..core import AxisId, MountSide
 from ..geometry.coordinates import DeckPoint
 from ..geometry.units import default_axis_scale
+from . import icon_utils
 from .gamepad_input import GamepadInput
+from .tokens import TOKENS
 
 _GOTO_MM_RANGE = (-100.0, 1000.0)   # generous bound around a typical deck's extent
+
+_ICON_SIZE = QSize(16, 16)
+_INK = QColor(*TOKENS["flat_text"][:3])
+_ON_ACCENT = QColor(*TOKENS["flat_on_accent"][:3])
+_SUCCESS = QColor(*TOKENS["flat_success"][:3])
+_MUTED = QColor(*TOKENS["flat_text_muted"][:3])
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
@@ -71,7 +81,6 @@ class ManualControlPanel(QWidget):
         super().__init__(parent)
         self.robot = None
         self.jog = None            # JogController, set by set_context()
-        self.tracer = None
         self.gamepad: GamepadInput | None = None
         self._input_mode = "keyboard"
         self._input_locked = False  # True while a routine is running
@@ -146,6 +155,9 @@ class ManualControlPanel(QWidget):
         title.setProperty("class", "h1")
         header.addWidget(title)
 
+        self.status_pill_icon = QLabel()
+        self.status_pill_icon.setFixedSize(14, 14)
+        header.addWidget(self.status_pill_icon)
         self.status_pill = QLabel("jog")
         _set_pill_class(self.status_pill, "pill")
         header.addWidget(self.status_pill)
@@ -171,11 +183,14 @@ class ManualControlPanel(QWidget):
 
     def _build_mode_toggle(self) -> QHBoxLayout:
         mode_row = QHBoxLayout()
-        self.btn_keyboard = QPushButton("⌨  Keyboard")
-        self.btn_gamepad = QPushButton("🎮  Gamepad")
+        self.btn_keyboard = QPushButton("Keyboard")
+        self.btn_keyboard.setIcon(icon_utils.icon("keyboard", _INK, size=16))
+        self.btn_gamepad = QPushButton("Gamepad")
+        self.btn_gamepad.setIcon(icon_utils.icon("gamepad", _INK, size=16))
         for b in (self.btn_keyboard, self.btn_gamepad):
             b.setCheckable(True)
             b.setMinimumHeight(36)
+            b.setIconSize(_ICON_SIZE)
         self.btn_keyboard.setChecked(True)
         mode_group = QButtonGroup(self)
         mode_group.setExclusive(True)
@@ -187,10 +202,14 @@ class ManualControlPanel(QWidget):
         mode_row.addWidget(self.btn_gamepad, 1)
         return mode_row
 
-    def _key_cap(self, text: str, action: str, *, wide: bool = False) -> QPushButton:
+    def _key_cap(self, text: str, action: str, *, wide: bool = False,
+                icon_name: str | None = None, rotation: float = 0) -> QPushButton:
         """A jog button styled/labelled as the physical key that triggers
-        it (e.g. "PgUp"), rather than the semantic action name."""
-        btn = self._jog_button(text, action)
+        it (e.g. "PgUp"), rather than the semantic action name -- unless
+        `icon_name` is given, in which case it shows that icon instead of
+        text (the XY jog cross reuses chevron.svg, rotated per direction,
+        rather than a "PgUp"-style keycap label)."""
+        btn = self._jog_button(text, action, icon_name=icon_name, rotation=rotation)
         if wide:
             btn.setMinimumWidth(64)
         return btn
@@ -246,10 +265,10 @@ class ManualControlPanel(QWidget):
         xy_group.addWidget(xy_caption)
         cross = QGridLayout()
         cross.setSpacing(6)
-        self.btn_yplus = self._key_cap("↑", "y+")
-        self.btn_yminus = self._key_cap("↓", "y-")
-        self.btn_xminus = self._key_cap("←", "x-")
-        self.btn_xplus = self._key_cap("→", "x+")
+        self.btn_yplus = self._key_cap("↑", "y+", icon_name="chevron", rotation=0)
+        self.btn_yminus = self._key_cap("↓", "y-", icon_name="chevron", rotation=180)
+        self.btn_xminus = self._key_cap("←", "x-", icon_name="chevron", rotation=270)
+        self.btn_xplus = self._key_cap("→", "x+", icon_name="chevron", rotation=90)
         cross.addWidget(self.btn_yplus, 0, 1)
         cross.addWidget(self.btn_xminus, 1, 0)
         cross.addWidget(self.btn_xplus, 1, 2)
@@ -299,8 +318,12 @@ class ManualControlPanel(QWidget):
         btn.clicked.connect(on_click)
         return btn
 
-    def _gamepad_pill(self, text: str, on_click) -> QPushButton:
-        btn = QPushButton(text)
+    def _gamepad_pill(self, text: str, on_click, *,
+                      icon_name: str | None = None, rotation: float = 0) -> QPushButton:
+        btn = QPushButton("" if icon_name else text)
+        if icon_name:
+            btn.setIcon(icon_utils.icon(icon_name, _INK, size=16, rotation=rotation))
+            btn.setIconSize(_ICON_SIZE)
         btn.clicked.connect(on_click)
         return btn
 
@@ -347,8 +370,10 @@ class ManualControlPanel(QWidget):
         mid_col.addLayout(self._captioned(self.btn_start, "E-STOP"))
         dpad = QGridLayout()
         dpad.setSpacing(2)
-        self.btn_dpad_up = self._gamepad_pill("▲", lambda: self._apply_step_cycle(+1))
-        self.btn_dpad_down = self._gamepad_pill("▼", lambda: self._apply_step_cycle(-1))
+        self.btn_dpad_up = self._gamepad_pill("▲", lambda: self._apply_step_cycle(+1),
+                                             icon_name="chevron", rotation=0)
+        self.btn_dpad_down = self._gamepad_pill("▼", lambda: self._apply_step_cycle(-1),
+                                               icon_name="chevron", rotation=180)
         for b in (self.btn_dpad_up, self.btn_dpad_down):
             b.setFixedSize(22, 18)
         dpad.addWidget(self.btn_dpad_up, 0, 0)
@@ -446,10 +471,14 @@ class ManualControlPanel(QWidget):
         rows.addLayout(row1)
 
         row2 = QHBoxLayout()
-        self.btn_home = QPushButton("⌂ Home")
+        self.btn_home = QPushButton("Home")
+        self.btn_home.setIcon(icon_utils.icon("home", _INK, size=16))
+        self.btn_home.setIconSize(_ICON_SIZE)
         self.btn_home.clicked.connect(self.home_requested.emit)
-        self.btn_stop = QPushButton("⏻ STOP")
+        self.btn_stop = QPushButton("STOP")
         self.btn_stop.setObjectName("estop")
+        self.btn_stop.setIcon(icon_utils.icon("power", _ON_ACCENT, size=16))
+        self.btn_stop.setIconSize(_ICON_SIZE)
         self.btn_stop.clicked.connect(self.estop_requested.emit)
         row2.addWidget(self.btn_home)
         row2.addWidget(self.btn_stop)
@@ -476,8 +505,12 @@ class ManualControlPanel(QWidget):
             fn()
         return call
 
-    def _jog_button(self, text: str, action: str) -> QPushButton:
-        btn = QPushButton(text)
+    def _jog_button(self, text: str, action: str, *,
+                    icon_name: str | None = None, rotation: float = 0) -> QPushButton:
+        btn = QPushButton("" if icon_name else text)
+        if icon_name:
+            btn.setIcon(icon_utils.icon(icon_name, _INK, size=16, rotation=rotation))
+            btn.setIconSize(_ICON_SIZE)
         btn.setProperty("class", "jog")
         btn.pressed.connect(self._begin[action])
         btn.released.connect(self._end[action])
@@ -519,8 +552,7 @@ class ManualControlPanel(QWidget):
             self.jog.select_mount(side)
         for s, b in self.mount_buttons.items():
             b.setChecked(s is side)
-        if self.tracer:
-            self.tracer.note(f"active mount -> {side.value}")
+        logger.info(f"active mount -> {side.value}")
         self._refresh_enabled()
 
     def _cycle_mount(self) -> None:
@@ -541,13 +573,11 @@ class ManualControlPanel(QWidget):
             return
         try:
             contact = self.jog.capture_z_zero()
-            if self.tracer:
-                self.tracer.note(f"{contact.side.value} z_zero captured: "
-                                 f"{contact.z_zero_microsteps} microsteps "
-                                 f"(tip {contact.tip_length_mm:.1f} mm)")
+            logger.info(f"{contact.side.value} z_zero captured: "
+                        f"{contact.z_zero_microsteps} microsteps "
+                        f"(tip {contact.tip_length_mm:.1f} mm)")
         except Exception as exc:
-            if self.tracer:
-                self.tracer.note(f"zero Z failed: {exc}")
+            logger.error(f"zero Z failed: {exc}")
 
     def _go_to_point(self) -> None:
         if self.robot is None or self.jog is None or self._input_locked:
@@ -573,36 +603,31 @@ class ManualControlPanel(QWidget):
                 (self.robot.safe_move_to if safe else self.robot.move_to)(point, side)
             finally:
                 self.robot.controller.set_relative()
-            if self.tracer:
-                self.tracer.note(f"moved {side.value} to ({point.x:g}, {point.y:g}, "
-                                 f"{point.z:g}) mm{' (safe)' if safe else ''}")
+            logger.info(f"moved {side.value} to ({point.x:g}, {point.y:g}, "
+                        f"{point.z:g}) mm{' (safe)' if safe else ''}")
         except Exception as exc:
-            if self.tracer:
-                self.tracer.note(f"go-to failed: {exc}")
+            logger.error(f"go-to failed: {exc}")
 
     def _read_sensor(self) -> None:
         if self.robot is None:
             return
         sensor = self.robot.rear()
         if sensor is None:
-            if self.tracer:
-                self.tracer.note("no ultrasonic sensor attached to the rear mount")
+            logger.warning("no ultrasonic sensor attached to the rear mount")
             return
         try:
             distance = sensor.read_distance_mm()
-            msg = ("out of range / no echo" if distance is None
-                  else f"rear distance: {distance:.1f} mm")
-            if self.tracer:
-                self.tracer.note(msg)
+            if distance is None:
+                logger.warning("out of range / no echo")
+            else:
+                logger.info(f"rear distance: {distance:.1f} mm")
         except Exception as exc:
-            if self.tracer:
-                self.tracer.note(f"sensor read failed: {exc}")
+            logger.error(f"sensor read failed: {exc}")
 
     def _quick_stop(self) -> None:
         if self.robot is not None:
             self.robot.controller.quick_stop()
-            if self.tracer:
-                self.tracer.note("quick stop")
+            logger.warning("quick stop")
 
     def _on_gamepad_axis(self, axis_name: str, signed: float) -> None:
         """A stick/trigger's deflection changed. 0 means centered/released
@@ -625,8 +650,7 @@ class ManualControlPanel(QWidget):
         try:
             (pickup_tip_in_place if action == "pickup" else eject_tip_in_place)(self.robot, self.jog.side)
         except Exception as exc:
-            if self.tracer:
-                self.tracer.note(f"{action} tip failed: {exc}")
+            logger.error(f"{action} tip failed: {exc}")
 
     # -- input mode ---------------------------------------------------------
     def _set_input_mode(self, mode: str) -> None:
@@ -639,14 +663,18 @@ class ManualControlPanel(QWidget):
             self._stop_gamepad()
             _set_pill_class(self.status_pill, "pill")
             self.status_pill.setText("jog")
+            self.status_pill_icon.clear()
 
     def _on_gamepad_connected(self, connected: bool) -> None:
         if connected:
             _set_pill_class(self.status_pill, "pill-live")
-            self.status_pill.setText("●  pad connected")
+            self.status_pill.setText("pad connected")
+            self.status_pill_icon.setPixmap(
+                icon_utils.icon("controller_connect", _SUCCESS, size=14).pixmap(_ICON_SIZE))
         else:
             _set_pill_class(self.status_pill, "pill-warn")
-            self.status_pill.setText("○  no gamepad")
+            self.status_pill.setText("no gamepad")
+            self.status_pill_icon.setPixmap(icon_utils.icon("gamepad", _MUTED, size=14).pixmap(_ICON_SIZE))
 
     def _start_gamepad(self) -> None:
         if self.gamepad is not None:
@@ -662,7 +690,7 @@ class ManualControlPanel(QWidget):
         self.gamepad.zero_z_requested.connect(self._zero_z)
         self.gamepad.tip_action_requested.connect(self._on_tip_action)
         self.gamepad.connected_changed.connect(self._on_gamepad_connected)
-        self.gamepad.status.connect(lambda msg: self.tracer.note(msg) if self.tracer else None)
+        self.gamepad.status.connect(lambda msg: logger.info(msg))
         self.gamepad.start()
 
     def _stop_gamepad(self) -> None:
@@ -703,11 +731,10 @@ class ManualControlPanel(QWidget):
         if self.gamepad is not None:
             self.gamepad.stop()
 
-    def set_context(self, robot, jog, tracer) -> None:
+    def set_context(self, robot, jog) -> None:
         self.stop_all_jog()
         self.robot = robot
         self.jog = jog
-        self.tracer = tracer
         if jog is not None:
             for side, b in self.mount_buttons.items():
                 b.setChecked(side is jog.side)

@@ -14,13 +14,20 @@ import copy
 import threading
 from pathlib import Path
 
-from PyQt5.QtCore import QThread, pyqtSignal
+from loguru import logger
+from PyQt5.QtCore import QThread, QSize, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QListWidget, QListWidgetItem, QFileDialog)
 
 from ..core import AxisId
 from ..protocol.commands import RapidMove, LinearMove, Home
+from . import icon_utils
 from .routine_model import Routine
+from .tokens import TOKENS
+
+_ICON_SIZE = QSize(16, 16)
+_INK = QColor(*TOKENS["flat_text"][:3])
 
 _STATUS_ICON = {"pending": "○", "running": "▶", "ok": "✓", "error": "✕"}
 
@@ -160,7 +167,6 @@ class RoutineRunnerWidget(QWidget):
         super().__init__(parent)
         self._get_source_routine = get_source_routine
         self.robot = None
-        self.tracer = None
         self.runner: RoutineRunner | None = None
         self._routine: Routine | None = None
 
@@ -183,8 +189,12 @@ class RoutineRunnerWidget(QWidget):
         controls = QHBoxLayout()
         self.btn_step = QPushButton("Step ▸")
         self.btn_run = QPushButton("Run ▶")
-        self.btn_stop = QPushButton("Stop ■")
-        self.btn_reset = QPushButton("Reset ↺")
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setIcon(icon_utils.icon("square_circle", _INK, size=16))
+        self.btn_stop.setIconSize(_ICON_SIZE)
+        self.btn_reset = QPushButton("Reset")
+        self.btn_reset.setIcon(icon_utils.icon("restart_circle", _INK, size=16))
+        self.btn_reset.setIconSize(_ICON_SIZE)
         self.btn_step.clicked.connect(self._on_step)
         self.btn_run.clicked.connect(self._on_run_pause)
         self.btn_stop.clicked.connect(self._on_stop)
@@ -201,10 +211,9 @@ class RoutineRunnerWidget(QWidget):
         self._refresh_buttons()
 
     # -- context --------------------------------------------------------------
-    def set_context(self, robot, tracer) -> None:
+    def set_context(self, robot) -> None:
         self._on_stop()   # any in-flight run belongs to the outgoing robot
         self.robot = robot
-        self.tracer = tracer
         self._refresh_buttons()
 
     def stop_run(self) -> None:
@@ -254,7 +263,7 @@ class RoutineRunnerWidget(QWidget):
             self.runner.step_finished.connect(self._on_step_finished)
             self.runner.step_motion.connect(self.step_motion.emit)
             self.runner.step_home.connect(self.step_home.emit)
-            self.runner.log.connect(lambda msg: self.tracer.note(msg) if self.tracer else None)
+            self.runner.log.connect(lambda msg: logger.info(msg))
             self.runner.finished_run.connect(self._on_finished_run)
             self.runner.finished.connect(self._refresh_buttons)
             self.runner.start()
@@ -263,8 +272,8 @@ class RoutineRunnerWidget(QWidget):
 
     def _on_step_finished(self, i: int, ok: bool, message: str) -> None:
         self._set_row_status(i, "ok" if ok else "error", message)
-        if not ok and self.tracer:
-            self.tracer.note(f"step {i + 1} failed: {message}")
+        if not ok:
+            logger.error(f"step {i + 1} failed: {message}")
 
     def _on_step(self) -> None:
         if self._ensure_runner():

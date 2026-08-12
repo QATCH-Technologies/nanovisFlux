@@ -20,7 +20,6 @@ class TraceEvent:
     ok: bool = True
     info: list = field(default_factory=list)
     error: str | None = None
-    source: str = "cmd"  # "cmd" | "note" (a plain human-readable log line, no wire traffic)
 
 
 class _TraceBus(QObject):
@@ -47,10 +46,6 @@ class CommandTracer:
         self.lock = threading.Lock()
         self._orig_execute = robot.controller.execute
         robot.controller.execute = self._traced_execute
-
-    def note(self, message: str) -> None:
-        """Post a plain human-readable line (not a wire command) to the console."""
-        self.bus.event.emit(TraceEvent(line=message, source="note"))
 
     def _traced_execute(self, command, **kwargs):
         line = command.render()

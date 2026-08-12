@@ -5,7 +5,9 @@ at the top regardless of which right-hand tab is active."""
 from __future__ import annotations
 
 import time
-from PyQt5.QtCore import Qt, QTimer
+from loguru import logger
+from PyQt5.QtCore import Qt, QSize, QTimer
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, QTabWidget,
                              QLabel, QPushButton, QFrame, QMessageBox, QListWidget)
 
@@ -15,6 +17,7 @@ from ..control.jog import JogController
 from ..motion.axis import HOMING_ORDER
 from ..motion.mounts import MOUNT_OFFSET_MM
 from ..geometry.coordinates import DeckPoint
+from . import icon_utils
 from .connection_bar import ConnectionBar
 from .deck_view import DeckView
 from .manual_control import ManualControlPanel
@@ -22,11 +25,16 @@ from .routine_model import Routine
 from .routine_builder import RoutineBuilderWidget
 from .routine_runner import RoutineRunnerWidget
 from .console_log import ConsoleLog
+from .log_sink import install_console_sink
+from .tokens import TOKENS
 from .trace import CommandTracer
 from .robot_factory import build_robot
 from .calibration_dialog import CalibrationDialog
 from .mounts_dialog import MountsDialog
 from ..config.loader import load_calibration_override
+
+_ICON_SIZE = QSize(16, 16)
+_INK = QColor(*TOKENS["flat_text"][:3])
 
 _HOMING_ANIM_INTERVAL_MS = 40  # 25 Hz -- smooth enough for a multi-second sweep
 
@@ -80,7 +88,9 @@ class MainWindow(QMainWindow):
         self.btn_mounts.clicked.connect(self._open_mounts_dialog)
         self.btn_mounts.setEnabled(False)
         left_layout.addWidget(self.btn_mounts)
-        self.btn_calibrate = QPushButton("⚙ Calibrate Deck…")
+        self.btn_calibrate = QPushButton("Calibrate Deck…")
+        self.btn_calibrate.setIcon(icon_utils.icon("settings", _INK, size=16))
+        self.btn_calibrate.setIconSize(_ICON_SIZE)
         self.btn_calibrate.clicked.connect(self._open_calibration_dialog)
         self.btn_calibrate.setEnabled(False)
         left_layout.addWidget(self.btn_calibrate)
@@ -139,6 +149,7 @@ class MainWindow(QMainWindow):
         self.console = ConsoleLog()
         self.console.setFixedHeight(140)
         console_layout.addWidget(self.console)
+        install_console_sink(self.console)
         outer.addWidget(console_wrap)
 
         self._position_timer = QTimer(self)
@@ -226,14 +237,14 @@ class MainWindow(QMainWindow):
 
         mode_label = "simulated" if opts["mode"] == "sim" else f"{opts['port']} @ {opts['baud']}"
         self.conn_bar.set_status("connected", f"connected · {mode_label}")
-        self.tracer.note(f"connected ({mode_label})" +
-                        (f" · config: {opts['config_path']}" if opts.get("config_path") else ""))
+        logger.info(f"connected ({mode_label})" +
+                    (f" · config: {opts['config_path']}" if opts.get("config_path") else ""))
         if robot.controller.banner:
-            self.tracer.note("banner: " + " | ".join(robot.controller.banner))
+            logger.info("banner: " + " | ".join(robot.controller.banner))
 
         self.deck_view.set_robot(robot)
-        self.manual_panel.set_context(robot, self.jog, self.tracer)
-        self.routine_runner_widget.set_context(robot, self.tracer)
+        self.manual_panel.set_context(robot, self.jog)
+        self.routine_runner_widget.set_context(robot)
         self.routine_builder.set_robot(robot)
         self.btn_mounts.setEnabled(True)
         self.btn_calibrate.setEnabled(True)
@@ -249,8 +260,8 @@ class MainWindow(QMainWindow):
     def _teardown_connection(self) -> None:
         self._position_timer.stop()
         self._homing_anim_timer.stop()
-        self.routine_runner_widget.set_context(None, None)
-        self.manual_panel.set_context(None, None, None)
+        self.routine_runner_widget.set_context(None)
+        self.manual_panel.set_context(None, None)
         self.routine_builder.set_robot(None)
         if self.jog is not None:
             try:
@@ -296,11 +307,9 @@ class MainWindow(QMainWindow):
         try:
             self.robot.home()
             self.robot.controller.set_relative()   # home() leaves G90; restore ambient jog mode
-            if self.tracer:
-                self.tracer.note("homed")
+            logger.info("homed")
         except Exception as exc:
-            if self.tracer:
-                self.tracer.note(f"home failed: {exc}")
+            logger.error(f"home failed: {exc}")
             return
         self._start_homing_animation(start_pos)
 
@@ -368,13 +377,11 @@ class MainWindow(QMainWindow):
         self.manual_panel.stop_all_jog()
         try:
             self.robot.emergency_stop()
-            if self.tracer:
-                self.tracer.note("EMERGENCY STOP")
+            logger.warning("EMERGENCY STOP")
             QMessageBox.critical(self, "Emergency stop",
                                 "Emergency stop sent. Home all axes before resuming motion.")
         except Exception as exc:
-            if self.tracer:
-                self.tracer.note(f"EMERGENCY STOP FAILED: {exc}")
+            logger.error(f"EMERGENCY STOP FAILED: {exc}")
             QMessageBox.critical(self, "Emergency stop failed", f"Could not send emergency stop: {exc}")
 
     # -- routine run <-> manual lock -------------------------------------------

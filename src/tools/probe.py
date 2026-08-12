@@ -1,13 +1,15 @@
 from __future__ import annotations
+
 from ..core import AxisId
-from ..protocol.commands import ProbeMode
 from ..geometry.coordinates import DeckPoint
+from ..protocol.commands import ProbeMode
 from .base import Tool
 
 
 class TouchProbe(Tool):
     """A conductive touch sensor used to find surface heights for
     calibration. Wraps the firmware G38 probe cycle in deck-space terms."""
+
     name = "touch-probe"
 
     def probe_down(self, to_z_mm: float, feed: int = 100):
@@ -18,7 +20,8 @@ class TouchProbe(Tool):
         vertical = self._mount.vertical
         target = cal.deck_to_motor(DeckPoint(0, 0, to_z_mm), side)[vertical]
         result = self._robot.controller.probe(
-            vertical, target, feed=feed, mode=ProbeMode.TOWARD_OR_FAIL)
+            vertical, target, feed=feed, mode=ProbeMode.TOWARD_OR_FAIL
+        )
         if not result.contacted:
             return None
         pos = self._robot.controller.report_position()

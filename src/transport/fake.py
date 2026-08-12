@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import time
+
 from .base import Transport
 
 _SILENT = ("M201", "M204", "M210", "M220", "M421", "M112", "M30")
@@ -40,8 +42,12 @@ class FakeTransport(Transport):
     ordering here instead of queuing the "ok" the instant the G1 is sent.
     """
 
-    def __init__(self, probe_contact: dict | None = None, ultrasonic_mm: float | None = None,
-                axis_limits: dict | None = None):
+    def __init__(
+        self,
+        probe_contact: dict | None = None,
+        ultrasonic_mm: float | None = None,
+        axis_limits: dict | None = None,
+    ):
         self._pos = {a: 0 for a in "XYZABC"}
         self._homed = {a: False for a in "XYZABC"}
         self._absolute = True
@@ -72,8 +78,10 @@ class FakeTransport(Transport):
         # (JogController._restart_continuous targets endstop_limit) actually
         # stops there instead of sailing past into negative territory.
         from ..motion.axis import default_axis_configs
-        self.axis_limits = {a.letter: cfg.endstop_limit
-                            for a, cfg in default_axis_configs().items()}
+
+        self.axis_limits = {
+            a.letter: cfg.endstop_limit for a, cfg in default_axis_configs().items()
+        }
         if axis_limits:
             self.axis_limits.update(axis_limits)
 
@@ -164,6 +172,7 @@ class FakeTransport(Transport):
     def _prb_line(self, contacted: bool) -> str:
         def val(a):
             return abs(self._pos[a]) if self._homed[a] else -1
+
         return f"[PRB:{val('X')},{val('Y')},{val('A')}:{1 if contacted else 0}]"
 
     def _handle(self, line: str) -> list:
@@ -219,8 +228,7 @@ class FakeTransport(Transport):
                 self._motion.pop(a, None)
             return ["ok"]
         if line.startswith("M114"):
-            body = " ".join(
-                f"{a}:{abs(self._pos[a]) if self._homed[a] else -1}" for a in "XYZABC")
+            body = " ".join(f"{a}:{abs(self._pos[a]) if self._homed[a] else -1}" for a in "XYZABC")
             return [" " + body, "ok"]
         if line.startswith("M410"):
             # _settle() (called from write_line before we got here) already

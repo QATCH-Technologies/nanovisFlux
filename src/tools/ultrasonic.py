@@ -1,7 +1,8 @@
 from __future__ import annotations
+
 from ..core import AxisId, MountSide
-from .base import Tool
 from ..protocol.responses import DistanceResult
+from .base import Tool
 
 #: Which M412 slot letter answers for a sensor mounted on each side. REAR is
 #: the one confirmed/wired mapping today (see firmware/docs/protocol.md's
@@ -21,10 +22,12 @@ class UltrasonicSensor(Tool):
     protocol.commands.MeasureDistance), querying whichever slot letter
     corresponds to the mount it's attached to (see _MOUNT_RANGE_SLOT).
     """
+
     name = "ultrasonic"
 
-    def __init__(self, offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0),
-                max_range_mm: float = 4000.0):
+    def __init__(
+        self, offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0), max_range_mm: float = 4000.0
+    ):
         super().__init__()
         # fixed offset from the gantry's X/Y reference point to the sensor's
         # sensing face (rear mount, so typically -Y and some +Z)

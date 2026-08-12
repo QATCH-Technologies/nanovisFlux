@@ -82,6 +82,8 @@ import csv
 import math
 import time
 
+from loguru import logger
+
 from src.config.loader import load_robot
 from src.core import AxisId, MountSide
 from src.geometry import default_axis_scale
@@ -438,14 +440,14 @@ def main() -> None:
     ys = _irange(y_min, y_max, args.row_step_microsteps)
     feed_effective = args.feed or robot.axes[AxisId.X].config.travel_speed
     row_duration_s = (x_max - x_min) / feed_effective if feed_effective else 0.0
-    print(
+    logger.info(
         f"Planned scan: {len(ys)} continuous row sweeps, X[{x_min}, {x_max}] each "
         f"(~{row_duration_s:.1f}s/row @ feed {feed_effective:g}), Y[{y_min}, {y_max}] "
         f"@ {args.row_step_microsteps} step, {args.samples_per_row} samples/row"
     )
     if row_duration_s < args.samples_per_row * _M412_MIN_INTERVAL_S:
-        print(
-            f"  note: a row only takes ~{row_duration_s:.1f}s but {args.samples_per_row} samples "
+        logger.warning(
+            f"a row only takes ~{row_duration_s:.1f}s but {args.samples_per_row} samples "
             f"need >={args.samples_per_row * _M412_MIN_INTERVAL_S:.1f}s of M412 time alone -- "
             "the sweep will be mostly pauses. Lower --samples-per-row or --feed to fix."
         )
@@ -457,11 +459,11 @@ def main() -> None:
             fake_transport.ultrasonic_mm = synthetic_height_mm(x, y)
 
     def on_row_start(row_idx, n_rows, y, x_start, x_end):
-        print(f"Row {row_idx + 1}/{n_rows}: sweeping X {x_start} -> {x_end} @ Y={y}")
+        logger.info(f"Row {row_idx + 1}/{n_rows}: sweeping X {x_start} -> {x_end} @ Y={y}")
 
     def on_sample(_row_idx, x, y, distance):
         label = "out-of-range" if distance is None else f"{distance:.1f} mm"
-        print(f"  ({x}, {y}) -> {label}")
+        logger.debug(f"({x}, {y}) -> {label}")
 
     with robot:
         if not args.skip_home:
@@ -482,16 +484,15 @@ def main() -> None:
         )
 
     write_csv(args.out, samples)
-    print(f"\nWrote {args.out} ({len(samples)} samples)")
-    print()
+    logger.info(f"Wrote {args.out} ({len(samples)} samples)")
     grid, xs = bucket_grid(samples, x_min, x_max, ys, args.display_columns)
-    print(render_ascii(grid, xs, ys))
+    logger.info("\n" + render_ascii(grid, xs, ys))
 
     if args.png:
         if save_png(args.png, grid, xs, ys):
-            print(f"\nWrote {args.png}")
+            logger.info(f"Wrote {args.png}")
         else:
-            print("\nmatplotlib not installed -- skipped PNG output")
+            logger.warning("matplotlib not installed -- skipped PNG output")
 
 
 if __name__ == "__main__":

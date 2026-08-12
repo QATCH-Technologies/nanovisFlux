@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import socket
+
 from .base import Transport
 
 

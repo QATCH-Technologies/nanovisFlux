@@ -10,16 +10,20 @@ fit-checked path (GridLabwareDefinition._check_fits) a config load would.
 from __future__ import annotations
 import re
 
-from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal
+from PyQt5.QtCore import Qt, QPointF, QRectF, QSize, pyqtSignal
 from PyQt5.QtGui import QPainter, QPainterPath, QPen, QColor, QFont
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QDialog, QMessageBox)
 
 from ..deck import WellShape
+from . import icon_utils
 from .labware_dialog import LabwareDialog
 from . import style as S
+from .tokens import TOKENS
 
 _WELL_RE = re.compile(r"([A-Za-z]+)(\d+)")
+_ICON_SIZE = QSize(16, 16)
+_INK = QColor(*TOKENS["flat_text"][:3])
 
 
 class LabwareCanvas(QWidget):
@@ -137,7 +141,9 @@ class SlotDetailView(QWidget):
 
         root = QVBoxLayout(self)
         header = QHBoxLayout()
-        self.btn_back = QPushButton("← Deck")
+        self.btn_back = QPushButton("Deck")
+        self.btn_back.setIcon(icon_utils.icon("chevron", _INK, size=16, rotation=270))
+        self.btn_back.setIconSize(_ICON_SIZE)
         self.btn_back.clicked.connect(self.back_requested.emit)
         header.addWidget(self.btn_back)
         self.title = QLabel("")
@@ -164,11 +170,15 @@ class SlotDetailView(QWidget):
         side.addWidget(self.info_label)
         side.addStretch(1)
 
-        self.btn_add = QPushButton("+ Add Labware…")
+        self.btn_add = QPushButton("Add Labware…")
+        self.btn_add.setIcon(icon_utils.icon("add_circle", _INK, size=16))
+        self.btn_add.setIconSize(_ICON_SIZE)
         self.btn_add.clicked.connect(self._add_labware)
         self.btn_swap = QPushButton("Swap Labware…")
         self.btn_swap.clicked.connect(self._swap_labware)
         self.btn_remove = QPushButton("Remove Labware")
+        self.btn_remove.setIcon(icon_utils.icon("minus_circle", _INK, size=16))
+        self.btn_remove.setIconSize(_ICON_SIZE)
         self.btn_remove.clicked.connect(self._remove_labware)
         side.addWidget(self.btn_add)
         side.addWidget(self.btn_swap)

@@ -1,9 +1,11 @@
 from __future__ import annotations
+
 from enum import Enum
 
 
 class AxisId(Enum):
     """The six motion axes exposed by the firmware."""
+
     X = "X"  # gantry left/right
     Y = "Y"  # gantry front/back
     Z = "Z"  # left mount vertical
@@ -21,6 +23,6 @@ class AxisId(Enum):
 
 
 class MountSide(Enum):
-    LEFT = "left"    # vertical Z, plunger B
+    LEFT = "left"  # vertical Z, plunger B
     RIGHT = "right"  # vertical A, plunger C
-    REAR = "rear"    # fixed sensor mount behind Z/A; no vertical or plunger axis
+    REAR = "rear"  # fixed sensor mount behind Z/A; no vertical or plunger axis

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from abc import ABC
 
 
@@ -7,6 +8,7 @@ class Tool(ABC):
     camera... To add a tool, subclass this and expose the behaviour you
     want. Nothing else in the stack changes -- that is the extension seam.
     """
+
     name: str = "tool"
 
     def __init__(self):

@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+
 from ..core import AxisId, MountSide
 from ..motion.mounts import MOUNT_OFFSET_MM
 from .coordinates import DeckPoint
@@ -10,11 +12,12 @@ from .units import AxisScale
 @dataclass
 class ZContact:
     """Result of a Z calibration touch, however it was made."""
+
     side: MountSide
-    contact_microsteps: int          # vertical-axis position at contact
-    z_zero_microsteps: int           # implied nozzle-reference z_zero
+    contact_microsteps: int  # vertical-axis position at contact
+    z_zero_microsteps: int  # implied nozzle-reference z_zero
     tip_length_mm: float
-    xy: DeckPoint | None = None      # set for an automated probe; None for a manual touch-off
+    xy: DeckPoint | None = None  # set for an automated probe; None for a manual touch-off
 
 
 @dataclass
@@ -25,6 +28,7 @@ class DeckCalibration:
     per-mount linear map: a reference microstep value at deck z = 0 plus a
     scale. Home is up, so descending toward the deck increases microsteps.
     """
+
     xy: AffineTransform2D
     z_scale: AxisScale
     z_zero: dict = field(default_factory=dict)  # MountSide -> microsteps at deck z=0
@@ -54,8 +58,7 @@ class DeckCalibration:
         ox, oy = MOUNT_OFFSET_MM.get(side, (0.0, 0.0))
         return self.xy.apply(point.x - ox, point.y - oy)
 
-    def deck_to_motor(self, point: DeckPoint, side: MountSide,
-                      tip_length_mm: float = 0.0) -> dict:
+    def deck_to_motor(self, point: DeckPoint, side: MountSide, tip_length_mm: float = 0.0) -> dict:
         """Motor targets that place the *working point* at ``point`` (deck mm).
 
         ``z_zero`` is the nozzle-reference position (tip-independent), so the
@@ -71,8 +74,7 @@ class DeckCalibration:
             targets[vertical] = int(zref - self.z_scale.to_microsteps(point.z + tip_length_mm))
         return targets
 
-    def z_zero_from_contact(self, contact_microsteps: int,
-                            tip_length_mm: float = 0.0) -> int:
+    def z_zero_from_contact(self, contact_microsteps: int, tip_length_mm: float = 0.0) -> int:
         """Given the microsteps at which a probe of length ``tip_length_mm``
         touched deck z = 0, return the nozzle-reference ``z_zero``.
 
@@ -100,11 +102,18 @@ class DeckCalibration:
     # so the import of protocol types stays lazy -- geometry otherwise has
     # no dependency on the protocol layer, and importing this module should
     # never require one.
-    def probe_z_zero(self, robot, side: MountSide, xy: DeckPoint,
-                     tip_length_mm: float = 0.0, *, feed: int = 100,
-                     safe_up_microsteps: int = 2000,
-                     max_descent_microsteps: int | None = None,
-                     commit: bool = True) -> ZContact:
+    def probe_z_zero(
+        self,
+        robot,
+        side: MountSide,
+        xy: DeckPoint,
+        tip_length_mm: float = 0.0,
+        *,
+        feed: int = 100,
+        safe_up_microsteps: int = 2000,
+        max_descent_microsteps: int | None = None,
+        commit: bool = True,
+    ) -> ZContact:
         """Find z_zero for ``side`` by touching a conductive surface at
         ``xy`` with an automated G38.2 probe. Works in raw microsteps for the
         descent, so it does NOT need a prior Z calibration (that would be
@@ -119,8 +128,7 @@ class DeckCalibration:
 
         ctrl = robot.controller
         vertical = self.vertical_axis(side)
-        max_descent = (max_descent_microsteps
-                       or robot.axes[vertical].config.endstop_limit)
+        max_descent = max_descent_microsteps or robot.axes[vertical].config.endstop_limit
 
         # 1. Lift to a safe height, then position over the target in XY.
         ctrl.rapid_move({vertical: safe_up_microsteps})
@@ -128,11 +136,9 @@ class DeckCalibration:
         ctrl.rapid_move({AxisId.X: round(mx), AxisId.Y: round(my)})
 
         # 2. Probe down (error if it never touches).
-        result = ctrl.probe(vertical, max_descent, feed=feed,
-                            mode=ProbeMode.TOWARD_OR_FAIL)
+        result = ctrl.probe(vertical, max_descent, feed=feed, mode=ProbeMode.TOWARD_OR_FAIL)
         if not result.contacted:
-            raise ProbeError(f"no surface found probing {side.value} at "
-                             f"({xy.x}, {xy.y})")
+            raise ProbeError(f"no surface found probing {side.value} at " f"({xy.x}, {xy.y})")
 
         # 3. Read the exact contact microsteps and derive the nozzle z_zero.
         contact = ctrl.report_position()[vertical]
@@ -144,9 +150,9 @@ class DeckCalibration:
         ctrl.rapid_move({vertical: safe_up_microsteps})
         return ZContact(side, contact, z_zero, tip_length_mm, xy)
 
-    def touch_off_z_zero(self, robot, side: MountSide,
-                         tip_length_mm: float | None = None,
-                         commit: bool = True) -> ZContact:
+    def touch_off_z_zero(
+        self, robot, side: MountSide, tip_length_mm: float | None = None, commit: bool = True
+    ) -> ZContact:
         """Derive z_zero for ``side`` from the mount's *current* position --
         call after manually jogging the tip end down onto a reference
         surface. An alternative to ``probe_z_zero`` for tips too soft or
@@ -168,6 +174,5 @@ class DeckCalibration:
 
     @classmethod
     def from_points(cls, deck_pts, motor_xy, z_scale, z_zero=None) -> "DeckCalibration":
-        xy = AffineTransform2D.from_point_pairs(
-            [(p.x, p.y) for p in deck_pts], list(motor_xy))
+        xy = AffineTransform2D.from_point_pairs([(p.x, p.y) for p in deck_pts], list(motor_xy))
         return cls(xy=xy, z_scale=z_scale, z_zero=z_zero or {})

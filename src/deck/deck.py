@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
+
 from ..geometry.coordinates import DeckPoint
 
 
@@ -12,9 +14,10 @@ class SlotObstacle:
     everything inside the slot's walls that isn't an obstacle is empty.
     Purely descriptive/visual -- nothing in motion planning consults this
     yet, so it doesn't guard against a tip being driven into one."""
-    offset: tuple                           # (x, y) mm from the slot origin
-    size: tuple                             # (w, h) mm footprint
-    height_mm: float                        # solid from the slot floor up to this height
+
+    offset: tuple  # (x, y) mm from the slot origin
+    size: tuple  # (w, h) mm footprint
+    height_mm: float  # solid from the slot floor up to this height
 
 
 @dataclass
@@ -29,12 +32,13 @@ class Slot:
     ``obstacles`` lists any solid interior fixtures (see ``SlotObstacle``).
     Like ``wall_height_mm``, purely descriptive/visual today.
     """
+
     name: str
-    origin: DeckPoint                       # deck-space reference corner
-    size: tuple = (0.0, 0.0)                # (w, h) mm, optional footprint
+    origin: DeckPoint  # deck-space reference corner
+    size: tuple = (0.0, 0.0)  # (w, h) mm, optional footprint
     wall_height_mm: float = 0.0
     wall_thickness_mm: float = 0.0
-    obstacles: list = field(default_factory=list)   # list[SlotObstacle]
+    obstacles: list = field(default_factory=list)  # list[SlotObstacle]
 
 
 class Corner(Enum):
@@ -42,6 +46,7 @@ class Corner(Enum):
     ``Deck.margins``'/``Deck.frame_margins``' front/rear/left/right keys:
     front = min-y edge, rear = max-y edge, left = min-x edge, right = max-x
     edge (see ``DeckCanvas._project``'s docstring for the y convention)."""
+
     FRONT_LEFT = "front_left"
     FRONT_RIGHT = "front_right"
     REAR_LEFT = "rear_left"
@@ -54,16 +59,16 @@ def corner_point(slot: Slot, corner: Corner) -> DeckPoint:
     for the right/rear ones. Requires ``slot.size`` (a corner is meaningless
     for a dimensionless slot)."""
     if not slot.size or not slot.size[0] or not slot.size[1]:
-        raise ValueError(f"slot {slot.name!r} has no footprint size; "
-                         "corners need slot.size")
+        raise ValueError(f"slot {slot.name!r} has no footprint size; " "corners need slot.size")
     w, h = slot.size
     x = slot.origin.x if corner in (Corner.FRONT_LEFT, Corner.REAR_LEFT) else slot.origin.x + w
     y = slot.origin.y if corner in (Corner.FRONT_LEFT, Corner.FRONT_RIGHT) else slot.origin.y + h
     return DeckPoint(x, y, slot.origin.z)
 
 
-def inset_corner_point(slot: Slot, corner: Corner,
-                       inset_x_mm: float, inset_y_mm: float) -> DeckPoint:
+def inset_corner_point(
+    slot: Slot, corner: Corner, inset_x_mm: float, inset_y_mm: float
+) -> DeckPoint:
     """``corner_point`` nudged inward (into the slot) by a fixed mm inset on
     each axis -- e.g. a physical reference mark etched inset from a slot's
     corner rather than sitting right on the divider. The inset direction
@@ -83,6 +88,7 @@ class CalibrationMark:
     descriptive of *where* the mark is; capturing the motor position found
     there is left to whatever runs the calibration (the GUI dialog, a
     script, ...)."""
+
     name: str
     slot: str
     corner: Corner
@@ -109,6 +115,7 @@ class Deck:
     used only to draw the frame with a real height in the 3D deck view
     instead of a flat outline.
     """
+
     slots: dict = field(default_factory=dict)
     margins: dict | None = None
     frame_margins: dict | None = None
@@ -123,8 +130,7 @@ class Deck:
         return self.slots[name]
 
     @classmethod
-    def grid(cls, *, rows: int, cols: int, origin: DeckPoint,
-             pitch: tuple, names=None) -> "Deck":
+    def grid(cls, *, rows: int, cols: int, origin: DeckPoint, pitch: tuple, names=None) -> "Deck":
         """Build a regular grid of slots. `pitch` is (dx, dy) in mm between
         slot origins. Names default to 1..rows*cols, row-major from origin."""
         deck = cls()

@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 from ..core import AxisId, MountSide
 
 #: Fixed mechanical offset from the gantry's single X/Y reference point to
@@ -26,6 +28,7 @@ class Mount:
     sensor), in which case the B/C axis is simply never commanded -- which
     matches hardware where the C plunger may not be wired at all.
     """
+
     side: MountSide
     tool: object = None  # a tools.Tool; typed loosely to avoid an import cycle
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
+
 from ..core import AxisId, MountSide
 
 
@@ -13,13 +15,21 @@ class JogSettings:
     (cycled by step_up/step_down): the former sizes a discrete nudge(), the
     latter is the feed fraction a held keyboard action drives continuously
     at -- one "how big/fast" dial for both move styles."""
-    step_microsteps: dict = field(default_factory=lambda: {
-        AxisId.X: 400, AxisId.Y: 400, AxisId.Z: 800, AxisId.A: 800,
-        AxisId.B: 200, AxisId.C: 200})
-    step_scales: tuple = (0.25, 1.0, 4.0)          # nudge() distance multipliers
-    jog_speed_scales: tuple = (0.15, 0.4, 1.0)      # continuous-jog feed fractions
-    feed: int = 6000                                # feed for discrete nudge() moves
-    jog_feed: int = 10000                           # feed (microsteps/s) at full jog speed
+
+    step_microsteps: dict = field(
+        default_factory=lambda: {
+            AxisId.X: 400,
+            AxisId.Y: 400,
+            AxisId.Z: 800,
+            AxisId.A: 800,
+            AxisId.B: 200,
+            AxisId.C: 200,
+        }
+    )
+    step_scales: tuple = (0.25, 1.0, 4.0)  # nudge() distance multipliers
+    jog_speed_scales: tuple = (0.15, 0.4, 1.0)  # continuous-jog feed fractions
+    feed: int = 6000  # feed for discrete nudge() moves
+    jog_feed: int = 10000  # feed (microsteps/s) at full jog speed
 
 
 class JogController:
@@ -50,14 +60,15 @@ class JogController:
     limit *clamping* but not the homed gate, so home before jogging.
     """
 
-    def __init__(self, robot, settings: JogSettings | None = None,
-                 side: MountSide = MountSide.LEFT):
+    def __init__(
+        self, robot, settings: JogSettings | None = None, side: MountSide = MountSide.LEFT
+    ):
         self.robot = robot
         self.settings = settings or JogSettings()
         self.side = side
         self._scale_idx = 1
         self._entered = False
-        self._active: dict[AxisId, float] = {}   # axis -> signed speed of the in-flight jog
+        self._active: dict[AxisId, float] = {}  # axis -> signed speed of the in-flight jog
 
     @property
     def is_jogging(self) -> bool:
@@ -153,8 +164,10 @@ class JogController:
             return
         if not self._entered:
             self.robot.controller.set_relative()
-        targets = {axis: int(math.copysign(self.robot.axes[axis].config.endstop_limit, s))
-                   for axis, s in self._active.items()}
+        targets = {
+            axis: int(math.copysign(self.robot.axes[axis].config.endstop_limit, s))
+            for axis, s in self._active.items()
+        }
         feed = int(self.settings.jog_feed * max(abs(s) for s in self._active.values()))
         # Not waited on: a continuous jog is open-ended, and the firmware
         # may not send this G1's 'ok' until the move itself completes, not
@@ -200,8 +213,22 @@ class JogController:
 #: press/deflect and .release() on release/return-to-center. Non-movement
 #: actions fire once via .press() (or the equivalent .handle()) and need no
 #: matching release() call.
-ACTIONS = ("x+", "x-", "y+", "y-", "z+", "z-", "plunger+", "plunger-",
-           "step_up", "step_down", "mount_toggle", "zero_z", "home", "quit")
+ACTIONS = (
+    "x+",
+    "x-",
+    "y+",
+    "y-",
+    "z+",
+    "z-",
+    "plunger+",
+    "plunger-",
+    "step_up",
+    "step_down",
+    "mount_toggle",
+    "zero_z",
+    "home",
+    "quit",
+)
 
 
 class JogSession:

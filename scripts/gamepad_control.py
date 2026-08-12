@@ -61,6 +61,8 @@ from __future__ import annotations
 import argparse
 import time
 
+from loguru import logger
+
 from src.core import AxisId, MountSide
 from src.transport import FakeTransport, SerialTransport
 from src.robot import Robot
@@ -141,7 +143,7 @@ def pickup_tip_in_place(robot, side: MountSide) -> None:
             ctrl.linear_move({vertical: -PICKUP_RETRACT_MICROSTEPS - depth}, feed=PICKUP_FEED)
             depth = -PICKUP_RETRACT_MICROSTEPS
     ctrl.linear_move({vertical: -depth}, feed=PICKUP_FEED)   # back to the starting depth
-    print("  pickup cycle done (current_tip bookkeeping not tracked by this script)")
+    logger.info("pickup cycle done (current_tip bookkeeping not tracked by this script)")
 
 
 def eject_tip_in_place(robot, side: MountSide) -> None:
@@ -159,7 +161,7 @@ def eject_tip_in_place(robot, side: MountSide) -> None:
     if pipette is not None and hasattr(pipette, "current_tip"):
         pipette.current_tip = None
         pipette.current_volume_ul = 0.0
-    print("  eject done")
+    logger.info("eject done")
 
 
 class GamepadTeleop:
@@ -199,22 +201,24 @@ class GamepadTeleop:
         self._print_legend()
 
     def _print_legend(self) -> None:
-        print("=" * 60)
-        print(f" GAMEPAD TELEOP CONTROLS - {self.pad.get_name().upper()}")
-        print(" [X/Y Gantry]    Left stick (proportional speed)")
-        print(" [Active Z]      Right stick, up/down (proportional speed, down = Z+)")
-        print(" [Fluidic]       LT (aspirate), RT (dispense) -- proportional")
-        print(" [Mount Switch]  Y")
-        print(" [Tip]           LB (pick up), RB (eject)")
-        print("-" * 60)
-        print(" [Speed]         D-pad up/down (+/- speed_increment)")
-        print(" [Step size]     D-pad left/right (+/- speed_increment itself)")
-        print(" [Actions]       X (print position), Back/View (home)")
-        print(" [Stops]         A (quick stop), Start/Menu (emergency stop + disconnect)")
-        print(" [Sensor]        B (read rear ultrasonic distance, if attached)")
-        print(f" mount: {self.jc.side.value} | speed ceiling: {self.jc.settings.jog_feed} steps/s | "
-             f"step: {self.speed_increment}")
-        print("=" * 60 + "\n")
+        logger.info(
+            "=" * 60 + "\n"
+            f" GAMEPAD TELEOP CONTROLS - {self.pad.get_name().upper()}\n"
+            " [X/Y Gantry]    Left stick (proportional speed)\n"
+            " [Active Z]      Right stick, up/down (proportional speed, down = Z+)\n"
+            " [Fluidic]       LT (aspirate), RT (dispense) -- proportional\n"
+            " [Mount Switch]  Y\n"
+            " [Tip]           LB (pick up), RB (eject)\n"
+            "-" * 60 + "\n"
+            " [Speed]         D-pad up/down (+/- speed_increment)\n"
+            " [Step size]     D-pad left/right (+/- speed_increment itself)\n"
+            " [Actions]       X (print position), Back/View (home)\n"
+            " [Stops]         A (quick stop), Start/Menu (emergency stop + disconnect)\n"
+            " [Sensor]        B (read rear ultrasonic distance, if attached)\n"
+            f" mount: {self.jc.side.value} | speed ceiling: {self.jc.settings.jog_feed} steps/s | "
+            f"step: {self.speed_increment}\n"
+            + "=" * 60
+        )
 
     def _vertical_axis(self) -> AxisId:
         return AxisId.Z if self.jc.side is MountSide.LEFT else AxisId.A
@@ -230,13 +234,13 @@ class GamepadTeleop:
         one is attached (via --config; see src/tools/ultrasonic.py)."""
         tool = self.robot.mounts[MountSide.REAR].tool
         if tool is None:
-            print("  no ultrasonic sensor attached (rear mount empty)")
+            logger.warning("no ultrasonic sensor attached (rear mount empty)")
             return
         distance_mm = tool.read_distance_mm()
         if distance_mm is None:
-            print("  rear distance: out of range / no echo")
+            logger.warning("rear distance: out of range / no echo")
         else:
-            print(f"  rear distance: {distance_mm:.1f} mm")
+            logger.info(f"rear distance: {distance_mm:.1f} mm")
 
     # -- stopping ------------------------------------------------------
     def _stop_all_motion(self) -> None:
@@ -336,18 +340,18 @@ class GamepadTeleop:
             self._stop_all_motion()
             self.robot.emergency_stop()
             self.running = False
-            print("EMERGENCY STOP -- disconnecting")
+            logger.warning("EMERGENCY STOP -- disconnecting")
         elif button == 0:    # A
             self._stop_all_motion()
-            print("quick stop")
+            logger.warning("quick stop")
         elif button == 1:    # B
             self._read_ultrasonic()
         elif button == 2:    # X
-            print("position:", fmt_pos(self.robot.controller.report_position()))
+            logger.info(f"position: {fmt_pos(self.robot.controller.report_position())}")
         elif button == 3:    # Y
             self._stop_all_motion()   # the axes we drive are about to change
             self.jc.toggle_mount()
-            print(f"mount -> {self.jc.side.value}")
+            logger.info(f"mount -> {self.jc.side.value}")
         elif button == 4:    # LB
             self._pick_up_tip()
         elif button == 5:    # RB
@@ -356,26 +360,26 @@ class GamepadTeleop:
             self._stop_all_motion()
             self.robot.home()
             self.robot.controller.set_relative()   # home() leaves G90; restore ambient G91
-            print("homed")
+            logger.info("homed")
 
     def _handle_hat(self, value: tuple) -> None:
         x, y = value
         if y == 1:
             self.jc.settings.jog_feed = min(MAX_JOG_FEED, self.jc.settings.jog_feed + self.speed_increment)
-            print(f"speed ceiling -> {self.jc.settings.jog_feed} steps/s")
+            logger.info(f"speed ceiling -> {self.jc.settings.jog_feed} steps/s")
         elif y == -1:
             self.jc.settings.jog_feed = max(MIN_JOG_FEED, self.jc.settings.jog_feed - self.speed_increment)
-            print(f"speed ceiling -> {self.jc.settings.jog_feed} steps/s")
+            logger.info(f"speed ceiling -> {self.jc.settings.jog_feed} steps/s")
         if x == 1:
             self.speed_increment += 1_000
-            print(f"step size -> {self.speed_increment}")
+            logger.info(f"step size -> {self.speed_increment}")
         elif x == -1:
             self.speed_increment = max(MIN_SPEED_INCREMENT, self.speed_increment - 1_000)
-            print(f"step size -> {self.speed_increment}")
+            logger.info(f"step size -> {self.speed_increment}")
 
     def _handle_axis_event(self, axis_index: int, value: float) -> None:
         if self.debug_axes:
-            print(f"axis {axis_index} = {value:.3f}")
+            logger.debug(f"axis {axis_index} = {value:.3f}")
 
         if axis_index == AXIS_LEFT_STICK_X:
             self._handle_axis_motion(AxisId.X, value, positive_dir=-1, negative_dir=+1)
@@ -403,13 +407,13 @@ class GamepadTeleop:
                 elif event.type == pygame.JOYAXISMOTION:
                     self._handle_axis_event(event.axis, event.value)
             except Exception as exc:
-                print(f"teleop error: {exc!r}")
+                logger.error(f"teleop error: {exc!r}")
 
     def start(self) -> None:
         pygame = self._pygame
         with self.robot:
-            print(f"connected; controlling the {self.jc.side.value} mount")
-            print("press home (Back/View) before jogging -- the firmware refuses motion on unhomed axes")
+            logger.info(f"connected; controlling the {self.jc.side.value} mount")
+            logger.info("press home (Back/View) before jogging -- the firmware refuses motion on unhomed axes")
             with self.jc:   # relative mode for the whole session; restores G90 on exit
                 try:
                     while self.running:
@@ -417,9 +421,9 @@ class GamepadTeleop:
                         time.sleep(self.poll_dt)
                 except KeyboardInterrupt:
                     self._stop_all_motion()
-                    print("\nstopped by user")
+                    logger.warning("stopped by user")
         pygame.quit()
-        print("disconnected.")
+        logger.info("disconnected.")
 
 
 def main() -> None:

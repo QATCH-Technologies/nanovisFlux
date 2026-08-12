@@ -16,8 +16,9 @@ class TransportError(ControllerError):
 
 class AxisNotHomedError(ControllerError):
     def __init__(self, axis, response=None):
-        super().__init__(f"axis {axis} not homed",
-                         reason=f"axis {axis} not homed", response=response)
+        super().__init__(
+            f"axis {axis} not homed", reason=f"axis {axis} not homed", response=response
+        )
         self.axis = axis
 
 

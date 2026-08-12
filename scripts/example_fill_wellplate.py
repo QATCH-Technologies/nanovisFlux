@@ -17,17 +17,27 @@ Layout (a minimal 4-slot deck matching the scenario this was written for):
 Runs against the in-memory FakeTransport by default, so it can be exercised
 without hardware attached; pass --port to drive real hardware over serial.
 """
+
 from __future__ import annotations
+
 import argparse
 from dataclasses import replace
 
+from loguru import logger
+
 from src.core import MountSide
-from src.transport import FakeTransport, SerialTransport
-from src.geometry import DeckPoint, AffineTransform2D, AxisScale, DeckCalibration
-from src.deck import Deck, WellPlateDefinition, TipRackDefinition, WellShape, BottomShape
-from src.tools import Pipette, PlungerModel, TipPickup
+from src.deck import (
+    BottomShape,
+    Deck,
+    TipRackDefinition,
+    WellPlateDefinition,
+    WellShape,
+)
+from src.geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from src.robot import Robot
-from src.routines import Routine, WellLocation, SlotLocation, TipSequence, distribute
+from src.routines import Routine, SlotLocation, TipSequence, WellLocation, distribute
+from src.tools import Pipette, PlungerModel, TipPickup
+from src.transport import FakeTransport, SerialTransport
 
 # -- standard labware definitions -- declared once, placed on any slot ----
 
@@ -35,9 +45,11 @@ TIP_RACK = TipRackDefinition(
     identifier="tiprack1",
     footprint_mm=(127.76, 85.48),
     height_mm=64.5,
-    rows=8, cols=12,
-    row_spacing_mm=9, col_spacing_mm=9,
-    grid_offset=DeckPoint(14.38, 11.24, 90),   # A1 top = tip first-contact height
+    rows=8,
+    cols=12,
+    row_spacing_mm=9,
+    col_spacing_mm=9,
+    grid_offset=DeckPoint(14.38, 11.24, 90),  # A1 top = tip first-contact height
     tip_volume_ul=300,
     tip_length_mm=51.7,
 )
@@ -46,8 +58,10 @@ WELL_PLATE_96 = WellPlateDefinition(
     identifier="wellplate_96",
     footprint_mm=(127.76, 85.48),
     height_mm=14.4,
-    rows=8, cols=12,
-    row_spacing_mm=9, col_spacing_mm=9,
+    rows=8,
+    cols=12,
+    row_spacing_mm=9,
+    col_spacing_mm=9,
     grid_offset=DeckPoint(14.38, 11.24, 14.4),  # A1 top = plate top surface
     well_volume_ul=360,
     well_shape=WellShape.CIRCULAR,
@@ -65,13 +79,15 @@ def build_robot(port: str | None) -> Robot:
     # machine (see src/config/robot.example.yaml for the field meanings).
     calibration = DeckCalibration(
         xy=AffineTransform2D.from_point_pairs(
-            [(0, 0), (100, 0), (0, 100)],
-            [(0, 0), (21320, 0), (0, 14478)]),
+            [(0, 0), (100, 0), (0, 100)], [(0, 0), (21320, 0), (0, 14478)]
+        ),
         z_scale=AxisScale(steps_per_mm=25.0),
-        z_zero={MountSide.LEFT: 144000, MountSide.RIGHT: 144000})
+        z_zero={MountSide.LEFT: 144000, MountSide.RIGHT: 144000},
+    )
 
-    deck = Deck.grid(rows=1, cols=4, origin=DeckPoint(10, 10), pitch=(140, 0),
-                     names=["1", "2", "3", "12"])
+    deck = Deck.grid(
+        rows=1, cols=4, origin=DeckPoint(10, 10), pitch=(140, 0), names=["1", "2", "3", "12"]
+    )
 
     robot = Robot(transport, calibration=calibration, deck=deck, travel_z_mm=120)
 
@@ -81,8 +97,10 @@ def build_robot(port: str | None) -> Robot:
     robot.load(replace(WELL_PLATE_96, identifier="source"), "2")
     robot.load(replace(WELL_PLATE_96, identifier="dest"), "3")
 
-    robot.attach(MountSide.LEFT, Pipette(
-        name="p300", plunger=PlungerModel(microsteps_per_ul=50), max_volume_ul=300))
+    robot.attach(
+        MountSide.LEFT,
+        Pipette(name="p300", plunger=PlungerModel(microsteps_per_ul=50), max_volume_ul=300),
+    )
     return robot
 
 
@@ -95,24 +113,34 @@ def build_routine(volume_ul: float, n_wells: int) -> Routine:
     dests = [WellLocation("dest", name) for name in well_names]
 
     steps = distribute(
-        volume_ul, source, dests,
-        tip="tiprack1", tips=tips, pickup=TipPickup(press_z_mm=90),
-        trash=trash)
+        volume_ul,
+        source,
+        dests,
+        tip="tiprack1",
+        tips=tips,
+        pickup=TipPickup(press_z_mm=90),
+        trash=trash,
+    )
     return Routine(name="fill well plate", side=MountSide.LEFT).extend(steps)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport")
-    parser.add_argument("--volume", type=float, default=50.0, help="microliters per destination well")
+    parser.add_argument(
+        "--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport"
+    )
+    parser.add_argument(
+        "--volume", type=float, default=50.0, help="microliters per destination well"
+    )
     parser.add_argument("--wells", type=int, default=24, help="number of destination wells to fill")
-    parser.add_argument("--dry-run", action="store_true", help="print the planned steps and exit without connecting")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print the planned steps and exit without connecting"
+    )
     args = parser.parse_args()
 
     routine = build_routine(args.volume, args.wells)
-    print(f"Planned routine ({len(routine.steps)} steps):")
-    for line in routine.dry_run():
-        print(" ", line)
+    planned = "\n".join(f"  {line}" for line in routine.dry_run())
+    logger.info(f"Planned routine ({len(routine.steps)} steps):\n{planned}")
 
     if args.dry_run:
         return
@@ -120,8 +148,11 @@ def main() -> None:
     robot = build_robot(args.port)
     with robot:
         robot.home()
-        routine.run(robot, on_step=lambda i, s: print(f"[{i + 1}/{len(routine.steps)}] {s.describe()}"))
-    print("Done.")
+        routine.run(
+            robot,
+            on_step=lambda i, s: logger.info(f"[{i + 1}/{len(routine.steps)}] {s.describe()}"),
+        )
+    logger.info("Done.")
 
 
 if __name__ == "__main__":

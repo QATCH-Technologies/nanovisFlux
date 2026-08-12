@@ -1,12 +1,23 @@
 from __future__ import annotations
+
 from .inputs import InputSource
 
 #: key character -> action name. Arrow keys map via pynput Key names below.
 DEFAULT_KEYMAP = {
-    "a": "x-", "d": "x+", "w": "y+", "s": "y-",
-    "q": "z+", "e": "z-", "r": "plunger+", "f": "plunger-",
-    "+": "step_up", "-": "step_down", "m": "mount_toggle", "0": "zero_z",
-    "h": "home", "\x1b": "quit",  # Esc
+    "a": "x-",
+    "d": "x+",
+    "w": "y+",
+    "s": "y-",
+    "q": "z+",
+    "e": "z-",
+    "r": "plunger+",
+    "f": "plunger-",
+    "+": "step_up",
+    "-": "step_down",
+    "m": "mount_toggle",
+    "0": "zero_z",
+    "h": "home",
+    "\x1b": "quit",  # Esc
 }
 
 
@@ -30,10 +41,10 @@ class KeyboardInput(InputSource):
             try:
                 return key.char
             except AttributeError:
-                return f"<{key.name}>"          # e.g. <up>, <down>
+                return f"<{key.name}>"  # e.g. <up>, <down>
 
         holder: list = []  # holds the listener so on_press can stop it -- avoids
-                            # returning False, which pynput's stub disallows
+        # returning False, which pynput's stub disallows
 
         def on_press(key):
             action = self.keymap.get(_name(key))

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from .base import Transport
 
 
@@ -14,6 +15,7 @@ class SerialTransport(Transport):
 
     def open(self) -> None:
         import serial  # lazy import so pyserial is an optional dependency
+
         self._ser = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
 
     def close(self) -> None:
