@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from .location import WellLocation
 
 _ROW_LETTERS = "ABCDEFGHIJKLMNOP"
@@ -15,6 +16,7 @@ class TipSequence:
     only when a step actually runs, so a Routine can be built (and its tips
     handed out) before a robot exists.
     """
+
     def __init__(self, labware: str, *, rows: int = 8, cols: int = 12, start: str = "A1"):
         self.labware = labware
         self._names = [f"{_ROW_LETTERS[r]}{c + 1}" for r in range(rows) for c in range(cols)]

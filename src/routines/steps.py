@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import time
 from dataclasses import dataclass, field
+
 from ..core import MountSide
 from .location import Location
 
@@ -10,6 +12,7 @@ class Step:
     wells) and delegate the actual motion to the robot -- mirroring the
     protocol layer's 'objects, not strings' idea one level up.
     """
+
     def execute(self, robot, side: MountSide) -> None:  # pragma: no cover
         raise NotImplementedError
 
@@ -42,9 +45,9 @@ class MoveStep(Step):
 
 @dataclass
 class PickUpTipStep(Step):
-    where: Location             # tip position in the rack (XY resolved here)
-    tip: str                    # key into robot-known tip geometries
-    pickup: object              # a TipPickup (press_z etc.)
+    where: Location  # tip position in the rack (XY resolved here)
+    tip: str  # key into robot-known tip geometries
+    pickup: object  # a TipPickup (press_z etc.)
 
     def execute(self, robot, side):
         pip = robot.mounts[side].tool

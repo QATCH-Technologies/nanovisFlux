@@ -1,14 +1,22 @@
 from __future__ import annotations
+
 from .location import Location
-from .steps import (PickUpTipStep, AspirateStep, DispenseStep, BlowOutStep,
-                    DropTipStep)
+from .steps import AspirateStep, BlowOutStep, DispenseStep, DropTipStep, PickUpTipStep
 from .tip_sequence import TipSequence
 
 
-def transfer(volume_ul: float, source: Location, dest: Location, *,
-             tip: str | None = None, tip_rack: Location | None = None,
-             pickup=None, drop_at: Location | None = None,
-             blow_out: bool | Location = False, feed: int | None = None) -> list:
+def transfer(
+    volume_ul: float,
+    source: Location,
+    dest: Location,
+    *,
+    tip: str | None = None,
+    tip_rack: Location | None = None,
+    pickup=None,
+    drop_at: Location | None = None,
+    blow_out: bool | Location = False,
+    feed: int | None = None,
+) -> list:
     """Expand a single transfer into a list of Steps: (optionally pick up a
     tip), aspirate at ``source``, dispense at ``dest``, (optionally blow out
     and drop the tip). Add the result to a Routine, or chain many of them.
@@ -29,9 +37,18 @@ def transfer(volume_ul: float, source: Location, dest: Location, *,
     return steps
 
 
-def distribute(volume_ul: float, source: Location, dests: list, *,
-               tip: str, tips: TipSequence, pickup, trash: Location,
-               blow_out: bool = True, feed: int | None = None) -> list:
+def distribute(
+    volume_ul: float,
+    source: Location,
+    dests: list,
+    *,
+    tip: str,
+    tips: TipSequence,
+    pickup,
+    trash: Location,
+    blow_out: bool = True,
+    feed: int | None = None,
+) -> list:
     """Repeat a transfer across many destinations: fresh tip per cycle
     (pulled off ``tips``), aspirate ``volume_ul`` from the same ``source``
     every time, dispense at each of ``dests`` in turn, blow out into
@@ -41,7 +58,17 @@ def distribute(volume_ul: float, source: Location, dests: list, *,
     """
     steps = []
     for dest in dests:
-        steps.extend(transfer(
-            volume_ul, source, dest, tip=tip, tip_rack=next(tips), pickup=pickup,
-            blow_out=trash if blow_out else False, drop_at=trash, feed=feed))
+        steps.extend(
+            transfer(
+                volume_ul,
+                source,
+                dest,
+                tip=tip,
+                tip_rack=next(tips),
+                pickup=pickup,
+                blow_out=trash if blow_out else False,
+                drop_at=trash,
+                feed=feed,
+            )
+        )
     return steps

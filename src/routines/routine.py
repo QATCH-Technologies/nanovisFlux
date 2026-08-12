@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+
 from ..core import MountSide
 from .steps import Step
 
@@ -9,6 +11,7 @@ class Routine:
     """An ordered, inspectable list of Steps. Build it, print it (dry run),
     then run it. Because steps are objects it is trivial to log, validate or
     later serialise a routine to/from YAML."""
+
     name: str = "routine"
     side: MountSide = MountSide.LEFT
     steps: list = field(default_factory=list)

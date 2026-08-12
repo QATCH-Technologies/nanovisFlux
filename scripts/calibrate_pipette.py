@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 
 from loguru import logger
 
@@ -75,6 +76,13 @@ from src.routines import WellLocation
 from src.tools import PlungerCalibration, TipGeometry
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
+
+#: Anchored to this script's own location (matching gui/connection_bar.py's
+#: _DEFAULT_CONFIG), not the process's current working directory -- a bare
+#: relative string here would resolve against wherever the script happened
+#: to be invoked FROM, silently picking up a same-relative-path file in a
+#: different checkout/worktree instead of failing loudly, if one exists.
+_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "src" / "config" / "robot.example.yaml"
 
 #: Deliberately different, mildly nonlinear "true" curves for --simulate's
 #: synthetic readings (some efficiency loss at larger strokes, matching
@@ -358,7 +366,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        default="src/config/robot.example.yaml",
+        default=str(_DEFAULT_CONFIG),
         help="robot config YAML -- needs a mounted pipette on --side, a real deck "
         "calibration, and labware loaded on --aspirate-slot/--dispense-slot. Point "
         "this at a transport: {type: fake} config to --simulate without touching "

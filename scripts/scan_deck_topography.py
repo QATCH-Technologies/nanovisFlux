@@ -81,6 +81,7 @@ import argparse
 import csv
 import math
 import time
+from pathlib import Path
 
 from loguru import logger
 
@@ -90,6 +91,11 @@ from src.geometry import default_axis_scale
 from src.robot import Robot
 from src.tools import UltrasonicSensor
 from src.transport import FakeTransport, SerialTransport
+
+#: Anchored to this script's own location, not the process's current
+#: working directory -- see scripts/calibrate_pipette.py's identical fix
+#: for why a bare relative default string is a real risk here.
+_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "src" / "config" / "robot.example.yaml"
 
 _ASCII_RAMP = " .:-=+*#%@"
 #: A real M412 costs at least this long (10 ultrasonic samples, each
@@ -375,7 +381,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        default="src/config/robot.example.yaml",
+        default=str(_DEFAULT_CONFIG),
         help="robot config YAML to load (transport/axis overrides + rear ultrasonic mount); "
         "pass an empty string for a bare robot with a default-configured sensor instead",
     )
