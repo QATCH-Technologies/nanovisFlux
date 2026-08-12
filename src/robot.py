@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from .core import AxisId, MountSide
 from .geometry.calibration import DeckCalibration
 from .geometry.coordinates import DeckPoint
@@ -108,8 +110,48 @@ class Robot:
             if a in self.axes:
                 self.axes[a].homed = True
 
+    def _await_settled(
+        self,
+        targets: dict,
+        *,
+        tolerance: int = 5,
+        timeout: float = 30.0,
+        poll_interval: float = 0.05,
+    ) -> None:
+        """Polls the controller's OWN reported position (M114) until every
+        axis in `targets` is within `tolerance` microsteps of its commanded
+        value, or raises TimeoutError. A move's 'ok' means the firmware
+        considers it done, but that hasn't reliably meant "physically
+        arrived" on every real firmware/hardware combination this has been
+        run against (see scripts/calibrate_pipette.py's verify=True,
+        added after commands issued back-to-back with no delay were
+        observed getting cut short in practice, confirmed by the same
+        sequence working correctly when stepped through with a debugger --
+        i.e. when real wall-clock time was inadvertently inserted between
+        them). This is an independent, position-based confirmation that
+        doesn't depend on trusting the handshake alone."""
+        deadline = time.monotonic() + timeout
+        while True:
+            pos = self.controller.report_position()
+            if all(
+                pos.get(axis) is not None and abs(pos[axis] - target) <= tolerance
+                for axis, target in targets.items()
+            ):
+                return
+            if time.monotonic() >= deadline:
+                last = {a: pos.get(a) for a in targets}
+                raise TimeoutError(
+                    f"axes did not settle within {timeout}s: wanted {targets}, last read {last}"
+                )
+            time.sleep(poll_interval)
+
     def move_to(
-        self, point: DeckPoint, side: MountSide = MountSide.LEFT, feed: int | None = None
+        self,
+        point: DeckPoint,
+        side: MountSide = MountSide.LEFT,
+        feed: int | None = None,
+        *,
+        verify: bool = False,
     ) -> None:
         """Cross to the target X/Y at the current Z, then move to the target
         Z -- no clearance-height detour (see safe_move_to for that arc).
@@ -117,15 +159,29 @@ class Robot:
         one bundled multi-axis move: firmware happens to prioritize X/Y
         stepping over Z today, but a mounted tip dragging across labware if
         that ever isn't true (different firmware revision, etc.) is exactly
-        the failure this guards against without relying on it."""
+        the failure this guards against without relying on it.
+
+        verify: also poll-confirm each leg actually reached its target (see
+        _await_settled) before moving on -- opt-in, so existing callers
+        (interactive jogging, routines) keep today's behavior unchanged."""
         cal = self._require_cal()
         xy = cal.deck_to_motor(point, side, self.tip_offset(side))
+        xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
         (self.controller.linear_move if feed else self.controller.rapid_move)(
-            {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}, **({"feed": feed} if feed else {})
+            xy_targets, **({"feed": feed} if feed else {})
         )
-        self.move_vertical_to(point.z, side, feed=feed)
+        if verify:
+            self._await_settled(xy_targets)
+        self.move_vertical_to(point.z, side, feed=feed, verify=verify)
 
-    def move_vertical_to(self, deck_z_mm: float, side: MountSide, feed: int | None = None) -> None:
+    def move_vertical_to(
+        self,
+        deck_z_mm: float,
+        side: MountSide,
+        feed: int | None = None,
+        *,
+        verify: bool = False,
+    ) -> None:
         """Command only the mount's vertical axis to a deck-Z height."""
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
@@ -133,9 +189,15 @@ class Robot:
         (self.controller.linear_move if feed else self.controller.rapid_move)(
             {axis: mz}, **({"feed": feed} if feed else {})
         )
+        if verify:
+            self._await_settled({axis: mz})
 
-    def raise_z(self, side: MountSide, clearance_mm: float | None = None) -> None:
-        self.move_vertical_to(clearance_mm if clearance_mm is not None else self.travel_z_mm, side)
+    def raise_z(
+        self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = False
+    ) -> None:
+        self.move_vertical_to(
+            clearance_mm if clearance_mm is not None else self.travel_z_mm, side, verify=verify
+        )
 
     def safe_move_to(
         self,
@@ -143,16 +205,24 @@ class Robot:
         side: MountSide,
         clearance_mm: float | None = None,
         feed: int | None = None,
+        *,
+        verify: bool = False,
     ) -> None:
         """Move in the order X/Y-safe arc: (1) raise this mount's Z/A to
         clearance height, (2) cross to the target's X/Y, (3) descend Z/A to
-        the target -- so a mounted tip never drags across labware."""
+        the target -- so a mounted tip never drags across labware.
+
+        verify: see move_to's own docstring -- opt-in, poll-confirms each
+        leg before moving on to the next."""
         cal = self._require_cal()
         clr = clearance_mm if clearance_mm is not None else self.travel_z_mm
-        self.raise_z(side, clr)  # 1. up
+        self.raise_z(side, clr, verify=verify)  # 1. up
         xy = cal.deck_to_motor(DeckPoint(point.x, point.y, clr), side, self.tip_offset(side))
-        self.controller.rapid_move({AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]})  # 2. across
-        self.move_vertical_to(point.z, side, feed=feed)  # 3. down
+        xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
+        self.controller.rapid_move(xy_targets)  # 2. across
+        if verify:
+            self._await_settled(xy_targets)
+        self.move_vertical_to(point.z, side, feed=feed, verify=verify)  # 3. down
 
     def emergency_stop(self) -> None:
         self.controller.emergency_stop()

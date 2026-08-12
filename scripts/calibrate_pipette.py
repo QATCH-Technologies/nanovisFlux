@@ -180,13 +180,13 @@ def run_phase_a(
                 f"replicate {rep}/{replicates}"
             )
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 1. empty
-            robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed)  # 2. to source
+            robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)  # 2. to source
             _log_at(robot, "source (aspirate)", aspirate_loc)
             move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
-            robot.safe_move_to(dispense_loc.resolve(robot), side, feed=feed)  # 4. to scale
+            robot.safe_move_to(dispense_loc.resolve(robot), side, feed=feed, verify=True)  # 4. to scale
             _log_at(robot, "scale (dispense)", dispense_loc)
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 5. full purge
-            robot.raise_z(side)  # 6. lift clear (travel_z_mm)
+            robot.raise_z(side, verify=True)  # 6. lift clear (travel_z_mm)
             logger.info(
                 "lifted clear -- remove the vessel, weigh it, and empty/replace it before continuing."
             )
@@ -232,18 +232,18 @@ def run_phase_b(
     for rep in range(1, replicates + 1):
         logger.info(f"[Phase B] replicate {rep}/{replicates}")
         move_plunger(robot, plunger_axis, bottom, plunger_max, feed)
-        robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed)
+        robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)
         _log_at(robot, "source (aspirate)", aspirate_loc)
         move_plunger(robot, plunger_axis, fixed_position, plunger_max, feed)
         dispense_point = dispense_loc.resolve(robot)
-        robot.safe_move_to(dispense_point, side, feed=feed)
+        robot.safe_move_to(dispense_point, side, feed=feed, verify=True)
         _log_at(robot, "scale (dispense)", dispense_loc)
         logger.info(
             "place/tare the vessel now -- it returns to this same spot between every step below."
         )
         for target in targets:
             move_plunger(robot, plunger_axis, target, plunger_max, feed)  # partial dispense
-            robot.raise_z(side)  # lift clear (travel_z_mm)
+            robot.raise_z(side, verify=True)  # lift clear (travel_z_mm)
             logger.info("lifted clear -- remove the vessel and weigh it (do NOT empty it or re-tare).")
             simulate_fn = (
                 (lambda t=target: _synthetic_cumulative_mass_mg(bottom, fixed_position, t, density))
@@ -255,7 +255,7 @@ def run_phase_b(
             )
             remaining_ul = max(0.0, total_ul - cumulative_mg / density)
             accum[target].append(remaining_ul)
-            robot.move_vertical_to(dispense_point.z, side, feed=feed)  # back down for next step
+            robot.move_vertical_to(dispense_point.z, side, feed=feed, verify=True)  # back down for next step
             logger.info("place the vessel back in the same spot before the next step.")
     return [(t, sum(vals) / len(vals)) for t, vals in accum.items()]
 
