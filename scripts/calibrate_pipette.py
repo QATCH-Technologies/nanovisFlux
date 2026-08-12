@@ -121,29 +121,52 @@ def move_plunger(
 
 
 def raw_safe_move(
-    robot, vertical_axis: AxisId, safe_z: int, x: int, y: int, z: int, feed: int | None = None
+    robot,
+    vertical_axis: AxisId,
+    safe_z: int,
+    x: int,
+    y: int,
+    z: int,
+    feed: int | None = None,
+    *,
+    raise_first: bool = True,
 ) -> None:
-    """Cross/descend in raw motor microsteps -- mirrors Robot.safe_move_to's
-    own order (see module docstring) without needing DeckCalibration, but
-    only raises to safe_z first when the mount is actually BELOW it.
+    """Raise/cross/descend in raw motor microsteps -- mirrors
+    Robot.safe_move_to's own order (see module docstring) without needing
+    DeckCalibration: 1) vertical axis to safe_z (unless raise_first is
+    False), 2) X/Y, 3) vertical axis down to z. Lifting clear on the
+    DEPARTURE side before crossing, and only descending once already at
+    the arrival X/Y, is what keeps the tip from dragging through or into
+    whatever sits between the two positions (a labware wall, a container
+    rim, ...) -- so raise_first defaults True and every ordinary call
+    (aspirate<->dispense, in either direction) always genuinely raises
+    first, unconditionally.
 
-    Home is up, so a smaller microstep count is higher/safer (same
-    convention DeckCalibration uses, which holds for raw addressing too --
-    see geometry/calibration.py). Right after homing the mount sits at 0,
-    already higher/safer than safe_z -- unconditionally "raising" to
-    safe_z there is actually a net DESCENT while still at the home X/Y
-    position, which is exactly what nearly collided with nearby labware
-    (e.g. the trash) before ever crossing away from home. Skipping the
-    raise whenever the mount is already at or above safe_z means the very
-    first move of a run crosses at the safest height it's already at
-    (home) instead of needlessly descending first; every later call still
-    raises for real, since by then the mount is genuinely down at the
-    previous aspirate/dispense depth."""
-    current = robot.controller.report_position().get(vertical_axis)
-    if current is None or current > safe_z:
+    raise_first=False exists for exactly one caller: the very first move
+    of a run, right after homing, where the mount is already at its
+    safest possible height (home) -- lowering to safe_z there, before
+    ever crossing away from the home X/Y position, is what nearly
+    collided with nearby labware (e.g. the trash) sitting right at home.
+    See run_phase_a/run_phase_b's own skip_first_raise plumbing for how
+    this is threaded through from main() -- only ever the one true first
+    move of the whole run, never a regular aspirate<->dispense leg."""
+    if raise_first:
         robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)
     robot.controller.linear_move({AxisId.X: x, AxisId.Y: y}, feed=feed)
     robot.controller.linear_move({vertical_axis: z}, feed=feed)
+
+
+def _log_position(robot, vertical_axis: AxisId, label: str) -> None:
+    """Logs the ACTUAL measured X/Y/vertical position (via M114), not just
+    the commanded target -- so a run's log makes it undeniable whether the
+    gantry really reached a distinct spot at each checkpoint, rather than
+    trusting the raw_safe_move call blindly. Added specifically because the
+    aspirate leg has no operator-facing pause (unlike the dispense leg's
+    "lifted clear -- weigh it" prompt), so it's easy to not notice it
+    happened at all."""
+    pos = robot.controller.report_position()
+    x, y, z = pos.get(AxisId.X), pos.get(AxisId.Y), pos.get(vertical_axis)
+    logger.info(f"  at {label}: X={x} Y={y} {vertical_axis.letter}={z}")
 
 
 def run_phase_a(
@@ -161,9 +184,16 @@ def run_phase_a(
     feed: int | None,
     *,
     simulate: bool,
+    skip_first_raise: bool = False,
 ) -> list:
-    """See module docstring. Returns [(bottom + stroke, volume_ul), ...]."""
+    """See module docstring. Returns [(bottom + stroke, volume_ul), ...].
+
+    skip_first_raise: True only when this is the very first phase to run
+    right after a real robot.home() -- see raw_safe_move's own docstring.
+    Applies to (at most) the single very first raw_safe_move call below;
+    every other call in this function always raises, unconditionally."""
     pairs = []
+    first_move = skip_first_raise
     for stroke in strokes:
         measurements = []
         for rep in range(1, replicates + 1):
@@ -172,9 +202,13 @@ def run_phase_a(
                 f"replicate {rep}/{replicates}"
             )
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 1. empty
-            raw_safe_move(robot, vertical_axis, safe_z, *aspirate_xyz, feed)  # 2. to source
+            raw_safe_move(robot, vertical_axis, safe_z, *aspirate_xyz, feed,
+                         raise_first=not first_move)  # 2. to source
+            first_move = False
+            _log_position(robot, vertical_axis, "source (aspirate)")
             move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
-            raw_safe_move(robot, vertical_axis, safe_z, *dispense_xyz, feed)  # 4. to scale
+            raw_safe_move(robot, vertical_axis, safe_z, *dispense_xyz, feed)  # 4. to scale -- always raises
+            _log_position(robot, vertical_axis, "scale (dispense)")
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 5. full purge
             robot.controller.linear_move({vertical_axis: safe_z}, feed=feed)  # 6. lift clear
             logger.info(
@@ -210,8 +244,13 @@ def run_phase_b(
     feed: int | None,
     *,
     simulate: bool,
+    skip_first_raise: bool = False,
 ) -> list:
-    """See module docstring. Returns [(target, remaining_volume_ul), ...]."""
+    """See module docstring. Returns [(target, remaining_volume_ul), ...].
+
+    skip_first_raise: True only when this is the very first phase to run
+    right after a real robot.home() -- see raw_safe_move's own docstring
+    (relevant when --phase dispense skips Phase A entirely)."""
     fixed_position = bottom + max_stroke
     total_ul = aspirate_calibration.volume_for_microsteps(fixed_position, aspirating=True)
     logger.info(
@@ -221,12 +260,17 @@ def run_phase_b(
 
     dispense_z = dispense_xyz[2]
     accum = {t: [] for t in targets}
+    first_move = skip_first_raise
     for rep in range(1, replicates + 1):
         logger.info(f"[Phase B] replicate {rep}/{replicates}")
         move_plunger(robot, plunger_axis, bottom, plunger_max, feed)
-        raw_safe_move(robot, vertical_axis, safe_z, *aspirate_xyz, feed)
+        raw_safe_move(robot, vertical_axis, safe_z, *aspirate_xyz, feed,
+                     raise_first=not first_move)
+        first_move = False
+        _log_position(robot, vertical_axis, "source (aspirate)")
         move_plunger(robot, plunger_axis, fixed_position, plunger_max, feed)
-        raw_safe_move(robot, vertical_axis, safe_z, *dispense_xyz, feed)
+        raw_safe_move(robot, vertical_axis, safe_z, *dispense_xyz, feed)  # always raises
+        _log_position(robot, vertical_axis, "scale (dispense)")
         logger.info(
             "place/tare the vessel now -- it returns to this same spot between every step below."
         )
@@ -478,6 +522,14 @@ def main() -> None:
         # trust the caller is already in G90.
         robot.controller.set_absolute()
 
+        # Only the very first gantry move of the whole run, immediately
+        # after a REAL home(), is known to start from the mount's safest
+        # possible height -- see raw_safe_move's docstring. Whichever
+        # phase actually runs first gets this; skip_home means we don't
+        # actually know the current height is safe, so neither phase gets
+        # it in that case (always raise defensively instead).
+        just_homed = not args.skip_home
+
         if args.phase in ("aspirate", "both"):
             aspirate_pairs = [(bottom, 0.0)] + run_phase_a(
                 robot,
@@ -493,7 +545,9 @@ def main() -> None:
                 args.density_mg_per_ul,
                 args.feed,
                 simulate=args.simulate,
+                skip_first_raise=just_homed,
             )
+            just_homed = False
         else:
             aspirate_pairs = [(bottom, 0.0)] + _load_points(args.aspirate_from, "aspirate")
 
@@ -522,6 +576,7 @@ def main() -> None:
                 args.density_mg_per_ul,
                 args.feed,
                 simulate=args.simulate,
+                skip_first_raise=just_homed,
             )
 
     if args.phase == "aspirate":
