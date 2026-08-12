@@ -204,8 +204,15 @@ class GamepadInput(QObject):
             self.home_requested.emit()
 
     def _handle_hat(self, value: tuple) -> None:
-        _x, y = value
+        x, y = value
         if y == 1:
             self.step_cycle_requested.emit(+1)
         elif y == -1:
+            self.step_cycle_requested.emit(-1)
+        # Left/right cycle the same step size as up/down -- this app only
+        # has the one "step size" dial to adjust, so all four D-pad
+        # directions drive it rather than leaving two of them dead.
+        if x == 1:
+            self.step_cycle_requested.emit(+1)
+        elif x == -1:
             self.step_cycle_requested.emit(-1)

@@ -13,8 +13,8 @@ nudge() calls the way it used to.
 from __future__ import annotations
 
 from loguru import logger
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, QPointF, QSize, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                              QPushButton, QButtonGroup, QFrame, QStackedWidget,
                              QDoubleSpinBox, QCheckBox, QFormLayout)
@@ -33,6 +33,8 @@ _INK = QColor(*TOKENS["flat_text"][:3])
 _ON_ACCENT = QColor(*TOKENS["flat_on_accent"][:3])
 _SUCCESS = QColor(*TOKENS["flat_success"][:3])
 _MUTED = QColor(*TOKENS["flat_text_muted"][:3])
+_SURFACE2 = QColor(*TOKENS["flat_surface2"][:3])
+_BORDER_STRONG = QColor(*TOKENS["flat_border_strong"][:3])
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
@@ -73,6 +75,42 @@ def _set_pill_class(label: QLabel, css_class: str) -> None:
     label.style().polish(label)
 
 
+class _StickIndicator(QWidget):
+    """A small circle mimicking one analog stick: a fixed outer ring plus
+    an inner knob that offsets toward the live deflection direction,
+    proportional to magnitude -- so the on-screen gamepad page visibly
+    "moves" the same way the physical stick does while jogging. `dx`/`dy`
+    are each in [-1, 1]; see set_deflection."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(56, 56)
+        self._dx = 0.0
+        self._dy = 0.0
+
+    def set_deflection(self, dx: float, dy: float) -> None:
+        dx = max(-1.0, min(1.0, dx))
+        dy = max(-1.0, min(1.0, dy))
+        if (dx, dy) == (self._dx, self._dy):
+            return
+        self._dx, self._dy = dx, dy
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        cx, cy = self.width() / 2, self.height() / 2
+        ring_r = min(self.width(), self.height()) / 2 - 2
+        p.setPen(QPen(_BORDER_STRONG, 1.5))
+        p.setBrush(_SURFACE2)
+        p.drawEllipse(QPointF(cx, cy), ring_r, ring_r)
+        knob_r = ring_r * 0.42
+        travel = ring_r - knob_r
+        p.setPen(Qt.NoPen)
+        p.setBrush(_INK)
+        p.drawEllipse(QPointF(cx + self._dx * travel, cy + self._dy * travel), knob_r, knob_r)
+
+
 class ManualControlPanel(QWidget):
     home_requested = pyqtSignal()
     estop_requested = pyqtSignal()
@@ -84,6 +122,7 @@ class ManualControlPanel(QWidget):
         self.gamepad: GamepadInput | None = None
         self._input_mode = "keyboard"
         self._input_locked = False  # True while a routine is running
+        self._stick_deflection = {"x": 0.0, "y": 0.0, "z": 0.0}  # -> stick_left/stick_right
 
         # Continuous jog: press starts a move toward the endstop at the
         # current jog_speed (see JogController.begin_jog); release quick-
@@ -327,6 +366,17 @@ class ManualControlPanel(QWidget):
         btn.clicked.connect(on_click)
         return btn
 
+    def _decorative_pad_button(self, icon_name: str) -> QLabel:
+        """A small non-interactive icon badge -- fills out the center
+        button cluster to match the physical pad's button count (see the
+        photo this layout is modeled on) for buttons this app doesn't
+        (yet) bind to an action."""
+        lbl = QLabel()
+        lbl.setPixmap(icon_utils.icon(icon_name, _MUTED, size=14).pixmap(QSize(14, 14)))
+        lbl.setFixedSize(22, 22)
+        lbl.setAlignment(Qt.AlignCenter)
+        return lbl
+
     def _build_gamepad_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -349,36 +399,59 @@ class ManualControlPanel(QWidget):
         body.setProperty("class", "panel")
         body_layout = QHBoxLayout(body)
 
-        left_col = QVBoxLayout()
-        stick = QLabel("L")
-        stick.setFixedSize(56, 56)
-        stick.setAlignment(Qt.AlignCenter)
-        stick.setStyleSheet("border-radius: 28px; background: #E4E0D4; font-weight: 700;")
-        stick_caption = QLabel("jog X / Y")
-        stick_caption.setProperty("class", "eyebrow")
-        stick_caption.setAlignment(Qt.AlignCenter)
-        left_col.addWidget(stick, alignment=Qt.AlignCenter)
-        left_col.addWidget(stick_caption)
-        body_layout.addLayout(left_col)
-
-        mid_col = QVBoxLayout()
-        self.btn_back = self._gamepad_pill("⟲ Back", self.home_requested.emit)
-        mid_col.addLayout(self._captioned(self.btn_back, "home / view"))
-        self.btn_start = QPushButton("☰ Start")
-        self.btn_start.setObjectName("estop")
-        self.btn_start.clicked.connect(self.estop_requested.emit)
-        mid_col.addLayout(self._captioned(self.btn_start, "E-STOP"))
+        # -- D-pad, offset to the left of the sticks/buttons cluster (see
+        # the reference photo this whole page layout is modeled on) -- all
+        # four directions cycle step size, same as the physical pad's own
+        # up/down/left/right (see GamepadInput._handle_hat).
+        dpad_col = QVBoxLayout()
         dpad = QGridLayout()
         dpad.setSpacing(2)
         self.btn_dpad_up = self._gamepad_pill("▲", lambda: self._apply_step_cycle(+1),
                                              icon_name="chevron", rotation=0)
         self.btn_dpad_down = self._gamepad_pill("▼", lambda: self._apply_step_cycle(-1),
                                                icon_name="chevron", rotation=180)
-        for b in (self.btn_dpad_up, self.btn_dpad_down):
+        self.btn_dpad_left = self._gamepad_pill("◀", lambda: self._apply_step_cycle(-1),
+                                               icon_name="chevron", rotation=270)
+        self.btn_dpad_right = self._gamepad_pill("▶", lambda: self._apply_step_cycle(+1),
+                                                icon_name="chevron", rotation=90)
+        for b in (self.btn_dpad_up, self.btn_dpad_down, self.btn_dpad_left, self.btn_dpad_right):
             b.setFixedSize(22, 18)
-        dpad.addWidget(self.btn_dpad_up, 0, 0)
-        dpad.addWidget(self.btn_dpad_down, 1, 0)
-        mid_col.addLayout(self._captioned(dpad, "D-pad · step size"))
+        dpad.addWidget(self.btn_dpad_up, 0, 1)
+        dpad.addWidget(self.btn_dpad_left, 1, 0)
+        dpad.addWidget(self.btn_dpad_right, 1, 2)
+        dpad.addWidget(self.btn_dpad_down, 2, 1)
+        dpad_col.addLayout(self._captioned(dpad, "D-pad · step size"))
+        body_layout.addLayout(dpad_col)
+
+        # -- both analog sticks, each showing live deflection while jogging
+        # (see _StickIndicator / _on_gamepad_axis) -- the right stick only
+        # ever moves vertically since this app only reads its Y axis (Z
+        # jog); see GamepadInput's own "intentionally unhandled" note on
+        # the right stick's X axis.
+        sticks_row = QHBoxLayout()
+        self.stick_left = _StickIndicator()
+        sticks_row.addLayout(self._captioned(self.stick_left, "jog X / Y"))
+        self.stick_right = _StickIndicator()
+        sticks_row.addLayout(self._captioned(self.stick_right, "jog Z"))
+        body_layout.addLayout(sticks_row)
+
+        # -- center button cluster, mimicking the physical pad's column of
+        # small buttons between the sticks and the face buttons. Only two
+        # are wired to an action today (Home, E-STOP -- unchanged from
+        # before, just re-iconed); the rest are decorative placeholders
+        # matching the pad's actual button count.
+        mid_col = QVBoxLayout()
+        self.btn_back = self._gamepad_pill("", self.home_requested.emit, icon_name="minus_circle")
+        mid_col.addLayout(self._captioned(self.btn_back, "home / view"))
+        mid_col.addWidget(self._decorative_pad_button("add_circle"))
+        mid_col.addWidget(self._decorative_pad_button("controller_connect"))
+        self.btn_start = QPushButton()
+        self.btn_start.setIcon(icon_utils.icon("square_circle", _ON_ACCENT, size=16))
+        self.btn_start.setIconSize(_ICON_SIZE)
+        self.btn_start.setObjectName("estop")
+        self.btn_start.clicked.connect(self.estop_requested.emit)
+        mid_col.addLayout(self._captioned(self.btn_start, "E-STOP"))
+        mid_col.addWidget(self._decorative_pad_button("star_circle"))
         body_layout.addLayout(mid_col)
 
         right_col = QGridLayout()
@@ -533,8 +606,8 @@ class ManualControlPanel(QWidget):
         for b in self.mount_buttons.values():
             b.setEnabled(connected and not locked)
         self.btn_step.setEnabled(connected and not locked)
-        self.btn_dpad_up.setEnabled(connected and not locked)
-        self.btn_dpad_down.setEnabled(connected and not locked)
+        for b in (self.btn_dpad_up, self.btn_dpad_down, self.btn_dpad_left, self.btn_dpad_right):
+            b.setEnabled(connected and not locked)
         self.btn_cycle_mount.setEnabled(connected and not locked)
         self.btn_y.setEnabled(connected and not locked)
         self.btn_home.setEnabled(connected and not locked)
@@ -635,6 +708,13 @@ class ManualControlPanel(QWidget):
         matching real accel/decel-by-deflection behaviour (see
         JogController.begin_jog's own restart-tolerance for why re-calling
         this every poll tick while deflected is cheap, not redundant)."""
+        if axis_name in self._stick_deflection:
+            self._stick_deflection[axis_name] = signed
+            if axis_name in ("x", "y"):
+                self.stick_left.set_deflection(
+                    self._stick_deflection["x"], self._stick_deflection["y"])
+            else:  # "z" -- right stick only ever reads vertical deflection
+                self.stick_right.set_deflection(0.0, self._stick_deflection["z"])
         if self.jog is None:
             return
         begin, end = _GAMEPAD_JOG[axis_name]
@@ -698,6 +778,9 @@ class ManualControlPanel(QWidget):
             self.gamepad.stop()
             self.gamepad.deleteLater()
             self.gamepad = None
+        self._stick_deflection = {"x": 0.0, "y": 0.0, "z": 0.0}
+        self.stick_left.set_deflection(0.0, 0.0)
+        self.stick_right.set_deflection(0.0, 0.0)
 
     # -- keyboard entry points, called from MainWindow.keyPressEvent --------
     def handle_key_press(self, key: int, autorepeat: bool) -> bool:
