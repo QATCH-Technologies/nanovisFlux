@@ -65,6 +65,7 @@ move_plunger) as a second, independent guard.
 from __future__ import annotations
 
 import argparse
+import time
 
 from loguru import logger
 
@@ -119,18 +120,25 @@ def read_mass_mg(prompt: str, simulate_fn=None) -> float:
 
 
 def move_plunger(
-    robot, axis: AxisId, target: int, plunger_max: int, feed: int | None = None
+    robot, axis: AxisId, target: int, plunger_max: int, feed: int | None = None, *, verify: bool = True
 ) -> None:
     """The one place that ever commands the plunger axis -- re-checks
     `plunger_max` immediately before sending, as a second, independent
     guard alongside the upfront plan-wide check in main() (see SAFETY in
-    the module docstring): going past it detaches the tip."""
+    the module docstring): going past it detaches the tip.
+
+    verify: poll-confirm the plunger actually reached `target` before
+    returning (see Robot._await_settled's own docstring for why "ok"
+    alone isn't trusted) -- on by default here since a cut-short aspirate/
+    dispense stroke would silently corrupt the whole calibration."""
     if target > plunger_max:
         raise RuntimeError(
             f"refusing to move the plunger to {target} microsteps -- exceeds the "
             f"--plunger-max-microsteps safety ceiling ({plunger_max}); this would detach the tip"
         )
     robot.controller.linear_move({axis: target}, feed=feed)
+    if verify:
+        robot._await_settled({axis: target})
 
 
 def _labware_on_slot(robot, slot_name: str):
@@ -167,10 +175,18 @@ def run_phase_a(
     replicates: int,
     density: float,
     feed: int | None,
+    dwell_s: float,
     *,
     simulate: bool,
 ) -> list:
-    """See module docstring. Returns [(bottom + stroke, volume_ul), ...]."""
+    """See module docstring. Returns [(bottom + stroke, volume_ul), ...].
+
+    dwell_s: how long to hold still, plunger already at its target, at the
+    bottom of each aspirate/dispense stroke -- the stepper reaching its
+    commanded position isn't the same as the liquid actually finishing
+    moving (surface tension/viscosity lag behind the plunger), so raising
+    away immediately can leave a stroke short of what it should have
+    drawn or expelled."""
     pairs = []
     for stroke in strokes:
         measurements = []
@@ -183,9 +199,11 @@ def run_phase_a(
             robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)  # 2. to source
             _log_at(robot, "source (aspirate)", aspirate_loc)
             move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
+            time.sleep(dwell_s)  # hold at the bottom, submerged, so the aspirate actually draws up
             robot.safe_move_to(dispense_loc.resolve(robot), side, feed=feed, verify=True)  # 4. to scale
             _log_at(robot, "scale (dispense)", dispense_loc)
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 5. full purge
+            time.sleep(dwell_s)  # hold before lifting so the dispensed droplet fully releases
             robot.raise_z(side, verify=True)  # 6. lift clear (travel_z_mm)
             logger.info(
                 "lifted clear -- remove the vessel, weigh it, and empty/replace it before continuing."
@@ -217,10 +235,12 @@ def run_phase_b(
     replicates: int,
     density: float,
     feed: int | None,
+    dwell_s: float,
     *,
     simulate: bool,
 ) -> list:
-    """See module docstring. Returns [(target, remaining_volume_ul), ...]."""
+    """See module docstring. Returns [(target, remaining_volume_ul), ...].
+    dwell_s: see run_phase_a's own docstring."""
     fixed_position = bottom + max_stroke
     total_ul = aspirate_calibration.volume_for_microsteps(fixed_position, aspirating=True)
     logger.info(
@@ -235,6 +255,7 @@ def run_phase_b(
         robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)
         _log_at(robot, "source (aspirate)", aspirate_loc)
         move_plunger(robot, plunger_axis, fixed_position, plunger_max, feed)
+        time.sleep(dwell_s)  # hold at the bottom, submerged, so the aspirate actually draws up
         dispense_point = dispense_loc.resolve(robot)
         robot.safe_move_to(dispense_point, side, feed=feed, verify=True)
         _log_at(robot, "scale (dispense)", dispense_loc)
@@ -243,6 +264,7 @@ def run_phase_b(
         )
         for target in targets:
             move_plunger(robot, plunger_axis, target, plunger_max, feed)  # partial dispense
+            time.sleep(dwell_s)  # hold before lifting so the dispensed droplet fully releases
             robot.raise_z(side, verify=True)  # lift clear (travel_z_mm)
             logger.info("lifted clear -- remove the vessel and weigh it (do NOT empty it or re-tare).")
             simulate_fn = (
@@ -399,6 +421,14 @@ def main() -> None:
     parser.add_argument(
         "--feed", type=int, help="plunger/final-approach feed rate, microsteps/sec; omit for default"
     )
+    parser.add_argument(
+        "--dwell-s",
+        type=float,
+        default=1.0,
+        help="seconds to hold still, plunger already at target, at the bottom of each "
+        "aspirate/dispense stroke before moving away -- lets the liquid actually finish "
+        "moving (surface tension/viscosity lag behind the plunger itself stopping)",
+    )
     parser.add_argument("--phase", choices=("aspirate", "dispense", "both"), default="both")
     parser.add_argument(
         "--aspirate-from",
@@ -505,6 +535,7 @@ def main() -> None:
                 args.replicates,
                 args.density_mg_per_ul,
                 args.feed,
+                args.dwell_s,
                 simulate=args.simulate,
             )
         else:
@@ -533,6 +564,7 @@ def main() -> None:
                 args.replicates,
                 args.density_mg_per_ul,
                 args.feed,
+                args.dwell_s,
                 simulate=args.simulate,
             )
 
