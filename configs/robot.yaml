@@ -1,0 +1,56 @@
+# OpenFlux robot configuration -- split-file layout. This top-level file
+# holds only what's specific to THIS robot (transport, timeout,
+# travel_z_mm) plus references to the reusable, independently-measured
+# pieces below it: an axes profile, a deck<->motor calibration, a deck
+# layout, named tip geometries, labware placements, and the tools mounted
+# on each side. Each reference is a path, resolved relative to this file's
+# own directory, to that piece's own YAML -- so e.g. a labware definition
+# or a tool profile can be reused by another robot config without
+# retyping its measurements. See config/loader.py's resolve_robot_config
+# for exactly how these are followed.
+#
+# Every section can also be given inline instead of by reference (the
+# original, single-file convention) -- see src/config/robot.example.yaml
+# for the same machine written that way, with every field's meaning
+# documented alongside it.
+#
+# Load with:  robot = openflux.config.load_robot("configs/robot.yaml")
+
+transport:
+  type: serial              # fake | serial | tcp
+  port: "COM6"    # required when type: serial
+  baudrate: 115200
+
+travel_z_mm: 120           # safe clearance height used by safe_move_to
+timeout: 30
+
+axes: axes.yaml
+calibration: calibration.yaml
+deck: deck.yaml
+
+# Named tip geometries -- one file per tip (see configs/tools/tips/).
+tips:
+  - tools/tips/p300_tip.yaml
+  - tools/tips/p20_tip.yaml
+  - tools/tips/cal_probe.yaml
+
+# Labware placed on named deck slots. Each entry assigns a reusable
+# labware definition (configs/labware/, no slot of its own -- see those
+# files) to a slot; the same definition file could be assigned to a
+# different slot, or reused by a different robot, without editing it.
+labware:
+  - slot: "10"
+    config: labware/tiprack1.yaml
+  - slot: "1"
+    config: labware/source.yaml
+  - slot: "6"
+    config: labware/dest.yaml
+  - slot: "7"
+    config: labware/aspirate_plate.yaml
+  - slot: "8"
+    config: labware/dispense_plate.yaml
+
+# Tools on the mounts -- one config file per tool type (see configs/tools/).
+mounts:
+  left: tools/pipette_p300.yaml
+  rear: tools/ultrasonic_rear.yaml

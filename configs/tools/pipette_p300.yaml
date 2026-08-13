@@ -1,0 +1,7 @@
+# p300 single-channel pipette -- mounted on left or right (see robot.yaml's
+# mounts: section for which side, and configs/tools/tips/ for the tip
+# geometries it can pick up).
+type: pipette
+name: p300
+microsteps_per_ul: 50
+max_volume_ul: 300

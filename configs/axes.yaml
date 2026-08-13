@@ -1,0 +1,11 @@
+# Per-axis overrides; anything omitted keeps the firmware default.
+# steps_per_mm here is "full motor steps per mm" (AxisScale multiplies by
+# MICROSTEPS_PER_STEP=32 to get firmware microsteps/mm) -- derived from
+# measured full-travel calibration: X 60,000 microsteps / 410 mm, Y 52,000
+# microsteps / 315 mm, Z/A 160,000 microsteps / 200 mm. See
+# geometry.units.MEASURED_AXIS_TRAVEL_MM, which is also what
+# default_axis_configs() uses when this file is omitted from robot.yaml.
+X: { steps_per_mm: 4.57 }
+Y: { steps_per_mm: 5.16 }
+Z: { steps_per_mm: 25.0 }
+A: { steps_per_mm: 25.0 }

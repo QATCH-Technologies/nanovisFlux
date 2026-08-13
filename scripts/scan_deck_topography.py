@@ -95,7 +95,7 @@ from src.transport import FakeTransport, SerialTransport
 #: Anchored to this script's own location, not the process's current
 #: working directory -- see scripts/calibrate_pipette.py's identical fix
 #: for why a bare relative default string is a real risk here.
-_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "src" / "config" / "robot.example.yaml"
+_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "robot.yaml"
 
 _ASCII_RAMP = " .:-=+*#%@"
 #: A real M412 costs at least this long (10 ultrasonic samples, each

@@ -14,7 +14,10 @@ from . import icon_utils
 from . import style as S
 from .tokens import TOKENS
 
-_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "robot.example.yaml"
+#: Anchored to this file's own location (src/gui/), not the process cwd --
+#: three .parent hops up (gui -> src -> project root) reaches the /configs
+#: split-file layout (see config/loader.py's resolve_robot_config).
+_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent.parent / "configs" / "robot.yaml"
 _ICON_SIZE = QSize(16, 16)
 _INK = QColor(*TOKENS["flat_text"][:3])
 _ON_ACCENT = QColor(*TOKENS["flat_on_accent"][:3])

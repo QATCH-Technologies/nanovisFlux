@@ -1,0 +1,15 @@
+# Destination well plate -- same footprint/geometry as source.yaml.
+name: dest
+well_geometry:
+  shape: circular
+  diameter_mm: 6.9
+  depth_mm: 10.9
+  bottom: round
+  bottom_clearance_mm: 1.5
+  max_volume_ul: 360
+grid:
+  rows: 8
+  cols: 12
+  origin: { x: 14.4, y: 11.2, z: 14.4 }
+  row_spacing_mm: 9
+  col_spacing_mm: 9

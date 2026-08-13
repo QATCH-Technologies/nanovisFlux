@@ -1,0 +1,16 @@
+# Source well plate. See tiprack1.yaml's header for the offset/z convention
+# and why this file carries no slot: -- that's assigned in robot.yaml.
+name: source
+well_geometry:
+  shape: circular
+  diameter_mm: 6.9
+  depth_mm: 10.9           # opening to the well's deepest point
+  bottom: round
+  bottom_clearance_mm: 1.5 # standoff kept above the bottom at "clearance"
+  max_volume_ul: 360
+grid:
+  rows: 8
+  cols: 12
+  origin: { x: 14.4, y: 11.2, z: 14.4 }  # A1 center; z = plate top surface
+  row_spacing_mm: 9
+  col_spacing_mm: 9

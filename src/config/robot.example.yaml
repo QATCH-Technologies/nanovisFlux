@@ -1,5 +1,13 @@
-# OpenFlux robot configuration. Everything the library needs to build a Robot.
-# Load with:  robot = openflux.config.load_robot("robot.example.yaml")
+# OpenFlux robot configuration. Everything the library needs to build a Robot,
+# written the original single-file way -- every field documented right where
+# it's used. Load with:  robot = openflux.config.load_robot("robot.example.yaml")
+#
+# For a real robot, prefer the split-file layout under /configs instead:
+# axes/calibration/deck/tools/tips/labware each get their own reusable YAML
+# (see configs/robot.yaml), so e.g. a labware definition or tool profile can
+# be shared across robots without retyping its measurements. This file still
+# works unmodified either way -- load_robot resolves file references only
+# where a section actually IS one; every section below stays inline.
 
 transport:
   type: serial              # fake | serial | tcp

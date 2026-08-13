@@ -31,7 +31,7 @@ from .trace import CommandTracer
 from .robot_factory import build_robot
 from .calibration_dialog import CalibrationDialog
 from .mounts_dialog import MountsDialog
-from ..config.loader import load_calibration_override
+from ..config.loader import load_calibration_override, resolve_robot_config
 
 _ICON_SIZE = QSize(16, 16)
 _INK = QColor(*TOKENS["flat_text"][:3])
@@ -201,9 +201,13 @@ class MainWindow(QMainWindow):
         try:
             cfg = None
             if opts.get("config_path"):
-                import yaml
-                with open(opts["config_path"], "r") as fh:
-                    cfg = yaml.safe_load(fh)
+                # resolve_robot_config follows any split-file references
+                # (axes/calibration/deck/tips/labware/mounts each given as a
+                # path to their own YAML rather than inline -- see
+                # config/loader.py) so a split configs/robot.yaml and a
+                # single-file robot.example.yaml both land here as the same
+                # fully-inline dict build_robot expects.
+                cfg = resolve_robot_config(opts["config_path"])
                 # A calibration persisted from a previous "Save calibration"
                 # (see calibration_dialog.py / config.loader's
                 # calibration_sidecar_path) always wins over the config

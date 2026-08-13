@@ -7,11 +7,18 @@ simulated vs. real (and which COM port) independently of whatever a given
 config file happens to say, so the same robot.example.yaml can be pointed at
 either FakeTransport or a real SerialTransport.
 """
+
 from __future__ import annotations
 
+from ..config.loader import (
+    build_axes,
+    build_calibration,
+    build_deck,
+    build_labware,
+    build_tips,
+)
 from ..core import MountSide
 from ..robot import Robot
-from ..config.loader import build_axes, build_calibration, build_deck, build_labware, build_tips
 from ..tools import Pipette, PlungerModel, UltrasonicSensor
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
@@ -20,16 +27,20 @@ _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.RE
 def _pipette_from_cfg(cfg: dict) -> Pipette:
     return Pipette(
         name=cfg["name"],
-        plunger=PlungerModel(microsteps_per_ul=cfg["microsteps_per_ul"],
-                             bottom_microsteps=cfg.get("bottom_microsteps", 0)),
-        max_volume_ul=cfg["max_volume_ul"])
+        plunger=PlungerModel(
+            microsteps_per_ul=cfg["microsteps_per_ul"],
+            bottom_microsteps=cfg.get("bottom_microsteps", 0),
+        ),
+        max_volume_ul=cfg["max_volume_ul"],
+    )
 
 
 def _ultrasonic_from_cfg(cfg: dict) -> UltrasonicSensor:
     off = cfg.get("offset_mm", {})
     return UltrasonicSensor(
         offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
-        max_range_mm=cfg.get("max_range_mm", 4000.0))
+        max_range_mm=cfg.get("max_range_mm", 4000.0),
+    )
 
 
 def build_robot(cfg: dict | None, transport) -> Robot:
@@ -39,8 +50,13 @@ def build_robot(cfg: dict | None, transport) -> Robot:
     calibration = build_calibration(cfg["calibration"]) if "calibration" in cfg else None
     deck = build_deck(cfg["deck"]) if "deck" in cfg else None
 
-    robot = Robot(transport, calibration=calibration, deck=deck,
-                  travel_z_mm=cfg.get("travel_z_mm", 60.0), timeout=cfg.get("timeout", 30.0))
+    robot = Robot(
+        transport,
+        calibration=calibration,
+        deck=deck,
+        travel_z_mm=cfg.get("travel_z_mm", 60.0),
+        timeout=cfg.get("timeout", 30.0),
+    )
     for a, ac in build_axes(cfg.get("axes", {})).items():
         robot.axes[a].config = ac
     robot.tips = build_tips(cfg.get("tips", []))

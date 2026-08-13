@@ -1,0 +1,18 @@
+# p300 tip rack. Each well's (x, y, z) is relative to the slot origin, with
+# z always the well's TOP (opening/rim) -- the one directly-measurable
+# datum. Which deck slot this sits in is assigned in robot.yaml's labware:
+# list, not here -- this file is the reusable "vendor datasheet" (footprint,
+# grid, geometry) alone, so it can be placed in any slot on any robot.
+name: tiprack1
+well_geometry:
+  shape: circular
+  diameter_mm: 5.23
+  depth_mm: 51.7          # ~ the tip length; unused for pickup (press_z_mm drives that)
+  bottom: flat
+  bottom_clearance_mm: 0
+grid:
+  rows: 8
+  cols: 12
+  origin: { x: 0, y: 0, z: 90 }   # A1 center; z = tip top, first-contact height
+  row_spacing_mm: 9
+  col_spacing_mm: 9

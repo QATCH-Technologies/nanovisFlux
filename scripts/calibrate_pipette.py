@@ -82,7 +82,7 @@ _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
 #: relative string here would resolve against wherever the script happened
 #: to be invoked FROM, silently picking up a same-relative-path file in a
 #: different checkout/worktree instead of failing loudly, if one exists.
-_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "src" / "config" / "robot.example.yaml"
+_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "robot.yaml"
 
 #: Deliberately different, mildly nonlinear "true" curves for --simulate's
 #: synthetic readings (some efficiency loss at larger strokes, matching

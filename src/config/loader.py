@@ -68,6 +68,104 @@ def load_calibration_override(config_path) -> dict | None:
     return cfg.get("calibration", cfg)
 
 
+# -- split-file config resolution --------------------------------------------
+#
+# A robot config's axes/calibration/deck/tips/labware/mounts sections can
+# each be given two ways:
+#   - inline, exactly as robot.example.yaml has always done (a dict, or for
+#     tips/labware a list of dicts) -- unchanged, so an existing single-file
+#     config keeps working with zero edits.
+#   - as a path (string, resolved relative to the referencing file's own
+#     directory -- NOT the process cwd) to that section's own YAML file, so
+#     one axes/calibration/deck/tool/tip/labware profile can be measured
+#     once and reused by name across multiple robot configs instead of
+#     copy-pasted. See configs/robot.yaml for the split-file convention this
+#     enables, and src/config/robot.example.yaml for the original,
+#     single-file equivalent of the same machine.
+#
+# resolve_robot_config() is the only entry point that needs to know about
+# this: it turns any mix of inline/referenced sections into the fully-inline
+# dict shape build_transport/build_axes/build_calibration/build_deck/
+# build_labware/build_tips/load_robot's mounts loop have always consumed, so
+# nothing downstream (including the GUI's build_robot) needs to change.
+
+
+def _load_section_ref(base_dir: Path, value, wrapper_key: str):
+    """``value`` is either an inline section (returned as-is) or a path to a
+    standalone YAML file for it, resolved against ``base_dir``. A standalone
+    file may itself wrap the section under ``wrapper_key:`` (self-documenting,
+    and consistent with how a calibration sidecar file reads) or just BE the
+    section at the top level -- same fallback convention as
+    load_calibration_override/load_calibration already use."""
+    if not isinstance(value, str):
+        return value
+    loaded = load_config(str(base_dir / value))
+    return loaded.get(wrapper_key, loaded)
+
+
+def _resolve_tips_refs(base_dir: Path, cfg_list: list) -> list:
+    resolved = []
+    for item in cfg_list or []:
+        if isinstance(item, str):
+            loaded = load_config(str(base_dir / item))
+            resolved.append(loaded.get("tip", loaded))
+        else:
+            resolved.append(item)
+    return resolved
+
+
+def _resolve_labware_refs(base_dir: Path, cfg_list: list) -> list:
+    """Each entry is either an old-style inline labware dict (already
+    carrying its own ``slot:``), or ``{slot, config}`` naming a reusable
+    labware definition file -- the file itself holds no slot (matching
+    Labware.from_dict, which never reads one), so the same tiprack/plate
+    definition can sit in a different slot on a different robot."""
+    resolved = []
+    for item in cfg_list or []:
+        if isinstance(item, dict) and "config" in item:
+            loaded = load_config(str(base_dir / item["config"]))
+            loaded = loaded.get("labware", loaded)
+            resolved.append({**loaded, "slot": item["slot"]})
+        else:
+            resolved.append(item)
+    return resolved
+
+
+def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> dict:
+    resolved = {}
+    for side, value in (cfg_dict or {}).items():
+        if isinstance(value, str):
+            loaded = load_config(str(base_dir / value))
+            resolved[side] = loaded.get("mount", loaded)
+        else:
+            resolved[side] = value
+    return resolved
+
+
+def resolve_robot_config(path: str) -> dict:
+    """Load ``path`` and follow any file-reference sections, returning the
+    same fully-inline dict shape a single monolithic config has always
+    produced. Both load_robot and the GUI's connect flow go through this so
+    a split-file robot.yaml and a single-file robot.example.yaml behave
+    identically from here down."""
+    cfg = load_config(path)
+    base_dir = Path(path).resolve().parent
+    resolved = dict(cfg)
+    if "axes" in cfg:
+        resolved["axes"] = _load_section_ref(base_dir, cfg["axes"], "axes")
+    if "calibration" in cfg:
+        resolved["calibration"] = _load_section_ref(base_dir, cfg["calibration"], "calibration")
+    if "deck" in cfg:
+        resolved["deck"] = _load_section_ref(base_dir, cfg["deck"], "deck")
+    if "tips" in cfg:
+        resolved["tips"] = _resolve_tips_refs(base_dir, cfg["tips"])
+    if "labware" in cfg:
+        resolved["labware"] = _resolve_labware_refs(base_dir, cfg["labware"])
+    if "mounts" in cfg:
+        resolved["mounts"] = _resolve_mounts_refs(base_dir, cfg["mounts"])
+    return resolved
+
+
 # -- individual sections ----------------------------------------------------
 def build_transport(cfg: dict):
     kind = cfg.get("type", "fake")
@@ -230,7 +328,7 @@ def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
 
 # -- top level --------------------------------------------------------------
 def load_robot(path: str) -> Robot:
-    cfg = load_config(path)
+    cfg = resolve_robot_config(path)
     # A calibration persisted from the GUI (see calibration_sidecar_path)
     # always wins over whatever the config file itself says -- the whole
     # point is that recalibrating from the dialog, then reconnecting with
