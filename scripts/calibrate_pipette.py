@@ -106,8 +106,8 @@ def _synthetic_mass_mg(stroke: float, density: float, *, aspirating: bool) -> fl
 def _synthetic_cumulative_mass_mg(
     bottom: int, fixed_position: int, target: int, density: float
 ) -> float:
-    total = _synthetic_volume_ul(fixed_position - bottom, _DISPENSE_TRUTH)
-    remaining = _synthetic_volume_ul(target - bottom, _DISPENSE_TRUTH)
+    total = _synthetic_volume_ul(bottom - fixed_position, _DISPENSE_TRUTH)
+    remaining = _synthetic_volume_ul(bottom - target, _DISPENSE_TRUTH)
     return max(0.0, total - remaining) * density
 
 
@@ -226,7 +226,7 @@ def run_phase_a(
                 aspirate_loc.resolve(robot), side, feed=feed, verify=True
             )  # 2. to source
             _log_at(robot, side, "source (aspirate)", aspirate_loc)
-            move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
+            move_plunger(robot, plunger_axis, bottom - stroke, plunger_max, feed)  # 3. aspirate
             time.sleep(dwell_s)  # hold at the bottom, submerged, so the aspirate actually draws up
             robot.safe_move_to(
                 dispense_loc.resolve(robot), side, feed=feed, verify=True
@@ -273,7 +273,7 @@ def run_phase_b(
 ) -> list:
     """See module docstring. Returns [(target, remaining_volume_ul), ...].
     dwell_s: see run_phase_a's own docstring."""
-    fixed_position = bottom + max_stroke
+    fixed_position = bottom - max_stroke
     total_ul = aspirate_calibration.volume_for_microsteps(fixed_position, aspirating=True)
     logger.info(
         f"[Phase B] fixed aspirate stroke {max_stroke} usteps ~= {total_ul:.2f} uL "
@@ -521,10 +521,10 @@ def main() -> None:
     strokes = (
         sorted(args.aspirate_microsteps)
         if args.aspirate_microsteps
-        else _default_strokes(plunger_max - bottom, args.num_points)
+        else _default_strokes(bottom, args.num_points)
     )
     max_stroke = strokes[-1]
-    aspirate_positions = [bottom + s for s in strokes]
+    aspirate_positions = [bottom - s for s in strokes]
     dispense_targets = (
         sorted(args.dispense_targets, reverse=True)
         if args.dispense_targets
