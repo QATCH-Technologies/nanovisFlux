@@ -1,4 +1,0 @@
-# length_mm shifts every Z target once this tip is on.
-name: p300_tip
-length_mm: 51.7
-max_volume_ul: 300

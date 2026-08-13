@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, field
 
 from ..core import AxisId, MountSide
+from ..motion.resonance import avoid_resonant_feed
 
 
 @dataclass
@@ -14,7 +15,21 @@ class JogSettings:
     ``step_scales`` and ``jog_speed_scales`` share one selectable index
     (cycled by step_up/step_down): the former sizes a discrete nudge(), the
     latter is the feed fraction a held keyboard action drives continuously
-    at -- one "how big/fast" dial for both move styles."""
+    at -- one "how big/fast" dial for both move styles.
+
+    Jog feed is deliberately NOT one flat microsteps/s number shared by
+    every axis (that used to be the case, and it was wrong): Z/A's much
+    finer microstepping (~800 microsteps/mm vs. X/Y's ~146-165) means the
+    same raw microsteps/s feed is a far slower *real* speed on Z/A than on
+    X/Y. Instead, each axis jogs relative to its OWN configured
+    ``travel_speed`` (motion.axis.AxisConfig -- the same vetted ceiling
+    already used for automated routine moves, and already set roughly 2x
+    higher for Z/A than X/Y precisely because of that finer microstepping)
+    -- see JogController._axis_feed. ``jog_speed_fraction`` is a global
+    multiplier on top of that per-axis ceiling (1.0 = jog can reach exactly
+    an axis's own travel_speed at full stick deflection/nudge; lower it for
+    a gentler overall ceiling -- see scripts/gamepad_control.py's D-pad
+    speed control for a live example)."""
 
     step_microsteps: dict = field(
         default_factory=lambda: {
@@ -28,8 +43,7 @@ class JogSettings:
     )
     step_scales: tuple = (0.25, 1.0, 4.0)  # nudge() distance multipliers
     jog_speed_scales: tuple = (0.15, 0.4, 1.0)  # continuous-jog feed fractions
-    feed: int = 6000  # feed for discrete nudge() moves
-    jog_feed: int = 10000  # feed (microsteps/s) at full jog speed
+    jog_speed_fraction: float = 1.0  # multiplier on each axis's own travel_speed
 
 
 class JogController:
@@ -109,6 +123,24 @@ class JogController:
     def toggle_mount(self) -> None:
         self.side = MountSide.RIGHT if self.side is MountSide.LEFT else MountSide.LEFT
 
+    # -- feed: per-axis, resonance-avoided --------------------------------
+    def _axis_feed(self, axis: AxisId) -> float:
+        """This axis's own jog speed ceiling (microsteps/s): its configured
+        ``travel_speed`` scaled by ``settings.jog_speed_fraction`` -- see
+        JogSettings' own docstring for why this is per-axis rather than one
+        flat number shared by every axis."""
+        return self.robot.axes[axis].config.travel_speed * self.settings.jog_speed_fraction
+
+    def _resonance_safe_feed(self, feed: float, axes, *, ceiling: float | None = None) -> float:
+        """``feed`` nudged clear of every axis in ``axes``' configured
+        ``resonance_bands_hz`` (see motion.resonance) -- the union of all
+        of them, since one G1 line's F applies identically to every axis it
+        names (the firmware has no per-axis feed within a single line)."""
+        bands = tuple(b for axis in axes for b in self.robot.axes[axis].config.resonance_bands_hz)
+        if not bands:
+            return feed
+        return avoid_resonant_feed(feed, bands, ceiling=ceiling, floor=1.0)
+
     # -- discrete nudge -------------------------------------------------
     def nudge(self, axis: AxisId, sign: int) -> None:
         """Move one bounded step along ``axis`` (+1 away from home, -1 toward
@@ -118,14 +150,16 @@ class JogController:
         if not self._entered:
             self.robot.controller.set_relative()
         step = int(self.settings.step_microsteps[axis] * self.scale)
-        self.robot.controller.linear_move({axis: sign * step}, feed=self.settings.feed)
+        ceiling = self._axis_feed(axis)
+        feed = self._resonance_safe_feed(ceiling, (axis,), ceiling=ceiling)
+        self.robot.controller.linear_move({axis: sign * step}, feed=int(feed))
 
     # -- continuous jog ---------------------------------------------------
     def begin_jog(self, axis: AxisId, sign: int, speed: float = 1.0) -> None:
         """Start (or retune) a continuous move along ``axis``. ``speed`` is a
-        0..1 fraction of ``jog_feed`` -- a gamepad passes stick deflection
-        directly, a keyboard passes the toggleable ``jog_speed``. Call
-        ``end_jog`` to stop it."""
+        0..1 fraction of that axis's own jog ceiling (see _axis_feed) -- a
+        gamepad passes stick deflection directly, a keyboard passes the
+        toggleable ``jog_speed``. Call ``end_jog`` to stop it."""
         signed = (1.0 if sign >= 0 else -1.0) * max(0.0, min(1.0, speed))
         if abs(signed) < 1e-3:
             self.end_jog(axis)
@@ -168,7 +202,16 @@ class JogController:
             axis: int(math.copysign(self.robot.axes[axis].config.endstop_limit, s))
             for axis, s in self._active.items()
         }
-        feed = int(self.settings.jog_feed * max(abs(s) for s in self._active.values()))
+        # Safety: when multiple axes are held together, use the SLOWEST of
+        # their own per-axis ceilings (see _axis_feed) rather than a flat
+        # feed applied to every named axis identically -- one G1 line's F
+        # becomes every named axis's MaxSpeed verbatim in firmware, so
+        # anything else could drive a held axis faster than its own
+        # configured travel_speed.
+        ceiling = min(self._axis_feed(axis) for axis in self._active)
+        speed_fraction = max(abs(s) for s in self._active.values())
+        feed = self._resonance_safe_feed(ceiling * speed_fraction, tuple(self._active), ceiling=ceiling)
+        feed = int(feed)
         # Not waited on: a continuous jog is open-ended, and the firmware
         # may not send this G1's 'ok' until the move itself completes, not
         # merely once it's queued -- see class docstring. Waiting would

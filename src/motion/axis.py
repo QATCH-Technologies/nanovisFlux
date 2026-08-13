@@ -20,6 +20,14 @@ class AxisConfig:
     travel_accel: float
     endstop_bounce: int
     steps_per_mm: float | None = None
+    #: (low_hz, high_hz) pairs, in FULL motor-step Hz (i.e. pre-microstepping
+    #: -- a stepper's rotor still detents/rings at the full-step rate
+    #: regardless of microstepping, which only smooths position *within* a
+    #: step), that make this axis vibrate/sound bad and should never be
+    #: commanded as a feed rate. Empty by default -- nobody has measured
+    #: this machine's actual resonant bands yet; see motion.resonance for
+    #: how these get avoided once populated (e.g. via configs/axes.yaml).
+    resonance_bands_hz: tuple = ()
 
 
 @dataclass
@@ -49,11 +57,19 @@ HOMING_ORDER = (AxisId.A, AxisId.Z, AxisId.Y, AxisId.X, AxisId.B, AxisId.C)
 
 def default_axis_configs() -> dict:
     """The six axes as configured in the reference firmware."""
+    # Matches firmware ENDSTOP_LIMITS[6] = {62500, 54000, 175000, 175000,
+    # 20000, 20000} (order X, Y, Z, A, B, C; OT2-stepper-controller.ino).
+    # X/Y/Z/A have been bumped in firmware more than once since this was
+    # last synced -- see firmware/CHANGELOG.md's 1.1.0-alpha ("Update motor
+    # max power, endstop limits, and homing speeds") and 1.1.2-alpha ("Y
+    # ENDSTOP LIMIT increased from 50000 to 54000") -- while this stayed at
+    # an older, unrelated set of values the whole time. B/C were never
+    # touched by either change and already matched.
     limit = {
-        AxisId.X: 60000,
-        AxisId.Y: 52000,
-        AxisId.Z: 160000,
-        AxisId.A: 160000,
+        AxisId.X: 62500,
+        AxisId.Y: 54000,
+        AxisId.Z: 175000,
+        AxisId.A: 175000,
         AxisId.B: 20000,
         AxisId.C: 20000,
     }

@@ -5,6 +5,19 @@
 # microsteps / 315 mm, Z/A 160,000 microsteps / 200 mm. See
 # geometry.units.MEASURED_AXIS_TRAVEL_MM, which is also what
 # default_axis_configs() uses when this file is omitted from robot.yaml.
+#
+# resonance_bands_hz: (low, high) full-motor-step-Hz pairs (pre-
+# microstepping -- see motion/resonance.py's module docstring for why full
+# steps, not microsteps, is the right unit) that make an axis ring/vibrate
+# badly. Jogging and nudging (control/jog.py) automatically steer clear of
+# whatever's listed here for each axis; travel_speed/homing_speed are also
+# checked at load time and logged as a warning if either sits inside one
+# of these bands. Nobody has characterized this machine's actual resonant
+# bands yet, so none are listed below -- to find them: jog an axis slowly
+# across its range (or run a slow constant-speed sweep) and listen/feel for
+# where it rings, note the approximate microsteps/s, divide by 32
+# (MICROSTEPS_PER_STEP) to get full-step Hz, and add a pair here, e.g.:
+#   Z: { steps_per_mm: 25.0, resonance_bands_hz: [[110, 140]] }
 X: { steps_per_mm: 4.57 }
 Y: { steps_per_mm: 5.16 }
 Z: { steps_per_mm: 25.0 }

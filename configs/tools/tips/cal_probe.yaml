@@ -1,3 +1,0 @@
-# Dedicated calibration probe -- no max_volume_ul (not a pipetting tip).
-name: cal_probe
-length_mm: 63.0

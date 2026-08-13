@@ -91,9 +91,13 @@ PICKUP_RETRACT_MICROSTEPS = 200
 PICKUP_PRESSES = 2
 PICKUP_FEED = 2000
 
-MAX_JOG_FEED = 100_000    # steps/s ceiling the D-pad can push the speed ceiling to
-MIN_JOG_FEED = 500        # steps/s floor the D-pad can pull the speed ceiling down to
-MIN_SPEED_INCREMENT = 1_000
+#: Bounds for JogSettings.jog_speed_fraction (see control/jog.py) -- a
+#: multiplier on each axis's OWN configured travel_speed, not a flat
+#: steps/s number: capped at 1.0 so the D-pad can never push any axis
+#: past the same ceiling already considered safe for automated moves.
+MAX_JOG_SPEED_FRACTION = 1.0
+MIN_JOG_SPEED_FRACTION = 0.05
+MIN_SPEED_INCREMENT = 0.01
 
 
 def normalized_magnitude(raw_value: float, deadzone: float) -> float:
@@ -176,8 +180,8 @@ class GamepadTeleop:
         self.debug_axes = debug_axes
         self.running = True
 
-        self.jc.settings.jog_feed = 20_000     # current speed ceiling, steps/s
-        self.speed_increment = 1_000           # D-pad up/down step; D-pad left/right adjusts this
+        self.jc.settings.jog_speed_fraction = 1.0  # full (each axis's own travel_speed) ceiling
+        self.speed_increment = 0.1             # D-pad up/down step; D-pad left/right adjusts this
         self.min_speed_fraction = 0.05         # floor fraction so a light touch still moves
         self.reissue_threshold_fraction = 0.05
 
@@ -215,8 +219,9 @@ class GamepadTeleop:
             " [Actions]       X (print position), Back/View (home)\n"
             " [Stops]         A (quick stop), Start/Menu (emergency stop + disconnect)\n"
             " [Sensor]        B (read rear ultrasonic distance, if attached)\n"
-            f" mount: {self.jc.side.value} | speed ceiling: {self.jc.settings.jog_feed} steps/s | "
-            f"step: {self.speed_increment}\n"
+            f" mount: {self.jc.side.value} | speed ceiling: "
+            f"{self.jc.settings.jog_speed_fraction:.0%} of travel_speed | "
+            f"step: {self.speed_increment:.0%}\n"
             + "=" * 60
         )
 
@@ -365,17 +370,21 @@ class GamepadTeleop:
     def _handle_hat(self, value: tuple) -> None:
         x, y = value
         if y == 1:
-            self.jc.settings.jog_feed = min(MAX_JOG_FEED, self.jc.settings.jog_feed + self.speed_increment)
-            logger.info(f"speed ceiling -> {self.jc.settings.jog_feed} steps/s")
+            self.jc.settings.jog_speed_fraction = min(
+                MAX_JOG_SPEED_FRACTION, self.jc.settings.jog_speed_fraction + self.speed_increment
+            )
+            logger.info(f"speed ceiling -> {self.jc.settings.jog_speed_fraction:.0%} of travel_speed")
         elif y == -1:
-            self.jc.settings.jog_feed = max(MIN_JOG_FEED, self.jc.settings.jog_feed - self.speed_increment)
-            logger.info(f"speed ceiling -> {self.jc.settings.jog_feed} steps/s")
+            self.jc.settings.jog_speed_fraction = max(
+                MIN_JOG_SPEED_FRACTION, self.jc.settings.jog_speed_fraction - self.speed_increment
+            )
+            logger.info(f"speed ceiling -> {self.jc.settings.jog_speed_fraction:.0%} of travel_speed")
         if x == 1:
-            self.speed_increment += 1_000
-            logger.info(f"step size -> {self.speed_increment}")
+            self.speed_increment += 0.05
+            logger.info(f"step size -> {self.speed_increment:.0%}")
         elif x == -1:
-            self.speed_increment = max(MIN_SPEED_INCREMENT, self.speed_increment - 1_000)
-            logger.info(f"step size -> {self.speed_increment}")
+            self.speed_increment = max(MIN_SPEED_INCREMENT, self.speed_increment - 0.05)
+            logger.info(f"step size -> {self.speed_increment:.0%}")
 
     def _handle_axis_event(self, axis_index: int, value: float) -> None:
         if self.debug_axes:

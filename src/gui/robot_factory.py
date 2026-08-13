@@ -19,7 +19,7 @@ from ..config.loader import (
 )
 from ..core import MountSide
 from ..robot import Robot
-from ..tools import Pipette, PlungerModel, UltrasonicSensor
+from ..tools import Pipette, PlungerModel, TouchProbe, UltrasonicSensor
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
 
@@ -32,6 +32,8 @@ def _pipette_from_cfg(cfg: dict) -> Pipette:
             bottom_microsteps=cfg.get("bottom_microsteps", 0),
         ),
         max_volume_ul=cfg["max_volume_ul"],
+        brand=cfg.get("brand", ""),
+        channels=cfg.get("channels", 1),
     )
 
 
@@ -40,6 +42,16 @@ def _ultrasonic_from_cfg(cfg: dict) -> UltrasonicSensor:
     return UltrasonicSensor(
         offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
         max_range_mm=cfg.get("max_range_mm", 4000.0),
+        name=cfg.get("name", "ultrasonic"),
+        brand=cfg.get("brand", ""),
+    )
+
+
+def _touch_probe_from_cfg(cfg: dict) -> TouchProbe:
+    return TouchProbe(
+        name=cfg.get("name", "touch-probe"),
+        length_mm=cfg.get("length_mm", 0.0),
+        brand=cfg.get("brand", ""),
     )
 
 
@@ -61,10 +73,12 @@ def build_robot(cfg: dict | None, transport) -> Robot:
         robot.axes[a].config = ac
     robot.tips = build_tips(cfg.get("tips", []))
     for lw in cfg.get("labware", []):
-        robot.load_labware(build_labware(lw), str(lw["slot"]))
+        robot.load_labware(build_labware(lw), str(lw["slot"]), key=lw.get("instance"))
     for side_name, tool_cfg in cfg.get("mounts", {}).items():
         if tool_cfg.get("type") == "pipette":
             robot.attach(_SIDES[side_name], _pipette_from_cfg(tool_cfg))
         elif tool_cfg.get("type") == "ultrasonic":
             robot.attach(_SIDES[side_name], _ultrasonic_from_cfg(tool_cfg))
+        elif tool_cfg.get("type") == "touch_probe":
+            robot.attach(_SIDES[side_name], _touch_probe_from_cfg(tool_cfg))
     return robot

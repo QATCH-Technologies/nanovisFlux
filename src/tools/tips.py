@@ -17,6 +17,7 @@ class TipGeometry:
     length_mm: float
     max_volume_ul: float = 0.0
     inner_diameter_mm: float = 0.0
+    brand: str = ""  # vendor/manufacturer, e.g. "Opentrons" -- "" when unknown/custom
 
 
 @dataclass

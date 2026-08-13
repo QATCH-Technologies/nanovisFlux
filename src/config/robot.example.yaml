@@ -100,7 +100,7 @@ calibration:
 tips:
   - { name: p300_tip, length_mm: 51.7, max_volume_ul: 300 }
   - { name: p20_tip,  length_mm: 46.6, max_volume_ul: 20 }
-  - { name: cal_probe, length_mm: 63.0 }   # dedicated calibration probe
+  - { name: 3d_touch_probe, length_mm: 63.0 }   # dedicated calibration probe
 
 # Deck plate: an OT-2-style 3-column x 4-row slot grid, numbered "1".."12"
 # row-major from the front-left. Slots "1"-"11" are uniform (127.85 x

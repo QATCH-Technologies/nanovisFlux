@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from loguru import logger
+
 from ..core import AxisId, MountSide
 from ..deck import (
     CalibrationMark,
@@ -21,12 +23,14 @@ from ..deck import (
 )
 from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, DeckPoint
 from ..motion.axis import AxisConfig, default_axis_configs
+from ..motion.resonance import feed_in_resonance_band
 from ..robot import Robot
 from ..tools import (
     Pipette,
     PlungerCalibration,
     PlungerModel,
     TipGeometry,
+    TouchProbe,
     UltrasonicSensor,
 )
 from ..transport import FakeTransport, SerialTransport
@@ -103,12 +107,39 @@ def _load_section_ref(base_dir: Path, value, wrapper_key: str):
     return loaded.get(wrapper_key, loaded)
 
 
+def _check_name_matches(declared_name, loaded: dict, file_path: Path, kind: str) -> None:
+    """A reference entry (in robot.yaml's tips:/labware:/mounts:) may declare
+    the ``name:`` it expects to find -- enforced here so the object (the
+    referenced file's own ``name:``), the config (this declared name), and
+    the file name stay in sync by construction rather than by convention:
+    a rename on one side without the other fails loudly instead of quietly
+    drifting."""
+    actual_name = loaded.get("name")
+    if declared_name is not None and actual_name is not None and declared_name != actual_name:
+        raise ValueError(
+            f"{kind} reference declares name {declared_name!r} but {file_path} is "
+            f"itself named {actual_name!r} -- keep the two in sync"
+        )
+
+
 def _resolve_tips_refs(base_dir: Path, cfg_list: list) -> list:
+    """Each entry is an inline tip dict (has its own ``name``/``length_mm``,
+    no ``config``), a bare path string, or ``{name, config}`` -- the latter
+    two load the tip's own file (resolved against ``base_dir``); ``{name,
+    config}`` additionally checks that declared ``name`` against the file's
+    own, so the tip's identity can't silently drift out of sync between
+    robot.yaml and the file it points at."""
     resolved = []
     for item in cfg_list or []:
         if isinstance(item, str):
             loaded = load_config(str(base_dir / item))
             resolved.append(loaded.get("tip", loaded))
+        elif isinstance(item, dict) and "config" in item:
+            file_path = base_dir / item["config"]
+            loaded = load_config(str(file_path))
+            loaded = loaded.get("tip", loaded)
+            _check_name_matches(item.get("name"), loaded, file_path, "tips:")
+            resolved.append(loaded)
         else:
             resolved.append(item)
     return resolved
@@ -116,27 +147,51 @@ def _resolve_tips_refs(base_dir: Path, cfg_list: list) -> list:
 
 def _resolve_labware_refs(base_dir: Path, cfg_list: list) -> list:
     """Each entry is either an old-style inline labware dict (already
-    carrying its own ``slot:``), or ``{slot, config}`` naming a reusable
-    labware definition file -- the file itself holds no slot (matching
-    Labware.from_dict, which never reads one), so the same tiprack/plate
-    definition can sit in a different slot on a different robot."""
+    carrying its own ``slot:``), or ``{slot, config, name?, instance?}``
+    naming a reusable labware definition file -- the file itself holds no
+    slot (matching Labware.from_dict, which never reads one), so the same
+    tiprack/plate definition can sit in a different slot on a different
+    robot, or in more than one slot on the same robot.
+
+    ``instance`` (when given) carries through as the key Robot.load_labware
+    registers this placement under -- needed only when the same reusable
+    definition is placed more than once (each placement's ``.name`` would
+    otherwise collide in ``robot.labware``); a single placement can omit it
+    and fall back to the labware's own ``name``, as before. ``name`` (when
+    given) is checked against the definition file's own -- see
+    _check_name_matches."""
     resolved = []
     for item in cfg_list or []:
         if isinstance(item, dict) and "config" in item:
-            loaded = load_config(str(base_dir / item["config"]))
+            file_path = base_dir / item["config"]
+            loaded = load_config(str(file_path))
             loaded = loaded.get("labware", loaded)
-            resolved.append({**loaded, "slot": item["slot"]})
+            _check_name_matches(item.get("name"), loaded, file_path, "labware:")
+            merged = {**loaded, "slot": item["slot"]}
+            if "instance" in item:
+                merged["instance"] = item["instance"]
+            resolved.append(merged)
         else:
             resolved.append(item)
     return resolved
 
 
 def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> dict:
+    """Each mount's value is an inline tool dict (has its own ``type``, no
+    ``config``), a bare path string, or ``{name, config}`` -- the latter two
+    load the tool's own file; ``{name, config}`` additionally checks the
+    declared ``name`` against the file's own (see _check_name_matches)."""
     resolved = {}
     for side, value in (cfg_dict or {}).items():
         if isinstance(value, str):
             loaded = load_config(str(base_dir / value))
             resolved[side] = loaded.get("mount", loaded)
+        elif isinstance(value, dict) and "config" in value:
+            file_path = base_dir / value["config"]
+            loaded = load_config(str(file_path))
+            loaded = loaded.get("mount", loaded)
+            _check_name_matches(value.get("name"), loaded, file_path, "mounts:")
+            resolved[side] = loaded
         else:
             resolved[side] = value
     return resolved
@@ -178,6 +233,25 @@ def build_transport(cfg: dict):
     raise ValueError(f"unknown transport type: {kind}")
 
 
+def _axis_resonance_warnings(cfg: AxisConfig) -> list:
+    """Human-readable warnings for any of ``cfg``'s own steady-state speeds
+    (travel_speed, homing_speed) that sit inside its own configured
+    resonance_bands_hz -- i.e. this axis's normal operating speed IS the
+    bad-sounding frequency, not just something a jog might transiently pass
+    through. A pure function (no logging here) so it's testable without
+    intercepting loguru; build_axes logs whatever this returns."""
+    warnings = []
+    for label, value in (("travel_speed", cfg.travel_speed), ("homing_speed", cfg.homing_speed)):
+        band = feed_in_resonance_band(value, cfg.resonance_bands_hz)
+        if band is not None:
+            warnings.append(
+                f"axis {cfg.axis.letter}: {label} ({value:g} microsteps/s) falls inside its "
+                f"own configured resonance_bands_hz {band} Hz -- every move at this speed "
+                "will ring; reconfigure travel_speed/homing_speed or the band"
+            )
+    return warnings
+
+
 def build_axes(cfg: dict) -> dict:
     """Start from firmware defaults and apply per-axis overrides."""
     axes = default_axis_configs()
@@ -194,7 +268,13 @@ def build_axes(cfg: dict) -> dict:
             travel_accel=over.get("travel_accel", base.travel_accel),
             endstop_bounce=over.get("endstop_bounce", base.endstop_bounce),
             steps_per_mm=over.get("steps_per_mm", base.steps_per_mm),
+            resonance_bands_hz=tuple(
+                tuple(band) for band in over.get("resonance_bands_hz", base.resonance_bands_hz)
+            ),
         )
+    for axis_cfg in axes.values():
+        for warning in _axis_resonance_warnings(axis_cfg):
+            logger.warning(warning)
     return axes
 
 
@@ -303,6 +383,7 @@ def build_tips(cfg: list) -> dict:
             length_mm=t["length_mm"],
             max_volume_ul=t.get("max_volume_ul", 0.0),
             inner_diameter_mm=t.get("inner_diameter_mm", 0.0),
+            brand=t.get("brand", ""),
         )
     return tips
 
@@ -315,6 +396,8 @@ def _build_pipette(cfg: dict) -> Pipette:
             bottom_microsteps=cfg.get("bottom_microsteps", 0),
         ),
         max_volume_ul=cfg["max_volume_ul"],
+        brand=cfg.get("brand", ""),
+        channels=cfg.get("channels", 1),
     )
 
 
@@ -323,6 +406,16 @@ def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
     return UltrasonicSensor(
         offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
         max_range_mm=cfg.get("max_range_mm", 4000.0),
+        name=cfg.get("name", "ultrasonic"),
+        brand=cfg.get("brand", ""),
+    )
+
+
+def _build_touch_probe(cfg: dict) -> TouchProbe:
+    return TouchProbe(
+        name=cfg.get("name", "touch-probe"),
+        length_mm=cfg.get("length_mm", 0.0),
+        brand=cfg.get("brand", ""),
     )
 
 
@@ -354,11 +447,13 @@ def load_robot(path: str) -> Robot:
     robot.tips = build_tips(cfg.get("tips", []))
     # labware placed on named slots
     for lw in cfg.get("labware", []):
-        robot.load_labware(build_labware(lw), str(lw["slot"]))
+        robot.load_labware(build_labware(lw), str(lw["slot"]), key=lw.get("instance"))
     # mounted tools
     for side_name, tool_cfg in cfg.get("mounts", {}).items():
         if tool_cfg.get("type") == "pipette":
             robot.attach(_SIDES[side_name], _build_pipette(tool_cfg))
         elif tool_cfg.get("type") == "ultrasonic":
             robot.attach(_SIDES[side_name], _build_ultrasonic(tool_cfg))
+        elif tool_cfg.get("type") == "touch_probe":
+            robot.attach(_SIDES[side_name], _build_touch_probe(tool_cfg))
     return robot

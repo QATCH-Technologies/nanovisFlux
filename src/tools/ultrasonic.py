@@ -23,12 +23,16 @@ class UltrasonicSensor(Tool):
     corresponds to the mount it's attached to (see _MOUNT_RANGE_SLOT).
     """
 
-    name = "ultrasonic"
-
     def __init__(
-        self, offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0), max_range_mm: float = 4000.0
+        self,
+        offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        max_range_mm: float = 4000.0,
+        name: str = "ultrasonic",
+        brand: str = "",
     ):
         super().__init__()
+        self.name = name  # instance identity, e.g. a specific sensor model/part
+        self.brand = brand  # vendor/manufacturer -- "" when unknown/custom
         # fixed offset from the gantry's X/Y reference point to the sensor's
         # sensing face (rear mount, so typically -Y and some +Z)
         self.offset_mm = offset_mm

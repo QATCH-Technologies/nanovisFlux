@@ -110,8 +110,13 @@ class PlungerCalibration:
 
 
 class Pipette(Tool):
-    """A single-channel pipette. Aspirate/dispense drive the plunger axis of
-    whichever mount the pipette is attached to (B on the left, C on right).
+    """A single- or multi-channel pipette. Aspirate/dispense drive the
+    plunger axis of whichever mount the pipette is attached to (B on the
+    left, C on right) -- one shared plunger stroke moves every channel
+    together, so ``channels`` is descriptive (how many tips/wells this
+    pipette handles per stroke) rather than something that changes the
+    plunger math itself; per-channel-independent aspirate/dispense isn't
+    modeled here.
 
     Once a tip is picked up, ``current_tip`` is set and the robot offsets all
     subsequent Z moves by the tip length so the tip *end* lands on target.
@@ -123,9 +128,13 @@ class Pipette(Tool):
         plunger: PlungerModel,
         max_volume_ul: float,
         tip_calibrations: dict | None = None,
+        brand: str = "",
+        channels: int = 1,
     ):
         super().__init__()
         self.name = name
+        self.brand = brand  # vendor/manufacturer, e.g. "Opentrons" -- "" when unknown/custom
+        self.channels = channels  # 1 = single-channel; 8/12/... for a multichannel pipette
         self.plunger = plunger
         self.max_volume_ul = max_volume_ul
         self.current_volume_ul = 0.0

@@ -1,3 +1,7 @@
+# TODO: name/rename this to the sensor's actual model or part number, and
+# rename this file to match (keep robot.yaml's mounts: reference in sync --
+# see config/loader.py's _check_name_matches, which enforces it).
+#
 # Fixed ultrasonic distance sensor, rear-mounted behind the Z/A mounts. No
 # vertical axis of its own -- it rides along with X/Y only, so it has no
 # mount_axis. offset_mm is the sensor face's fixed position relative to the
@@ -7,5 +11,7 @@
 # gantry's Y axis runs the other way). See src/tools/ultrasonic.py and M412
 # in firmware/docs/protocol.md -- the wire format is provisional.
 type: ultrasonic
+name: tk50_ultrasonic_sensor
+brand: Lonely Binary
 offset_mm: { x: 0.0, y: 50.0, z: 130.0 }
 max_range_mm: 4000

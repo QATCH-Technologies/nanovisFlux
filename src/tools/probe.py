@@ -10,7 +10,20 @@ class TouchProbe(Tool):
     """A conductive touch sensor used to find surface heights for
     calibration. Wraps the firmware G38 probe cycle in deck-space terms."""
 
-    name = "touch-probe"
+    def __init__(self, name: str = "touch-probe", length_mm: float = 0.0, brand: str = ""):
+        super().__init__()
+        self.name = name  # instance identity, e.g. a specific probe's own name
+        self.brand = brand  # vendor/manufacturer -- "" when unknown/custom
+        #: Fixed distance from the mount's nozzle reference to the probe's
+        #: contact end -- same role as a pipette tip's length_mm, but fixed
+        #: rather than swappable, so it needs no current_tip-style
+        #: bookkeeping: tip_offset_mm() below reports it unconditionally.
+        self.length_mm = length_mm
+
+    def tip_offset_mm(self) -> float:
+        """Read by the robot to make Z moves place the probe's contact end
+        rather than the bare nozzle -- see Robot.tip_offset."""
+        return self.length_mm
 
     def probe_down(self, to_z_mm: float, feed: int = 100):
         """Probe the mount's vertical axis toward the deck until contact.

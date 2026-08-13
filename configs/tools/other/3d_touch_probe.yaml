@@ -1,0 +1,13 @@
+# Dedicated calibration touch probe -- a fixed-length tool on its own
+# mount (see robot.yaml's mounts:), not a pipette tip: length_mm is its own
+# tip_offset_mm() (src/tools/probe.py), read the same way a pipette's
+# current tip's length is, but unconditionally (no pick-up/current_tip
+# bookkeeping needed -- it's permanently on this mount, so Z moves and a
+# Z-zero touch-off both account for it automatically).
+#
+# TODO brand: "dedicated calibration probe" suggests this is custom/
+# in-house rather than a vendor part -- confirm before filling this in.
+type: touch_probe
+name: 3d_touch_probe
+brand: UNKNOWN
+length_mm: 63.0

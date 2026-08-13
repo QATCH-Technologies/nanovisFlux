@@ -84,6 +84,7 @@ class Labware:
     """
 
     name: str
+    brand: str = ""  # vendor/manufacturer, e.g. "Opentrons" -- "" when unknown/custom
     wells: dict = field(default_factory=dict)
     slot: object = None  # a deck.Slot once placed
     _pending_row_flip: bool = field(default=False, repr=False, compare=False)
@@ -122,6 +123,7 @@ class Labware:
         row_spacing_mm: float,
         col_spacing_mm: float,
         geometry: WellGeometry | None = None,
+        brand: str = "",
     ) -> "Labware":
         """Uniform rows x cols grid, named the conventional way (A1, A2, ...,
         B1, ...). ``origin`` is well A1's centre (z at the well top), given
@@ -142,13 +144,14 @@ class Labware:
                     origin.x + c * col_spacing_mm, origin.y + r * row_spacing_mm, origin.z
                 )
                 wells[well_name] = Well(well_name, pos, geometry)
-        labware = cls(name=name, wells=wells)
+        labware = cls(name=name, brand=brand, wells=wells)
         labware._pending_row_flip = True
         return labware
 
     @classmethod
     def from_dict(cls, data: dict) -> "Labware":
         default_geometry = _geometry_from_dict(data.get("well_geometry", {}))
+        brand = data.get("brand", "")
         if "grid" in data:
             g = data["grid"]
             return cls.grid(
@@ -159,13 +162,14 @@ class Labware:
                 row_spacing_mm=g["row_spacing_mm"],
                 col_spacing_mm=g["col_spacing_mm"],
                 geometry=default_geometry,
+                brand=brand,
             )
         wells = {}
         for n, o in data.get("wells", {}).items():
             offset = DeckPoint(o["x"], o["y"], o.get("z", 0.0))
             geometry = _geometry_from_dict(o["geometry"]) if "geometry" in o else default_geometry
             wells[n] = Well(n, offset, geometry)
-        return cls(name=data["name"], wells=wells)
+        return cls(name=data["name"], brand=brand, wells=wells)
 
 
 def _geometry_from_dict(d: dict) -> WellGeometry:

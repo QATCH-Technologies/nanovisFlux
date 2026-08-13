@@ -70,11 +70,19 @@ class Robot:
     def rear(self):
         return self.mounts[MountSide.REAR].tool
 
-    def load_labware(self, labware, slot_name: str):
+    def load_labware(self, labware, slot_name: str, *, key: str | None = None):
+        """Place ``labware`` on ``slot_name`` and register it in
+        ``self.labware`` under ``key`` (default: the labware's own
+        ``.name``). Pass an explicit ``key`` when two placements share one
+        reusable labware definition (same ``.name``, different slots) --
+        e.g. the same well-plate spec used as both a source and a
+        destination -- so the second placement doesn't overwrite the
+        first's dict entry; ``.name`` still reflects the shared physical
+        identity either way, only the addressing key differs."""
         if self.deck is None:
             raise RuntimeError("no deck configured")
         labware.place(self.deck[slot_name])
-        self.labware[labware.name] = labware
+        self.labware[key or labware.name] = labware
         return labware
 
     def load(self, definition, slot_name: str, *, stacked: bool = False):
