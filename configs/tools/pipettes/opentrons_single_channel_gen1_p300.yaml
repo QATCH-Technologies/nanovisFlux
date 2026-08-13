@@ -9,3 +9,4 @@ brand: Opentrons
 channels: 1
 microsteps_per_ul: 50
 max_volume_ul: 300
+bottom_microsteps: 15000
