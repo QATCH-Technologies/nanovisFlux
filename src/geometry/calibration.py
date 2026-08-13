@@ -96,6 +96,24 @@ class DeckCalibration:
         ox, oy = MOUNT_OFFSET_MM.get(side, (0.0, 0.0))
         return rx + ox, ry + oy
 
+    def motor_to_deck_z(
+        self, raw_microsteps: float, side: MountSide, tip_length_mm: float = 0.0
+    ) -> float | None:
+        """Inverse of ``deck_to_motor``'s Z half: the deck-mm height (of
+        whatever ``tip_length_mm`` currently hangs below the nozzle) that
+        ``side``'s vertical axis being at ``raw_microsteps`` corresponds to.
+        None for a mount with no vertical axis (mirrors ``vertical_axis``)
+        or one with no ``z_zero`` calibrated yet -- there's nothing to
+        invert against. Used by ``Robot.raise_z`` to tell whether a mount
+        is already above a target clearance height before commanding a
+        move that would otherwise unconditionally pull it down to exactly
+        that height."""
+        vertical = self.vertical_axis(side)
+        if vertical is None or side not in self.z_zero:
+            return None
+        zref = self.z_zero[side]
+        return self.z_scale.to_mm(zref - raw_microsteps) - tip_length_mm
+
     # -- z calibration: finding z_zero is calibrating the deck's Z ------
     #
     # Both methods below need a live ``robot`` (controller + axis config),

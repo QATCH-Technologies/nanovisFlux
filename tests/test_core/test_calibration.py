@@ -71,6 +71,31 @@ def test_deck_to_motor_round_trips_through_motor_to_deck_xy():
         assert back_y == pytest.approx(point.y, abs=0.01)
 
 
+def test_deck_to_motor_round_trips_through_motor_to_deck_z():
+    cal = _rotated_calibration()
+    point = DeckPoint(0.0, 0.0, 45.0)
+    for side in (MountSide.LEFT, MountSide.RIGHT):
+        for tip_length in (0.0, 12.5):
+            targets = cal.deck_to_motor(point, side, tip_length)
+            vertical = cal.vertical_axis(side)
+            back_z = cal.motor_to_deck_z(targets[vertical], side, tip_length)
+            assert back_z == pytest.approx(point.z, abs=0.01)
+
+
+def test_motor_to_deck_z_none_for_rear_mount():
+    """REAR has no vertical axis -- nothing to invert against."""
+    cal = _rotated_calibration()
+    assert cal.motor_to_deck_z(12345, MountSide.REAR) is None
+
+
+def test_motor_to_deck_z_none_without_z_zero_for_that_side():
+    """A side with no z_zero calibrated yet has no reference to invert
+    against -- distinct from "REAR has no vertical axis at all"."""
+    cal = DeckCalibration(xy=_rotated_calibration().xy, z_scale=AxisScale(steps_per_mm=25.0))
+    assert cal.vertical_axis(MountSide.LEFT) is not None  # sanity: LEFT does have a vertical axis
+    assert cal.motor_to_deck_z(12345, MountSide.LEFT) is None
+
+
 def test_deck_to_motor_omits_vertical_key_for_rear():
     """REAR has no vertical axis (Mount.vertical is None) -- deck_to_motor
     used to insert a `None: <int>` dict key here, which crashed command

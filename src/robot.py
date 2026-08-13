@@ -203,9 +203,33 @@ class Robot:
     def raise_z(
         self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = False
     ) -> None:
-        self.move_vertical_to(
-            clearance_mm if clearance_mm is not None else self.travel_z_mm, side, verify=verify
-        )
+        """Ensure this mount's Z/A is at or above clearance height --
+        raising if it's currently below, but issuing no move at all if
+        it's already there or higher.
+
+        Deliberately NOT "move to exactly clearance unconditionally":
+        safe_move_to's whole X/Y-safe arc relies on this step being a pure
+        raise, completed before any X/Y crossing, so a mounted tip never
+        drags through something on the way up. A mount that happens to
+        already be above clearance (fresh off homing, or simply left
+        higher by whatever ran before this) would otherwise get pulled
+        DOWN to exactly clearance right where it currently sits -- BEFORE
+        crossing X/Y -- which is exactly the unplanned descent this arc
+        exists to prevent, not cause. If the current height can't be
+        determined (axis not yet homed, or no calibration/z_zero to
+        invert against), falls back to the original unconditional move --
+        the safest option when there's nothing trustworthy to compare
+        against."""
+        target = clearance_mm if clearance_mm is not None else self.travel_z_mm
+        cal = self._require_cal()
+        axis = cal.vertical_axis(side)
+        if axis is not None:
+            pos = self.controller.report_position().get(axis)
+            if pos is not None and pos >= 0:
+                current = cal.motor_to_deck_z(pos, side, self.tip_offset(side))
+                if current is not None and current >= target:
+                    return  # already at/above clearance -- nothing to do
+        self.move_vertical_to(target, side, verify=verify)
 
     def safe_move_to(
         self,
