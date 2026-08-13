@@ -128,7 +128,13 @@ def read_mass_mg(prompt: str, simulate_fn=None) -> float:
 
 
 def move_plunger(
-    robot, axis: AxisId, target: int, plunger_max: int, feed: int | None = None, *, verify: bool = True
+    robot,
+    axis: AxisId,
+    target: int,
+    plunger_max: int,
+    feed: int | None = None,
+    *,
+    verify: bool = True,
 ) -> None:
     """The one place that ever commands the plunger axis -- re-checks
     `plunger_max` immediately before sending, as a second, independent
@@ -153,9 +159,9 @@ def _labware_on_slot(robot, slot_name: str):
     """The Labware placed on deck slot `slot_name` -- lets --aspirate-slot/
     --dispense-slot name a slot the way the operator thinks about the deck,
     rather than needing to know that slot's labware's config `name:`."""
-    for lw in robot.labware.values():
+    for instance_name, lw in robot.labware.items():
         if lw.slot is not None and lw.slot.name == slot_name:
-            return lw
+            return instance_name, lw
     raise SystemExit(
         f"no labware loaded on slot {slot_name!r} -- add a labware: entry with "
         f'slot: "{slot_name}" to the config (see src/config/robot.example.yaml)'
@@ -216,11 +222,15 @@ def run_phase_a(
                 f"replicate {rep}/{replicates}"
             )
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 1. empty
-            robot.safe_move_to(aspirate_loc.resolve(robot), side, feed=feed, verify=True)  # 2. to source
+            robot.safe_move_to(
+                aspirate_loc.resolve(robot), side, feed=feed, verify=True
+            )  # 2. to source
             _log_at(robot, side, "source (aspirate)", aspirate_loc)
             move_plunger(robot, plunger_axis, bottom + stroke, plunger_max, feed)  # 3. aspirate
             time.sleep(dwell_s)  # hold at the bottom, submerged, so the aspirate actually draws up
-            robot.safe_move_to(dispense_loc.resolve(robot), side, feed=feed, verify=True)  # 4. to scale
+            robot.safe_move_to(
+                dispense_loc.resolve(robot), side, feed=feed, verify=True
+            )  # 4. to scale
             _log_at(robot, side, "scale (dispense)", dispense_loc)
             move_plunger(robot, plunger_axis, bottom, plunger_max, feed)  # 5. full purge
             time.sleep(dwell_s)  # hold before lifting so the dispensed droplet fully releases
@@ -236,7 +246,9 @@ def run_phase_a(
             mass_mg = read_mass_mg("  mass dispensed (mg): ", simulate_fn)
             measurements.append(mass_mg / density)
         volume_ul = sum(measurements) / len(measurements)
-        logger.info(f"-> {volume_ul:.2f} uL" + (f" (avg of {replicates})" if replicates > 1 else ""))
+        logger.info(
+            f"-> {volume_ul:.2f} uL" + (f" (avg of {replicates})" if replicates > 1 else "")
+        )
         pairs.append((bottom + stroke, volume_ul))
     return pairs
 
@@ -286,7 +298,9 @@ def run_phase_b(
             move_plunger(robot, plunger_axis, target, plunger_max, feed)  # partial dispense
             time.sleep(dwell_s)  # hold before lifting so the dispensed droplet fully releases
             robot.raise_z(side, verify=True)  # lift clear (travel_z_mm)
-            logger.info("lifted clear -- remove the vessel and weigh it (do NOT empty it or re-tare).")
+            logger.info(
+                "lifted clear -- remove the vessel and weigh it (do NOT empty it or re-tare)."
+            )
             simulate_fn = (
                 (lambda t=target: _synthetic_cumulative_mass_mg(bottom, fixed_position, t, density))
                 if simulate
@@ -297,7 +311,9 @@ def run_phase_b(
             )
             remaining_ul = max(0.0, total_ul - cumulative_mg / density)
             accum[target].append(remaining_ul)
-            robot.move_vertical_to(dispense_point.z, side, feed=feed, verify=True)  # back down for next step
+            robot.move_vertical_to(
+                dispense_point.z, side, feed=feed, verify=True
+            )  # back down for next step
             logger.info("place the vessel back in the same spot before the next step.")
     return [(t, sum(vals) / len(vals)) for t, vals in accum.items()]
 
@@ -399,7 +415,7 @@ def main() -> None:
         "--well-ref",
         choices=("top", "bottom", "clearance"),
         default="clearance",
-        help="reference height within each well -- \"clearance\" (default) is a safe "
+        help='reference height within each well -- "clearance" (default) is a safe '
         "standoff above the bottom, same as a normal aspirate/dispense routine step",
     )
 
@@ -439,7 +455,9 @@ def main() -> None:
         "--density-mg-per-ul", type=float, default=0.998, help="water ~0.998 at 20C"
     )
     parser.add_argument(
-        "--feed", type=int, help="plunger/final-approach feed rate, microsteps/sec; omit for default"
+        "--feed",
+        type=int,
+        help="plunger/final-approach feed rate, microsteps/sec; omit for default",
     )
     parser.add_argument(
         "--dwell-s",
@@ -494,10 +512,10 @@ def main() -> None:
     endstop_limit = robot.axes[plunger_axis].config.endstop_limit
     plunger_max = min(args.plunger_max_microsteps, endstop_limit)
 
-    aspirate_labware = _labware_on_slot(robot, args.aspirate_slot)
-    dispense_labware = _labware_on_slot(robot, args.dispense_slot)
-    aspirate_loc = WellLocation(aspirate_labware.name, args.aspirate_well, ref=args.well_ref)
-    dispense_loc = WellLocation(dispense_labware.name, args.dispense_well, ref=args.well_ref)
+    aspirate_instance, aspirate_labware = _labware_on_slot(robot, args.aspirate_slot)
+    dispense_instance, dispense_labware = _labware_on_slot(robot, args.dispense_slot)
+    aspirate_loc = WellLocation(aspirate_instance, args.aspirate_well, ref=args.well_ref)
+    dispense_loc = WellLocation(dispense_instance, args.dispense_well, ref=args.well_ref)
 
     bottom = pipette.plunger.bottom_microsteps
     strokes = (
