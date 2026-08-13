@@ -16,23 +16,20 @@ class PlungerModel:
     bottom_microsteps: int = 0  # plunger position for 0 uL
 
     def volume_to_microsteps(self, ul: float) -> int:
-        return int(self.bottom_microsteps + round(ul * self.microsteps_per_ul))
+        return int(self.bottom_microsteps - round(ul * self.microsteps_per_ul))
 
 
 def _sorted_monotonic(points: tuple, label: str) -> tuple:
     """Sort `points` (PlungerCalibrationPoint) by volume_ul ascending and
-    check microsteps rise alongside it -- a plunger position has to
-    correspond to exactly one volume to be invertible, so a bad/out-of-
-    order measurement should fail loudly here rather than produce silently
-    wrong interpolation later."""
+    check microsteps fall alongside it..."""
     if len(points) < 2:
         raise ValueError(f"{label} calibration needs at least 2 points, got {len(points)}")
     ordered = tuple(sorted(points, key=lambda p: p.volume_ul))
     for a, b in zip(ordered, ordered[1:]):
-        if b.microsteps <= a.microsteps:
+        if b.microsteps >= a.microsteps:
             raise ValueError(
                 f"{label} calibration is not monotonic: {a.volume_ul:g}uL -> {a.microsteps} "
-                f"microsteps, but {b.volume_ul:g}uL -> {b.microsteps} (expected more microsteps "
+                f"microsteps, but {b.volume_ul:g}uL -> {b.microsteps} (expected fewer microsteps "
                 "for more volume)"
             )
     return ordered
