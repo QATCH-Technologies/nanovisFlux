@@ -467,7 +467,7 @@ def main() -> None:
         "aspirate/dispense stroke before moving away -- lets the liquid actually finish "
         "moving (surface tension/viscosity lag behind the plunger itself stopping)",
     )
-    parser.add_argument("--phase", choices=("aspirate", "dispense", "both"), default="both")
+    parser.add_argument("--phase", choices=("aspirate", "dispense", "both"), default="dispense")
     parser.add_argument(
         "--aspirate-from",
         help="prior aspirate-phase YAML (see --out); required if " "--phase dispense",
