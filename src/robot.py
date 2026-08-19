@@ -131,6 +131,8 @@ class Robot:
         timeout: float = 30.0,
         poll_interval: float = 0.05,
         stall_timeout: float = 1.0,
+        resend=None,
+        max_resends: int = 2,
     ) -> None:
         """Polls the controller's OWN reported position (M114) until every
         axis in `targets` is within `tolerance` microsteps of its commanded
@@ -156,15 +158,26 @@ class Robot:
 
         `stall_timeout`: if every target axis's reported position stops
         changing at all for this long while still short of its target,
-        raise immediately rather than waiting out the full `timeout` --
-        e.g. a target beyond a hard axis limit (0, or endstop_limit), which
-        a real (or FakeTransport-simulated) axis clamps against and then
-        simply never approaches any further. Waiting the full timeout for
-        a position that has visibly stopped changing only delays a genuine
-        calibration/target problem from surfacing, it doesn't avoid one."""
+        treat it as stalled rather than waiting out the full `timeout` --
+        e.g. a real move confirmed cut short on real hardware, its 'ok'
+        already received despite stopping well short of target (see
+        move_to's own docstring for that report). Waiting the full timeout
+        for a position that has visibly stopped changing only delays a
+        genuine problem from surfacing, it doesn't avoid one.
+
+        `resend`: called (no arguments) to re-issue the exact same move
+        when a stall is detected, instead of failing immediately -- up to
+        `max_resends` times, riding out an occasional firmware/comms
+        hiccup that cuts a move short rather than aborting the whole
+        routine on the first one. Still raises TimeoutError once resends
+        are exhausted and the axis genuinely won't reach target. None (the
+        default) fails on the first stall, same as before this existed --
+        every Robot.move_* wrapper passes its own resend automatically;
+        this only stays None for callers with no natural "resend" action."""
         deadline = time.monotonic() + timeout
         last_pos: dict | None = None
         stalled_since: float | None = None
+        resends_left = max_resends
         while True:
             pos = self.controller.report_position()
             if all(
@@ -177,10 +190,18 @@ class Robot:
             if current == last_pos:
                 stalled_since = stalled_since or now
                 if now - stalled_since >= stall_timeout:
+                    if resend is not None and resends_left > 0:
+                        resends_left -= 1
+                        resend()
+                        stalled_since = None
+                        last_pos = None
+                        continue
+                    tried = max_resends - resends_left
+                    retry_note = f" after {tried} retr{'y' if tried == 1 else 'ies'}" if tried else ""
                     raise TimeoutError(
-                        f"axes stopped moving without reaching target (likely clamped at a "
-                        f"hard limit, or an unreachable calibrated target): wanted {targets}, "
-                        f"stalled at {current}"
+                        f"axes stopped moving without reaching target{retry_note} (likely "
+                        f"clamped at a hard limit, an unreachable calibrated target, or a "
+                        f"persistent motion fault): wanted {targets}, stalled at {current}"
                     )
             else:
                 stalled_since = None
@@ -217,15 +238,22 @@ class Robot:
         trash bin, with every intermediate move's 'ok' having already come
         back). Pass verify=False to opt back out for a specific call that
         doesn't need it (e.g. a tight interactive-jog loop, where the
-        latency cost outweighs the benefit)."""
+        latency cost outweighs the benefit). On a stall, the same move is
+        re-issued a couple of times before giving up (see _await_settled's
+        own `resend`/`max_resends`) -- an occasional firmware/comms hiccup
+        cutting one move short shouldn't necessarily abort a whole routine."""
         cal = self._require_cal()
         xy = cal.deck_to_motor(point, side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
-        (self.controller.linear_move if feed else self.controller.rapid_move)(
-            xy_targets, **({"feed": feed} if feed else {})
-        )
+
+        def _send():
+            (self.controller.linear_move if feed else self.controller.rapid_move)(
+                xy_targets, **({"feed": feed} if feed else {})
+            )
+
+        _send()
         if verify:
-            self._await_settled(xy_targets)
+            self._await_settled(xy_targets, resend=_send)
         self.move_vertical_to(point.z, side, feed=feed, verify=verify)
 
     def move_vertical_to(
@@ -237,15 +265,20 @@ class Robot:
         verify: bool = True,
     ) -> None:
         """Command only the mount's vertical axis to a deck-Z height. See
-        move_to's own docstring for what `verify` (on by default) buys."""
+        move_to's own docstring for what `verify` (on by default, with
+        stall retries) buys."""
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
         mz = cal.deck_to_motor(DeckPoint(0, 0, deck_z_mm), side, self.tip_offset(side))[axis]
-        (self.controller.linear_move if feed else self.controller.rapid_move)(
-            {axis: mz}, **({"feed": feed} if feed else {})
-        )
+
+        def _send():
+            (self.controller.linear_move if feed else self.controller.rapid_move)(
+                {axis: mz}, **({"feed": feed} if feed else {})
+            )
+
+        _send()
         if verify:
-            self._await_settled({axis: mz})
+            self._await_settled({axis: mz}, resend=_send)
 
     def raise_z(
         self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = True
@@ -369,16 +402,21 @@ class Robot:
         within one labware's own wells (a source/destination pair whose
         shared plate has taller neighboring wells or a lid in between).
 
-        verify: see move_to's own docstring -- on by default."""
+        verify: see move_to's own docstring -- on by default, with stall
+        retries."""
         cal = self._require_cal()
         base_clr = clearance_mm if clearance_mm is not None else self.travel_z_mm
         clr = self._path_clearance_mm(side, (point.x, point.y), base_clr)
         self.raise_z(side, clr, verify=verify)  # 1. up
         xy = cal.deck_to_motor(DeckPoint(point.x, point.y, clr), side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
-        self.controller.rapid_move(xy_targets)  # 2. across
+
+        def _send():
+            self.controller.rapid_move(xy_targets)
+
+        _send()  # 2. across
         if verify:
-            self._await_settled(xy_targets)
+            self._await_settled(xy_targets, resend=_send)
         self.move_vertical_to(point.z, side, feed=feed, verify=verify)  # 3. down
 
     def emergency_stop(self) -> None:

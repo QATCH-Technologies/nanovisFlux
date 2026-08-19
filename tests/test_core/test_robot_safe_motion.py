@@ -189,3 +189,74 @@ def test_move_to_and_raise_z_verify_by_default_too():
     robot.move_vertical_to(0.0, MountSide.LEFT)  # below clearance, so raise_z must move
     robot.raise_z(MountSide.LEFT)
     assert calls, "raise_z should verify by default"
+
+
+# -- stall -> resend retries -------------------------------------------------
+#
+# Added after a real-hardware run confirmed a physical stall mid-routine
+# (the axis genuinely stopped short of target, its 'ok' already received --
+# see move_to's own docstring) crashed the whole 122-step routine on the
+# very first occurrence. A couple of automatic retries rides out an
+# occasional firmware/comms hiccup instead of aborting the entire run over
+# one cut-short move.
+
+
+def _stub_robot() -> Robot:
+    """A bare Robot -- _await_settled only touches self.controller, so no
+    calibration/deck is needed to exercise it directly."""
+    return Robot(FakeTransport())
+
+
+def test_await_settled_resends_on_stall_and_recovers():
+    robot = _stub_robot()
+    # Position stays stuck at 100 (a real stall) until resend() is called,
+    # at which point it "reaches" target -- simulating a resend that
+    # genuinely gets the axis moving again.
+    state = {"resent": False}
+    robot.controller.report_position = lambda: {AxisId.X: 200 if state["resent"] else 100}
+    resend_calls = []
+
+    def resend():
+        resend_calls.append(1)
+        state["resent"] = True
+
+    robot._await_settled(
+        {AxisId.X: 200}, resend=resend, stall_timeout=0.02, poll_interval=0.005, timeout=5.0
+    )
+
+    assert len(resend_calls) == 1
+
+
+def test_await_settled_gives_up_after_max_resends():
+    robot = _stub_robot()
+    robot.controller.report_position = lambda: {AxisId.X: 100}  # never moves, ever
+    resend_calls = []
+
+    try:
+        robot._await_settled(
+            {AxisId.X: 200},
+            resend=lambda: resend_calls.append(1),
+            max_resends=2,
+            stall_timeout=0.02,
+            poll_interval=0.005,
+            timeout=5.0,
+        )
+        assert False, "expected TimeoutError"
+    except TimeoutError as exc:
+        assert "2 retries" in str(exc)
+
+    assert len(resend_calls) == 2
+
+
+def test_await_settled_no_resend_fails_immediately_on_stall():
+    """resend=None (the default for callers with no natural resend action)
+    must still fail fast on a stall, same as before resend existed --
+    just without ever retrying."""
+    robot = _stub_robot()
+    robot.controller.report_position = lambda: {AxisId.X: 100}
+
+    try:
+        robot._await_settled({AxisId.X: 200}, stall_timeout=0.02, poll_interval=0.005, timeout=5.0)
+        assert False, "expected TimeoutError"
+    except TimeoutError as exc:
+        assert "retr" not in str(exc)

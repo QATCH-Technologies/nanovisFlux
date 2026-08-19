@@ -170,14 +170,18 @@ class Pipette(Tool):
             if calibration is not None
             else self.plunger.volume_to_microsteps(ul)
         )
-        self._robot.controller.linear_move({axis: target}, feed=feed)
+
+        def _send():
+            self._robot.controller.linear_move({axis: target}, feed=feed)
+
+        _send()
         # A move's 'ok' means the firmware considers it done, not that the
         # plunger has physically arrived (see Robot._await_settled's own
         # docstring) -- this call bypasses every Robot.move_* wrapper (which
-        # now verify by default for exactly this reason), going straight to
-        # the controller, so it needs its own explicit settle-confirmation
-        # rather than silently missing out on it.
-        self._robot._await_settled({axis: target})
+        # now verify by default for exactly this reason, with stall
+        # retries), going straight to the controller, so it needs its own
+        # explicit settle-confirmation rather than silently missing out on it.
+        self._robot._await_settled({axis: target}, resend=_send)
 
     def aspirate(self, ul: float, feed=None) -> None:
         if self.current_volume_ul + ul > self.max_volume_ul:
@@ -230,8 +234,12 @@ class Pipette(Tool):
             robot.safe_move_to(DeckPoint(xy.x, xy.y, eject_z_mm), side)
         axis = self._mount.plunger
         limit = robot.axes[axis].config.endstop_limit  # extreme down = eject
-        robot.controller.linear_move({axis: limit})
-        robot._await_settled({axis: limit})  # see _move_plunger_to's own comment on why
+
+        def _send():
+            robot.controller.linear_move({axis: limit})
+
+        _send()
+        robot._await_settled({axis: limit}, resend=_send)  # see _move_plunger_to's own comment
         self.current_tip = None
         self.current_volume_ul = 0.0
         # current_tip is already cleared, so this always uses the linear
