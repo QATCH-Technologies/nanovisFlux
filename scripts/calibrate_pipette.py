@@ -22,8 +22,11 @@ direction's error you're looking at:
   reports the CUMULATIVE mass dispensed so far at each step (never re-tare
   mid-run). Phase B needs Phase A's fitted curve to know how much volume
   that fixed aspirate stroke actually represents (remaining = total -
-  cumulative), so Phase A must run first (or be supplied via
-  --aspirate-from a prior result) before Phase B can run.
+  cumulative), so Phase A must run first before Phase B can. A prior
+  result already saved under configs/tools/pipettes/<pipette name>/
+  calibrations/ (see config/loader.py's build_pipette_tip_calibrations)
+  is auto-loaded for this same pipette/tip -- no need to re-run Phase A or
+  pass --aspirate-from just to resume at Phase B on a later invocation.
 
 GANTRY MOTION goes through the same deck-calibrated, well-addressed
 routine machinery as the rest of the app (src.routines.WellLocation +
@@ -475,7 +478,11 @@ def main() -> None:
     parser.add_argument("--phase", choices=("aspirate", "dispense", "both"), default="dispense")
     parser.add_argument(
         "--aspirate-from",
-        help="prior aspirate-phase YAML (see --out); required if " "--phase dispense",
+        help="prior aspirate-phase YAML (see --out) to use for --phase dispense, overriding "
+        "whatever's already auto-loaded for this pipette/tip (see "
+        "config/loader.py's build_pipette_tip_calibrations) -- only needed to force a "
+        "specific file; --phase dispense on its own already uses that auto-loaded result "
+        "if one exists",
     )
     parser.add_argument(
         "--out",
@@ -494,9 +501,6 @@ def main() -> None:
         help="generate synthetic mass readings instead of prompting -- for testing/demo",
     )
     args = parser.parse_args()
-
-    if args.phase == "dispense" and not args.aspirate_from:
-        raise SystemExit("--phase dispense requires --aspirate-from a prior Phase A result")
 
     robot = load_robot(args.config)
     side = _SIDES[args.side]
@@ -592,8 +596,32 @@ def main() -> None:
                 args.dwell_s,
                 simulate=args.simulate,
             )
+        elif args.aspirate_from:
+            # Loaded straight from the file -- it already carries the
+            # (bottom, 0.0) reference point (every Phase A run's own
+            # aspirate_pairs is built with it prepended before writing, see
+            # the "aspirate"/"both" branch above and write_yaml's callers
+            # below), so re-prepending it here would duplicate that point
+            # and fail PlungerCalibration's monotonicity check.
+            aspirate_pairs = _load_points(args.aspirate_from, "aspirate")
         else:
-            aspirate_pairs = [(bottom, 0.0)] + _load_points(args.aspirate_from, "aspirate")
+            # No explicit override -- use whatever config/loader.py's
+            # build_pipette_tip_calibrations already auto-loaded for this
+            # exact pipette/tip from configs/tools/pipettes/<pipette
+            # name>/calibrations/ (see load_robot, called above), same as a
+            # normal connect already would. Same no-re-prepend reasoning as
+            # the --aspirate-from branch: that calibration's own points
+            # already include (bottom, 0.0).
+            existing = pipette.tip_calibrations.get(args.tip_name)
+            if existing is None:
+                raise SystemExit(
+                    f"--phase dispense needs a prior Phase A result for pipette "
+                    f"{pipette.name!r}, tip {args.tip_name!r} -- none is auto-loaded (no "
+                    f"file under {pipette.name}/calibrations/ for this tip) and no "
+                    "--aspirate-from was given. Run --phase aspirate first (writes there "
+                    "by default), or pass --aspirate-from a prior result directly."
+                )
+            aspirate_pairs = [(p.microsteps, p.volume_ul) for p in existing.aspirate_points]
 
         dispense_pairs = [(bottom, 0.0)]
         if args.phase in ("dispense", "both"):
@@ -633,8 +661,9 @@ def main() -> None:
             dispense=aspirate_pairs,
         )
         logger.info(
-            f"Wrote {out_path} (Phase A only -- re-run with --phase dispense --aspirate-from "
-            f"{out_path} to finish)"
+            f"Wrote {out_path} (Phase A only -- re-run with --phase dispense to finish; "
+            "auto-loaded from here for this same pipette/tip, no --aspirate-from needed "
+            "unless out_path was overridden away from the default location)"
         )
     else:
         print_summary(aspirate_pairs, dispense_pairs)
