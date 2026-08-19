@@ -10,6 +10,11 @@ from .motion.mounts import Mount
 from .protocol.driver import Controller
 from .transport.base import Transport
 
+#: Headroom kept above the tallest labware/obstacle top a safe_move_to
+#: crossing passes over (see Robot._path_clearance_mm) -- clearing exactly
+#: to that top would graze it, not clear it.
+_PATH_CLEARANCE_MARGIN_MM = 5.0
+
 
 class Robot:
     """Top-level facade tying transport, controller, calibration, deck, axes,
@@ -137,12 +142,21 @@ class Robot:
         sequence working correctly when stepped through with a debugger --
         i.e. when real wall-clock time was inadvertently inserted between
         them). This is an independent, position-based confirmation that
-        doesn't depend on trusting the handshake alone."""
+        doesn't depend on trusting the handshake alone.
+
+        An axis reporting a negative position (the firmware's own "not
+        homed yet" convention -- see raise_z's identical `pos >= 0` check)
+        is treated as settled rather than waited on: it will never report a
+        comparable value no matter how long this polls, so there's nothing
+        trustworthy to verify against for that axis (same reasoning as
+        raise_z's own "nothing trustworthy to compare against" fallback,
+        which is what calls a verify=True move here in that situation to
+        begin with)."""
         deadline = time.monotonic() + timeout
         while True:
             pos = self.controller.report_position()
             if all(
-                pos.get(axis) is not None and abs(pos[axis] - target) <= tolerance
+                pos.get(axis) is not None and (pos[axis] < 0 or abs(pos[axis] - target) <= tolerance)
                 for axis, target in targets.items()
             ):
                 return
@@ -159,7 +173,7 @@ class Robot:
         side: MountSide = MountSide.LEFT,
         feed: int | None = None,
         *,
-        verify: bool = False,
+        verify: bool = True,
     ) -> None:
         """Cross to the target X/Y at the current Z, then move to the target
         Z -- no clearance-height detour (see safe_move_to for that arc).
@@ -170,8 +184,16 @@ class Robot:
         the failure this guards against without relying on it.
 
         verify: also poll-confirm each leg actually reached its target (see
-        _await_settled) before moving on -- opt-in, so existing callers
-        (interactive jogging, routines) keep today's behavior unchanged."""
+        _await_settled) before moving on -- on by default: a G-code move's
+        'ok' means the firmware considers it done, not that it's physically
+        arrived (see _await_settled's own docstring), so back-to-back
+        commands with no verification between them can get cut short or
+        reordered in effect -- confirmed against real hardware (a routine
+        skipped straight to its last few targets, nearly clipping the
+        trash bin, with every intermediate move's 'ok' having already come
+        back). Pass verify=False to opt back out for a specific call that
+        doesn't need it (e.g. a tight interactive-jog loop, where the
+        latency cost outweighs the benefit)."""
         cal = self._require_cal()
         xy = cal.deck_to_motor(point, side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
@@ -188,9 +210,10 @@ class Robot:
         side: MountSide,
         feed: int | None = None,
         *,
-        verify: bool = False,
+        verify: bool = True,
     ) -> None:
-        """Command only the mount's vertical axis to a deck-Z height."""
+        """Command only the mount's vertical axis to a deck-Z height. See
+        move_to's own docstring for what `verify` (on by default) buys."""
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
         mz = cal.deck_to_motor(DeckPoint(0, 0, deck_z_mm), side, self.tip_offset(side))[axis]
@@ -201,7 +224,7 @@ class Robot:
             self._await_settled({axis: mz})
 
     def raise_z(
-        self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = False
+        self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = True
     ) -> None:
         """Ensure this mount's Z/A is at or above clearance height --
         raising if it's currently below, but issuing no move at all if
@@ -219,7 +242,9 @@ class Robot:
         determined (axis not yet homed, or no calibration/z_zero to
         invert against), falls back to the original unconditional move --
         the safest option when there's nothing trustworthy to compare
-        against."""
+        against.
+
+        verify: see move_to's own docstring -- on by default."""
         target = clearance_mm if clearance_mm is not None else self.travel_z_mm
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
@@ -231,6 +256,76 @@ class Robot:
                     return  # already at/above clearance -- nothing to do
         self.move_vertical_to(target, side, verify=verify)
 
+    def _current_deck_xy(self, side: MountSide) -> tuple | None:
+        """This mount's current (x, y) in deck mm, or None if it can't be
+        determined (axes not yet homed -- report_position reports -1 for
+        those, mirroring raise_z's own check -- or no calibration). Used
+        by _path_clearance_mm; falling back to the plain clearance_mm/
+        travel_z_mm default when unknown is always at least as safe as
+        before this existed, never less."""
+        if self.calibration is None:
+            return None
+        pos = self.controller.report_position()
+        mx, my = pos.get(AxisId.X), pos.get(AxisId.Y)
+        if mx is None or my is None or mx < 0 or my < 0:
+            return None
+        return self.calibration.motor_to_deck_xy(mx, my, side)
+
+    def _slots_crossed(self, start_xy: tuple, end_xy: tuple) -> list:
+        """Every deck slot whose footprint overlaps the axis-aligned
+        bounding box spanning start_xy to end_xy -- a conservative stand-in
+        for "what does a working-height crossing between these two points
+        pass over" (the actual XY move need not be perfectly straight, and
+        this also always includes the start/end slots themselves, which
+        need clearing too, not just whatever's strictly between them)."""
+        if self.deck is None:
+            return []
+        lo_x, hi_x = sorted((start_xy[0], end_xy[0]))
+        lo_y, hi_y = sorted((start_xy[1], end_xy[1]))
+        crossed = []
+        for slot in self.deck.slots.values():
+            if not slot.size or not slot.size[0] or not slot.size[1]:
+                continue  # a dimensionless slot has no footprint to overlap
+            sx, sy = slot.origin.x, slot.origin.y
+            sw, sh = slot.size
+            if sx <= hi_x and sx + sw >= lo_x and sy <= hi_y and sy + sh >= lo_y:
+                crossed.append(slot)
+        return crossed
+
+    def _slot_top_height_mm(self, slot) -> float:
+        """The tallest surface known to occupy `slot`, deck-mm from the
+        deck plane: whatever labware is placed there (its wells' own top
+        height -- the same datum Well.offset.z already uses) and any
+        SlotObstacle/bin walls built into the slot itself (see
+        deck.Slot/SlotObstacle -- previously "purely descriptive, nothing
+        in motion planning consults this", which is exactly the gap
+        _path_clearance_mm closes)."""
+        tallest = max((o.height_mm for o in slot.obstacles), default=0.0)
+        tallest = max(tallest, slot.wall_height_mm)
+        for lw in self.labware.values():
+            if lw.slot is slot and lw.wells:
+                tallest = max(tallest, max(w.offset.z for w in lw.wells.values()))
+        return tallest
+
+    def _path_clearance_mm(self, side: MountSide, target_xy: tuple, requested_mm: float) -> float:
+        """`requested_mm` (the caller's own clearance_mm/travel_z_mm
+        default), raised if needed to clear the tallest labware/obstacle
+        top in any slot between this mount's current position and
+        `target_xy` (see _slots_crossed/_slot_top_height_mm) -- e.g. a tall
+        object loaded in a slot between source and destination, which one
+        fixed travel_z_mm can't account for if it's taller than whatever
+        travel_z_mm happened to be set for. Never returns less than
+        `requested_mm` -- only ever raises it, and falls back to it
+        unchanged whenever the current position can't be determined."""
+        start_xy = self._current_deck_xy(side)
+        if start_xy is None:
+            return requested_mm
+        tallest = max(
+            (self._slot_top_height_mm(slot) for slot in self._slots_crossed(start_xy, target_xy)),
+            default=0.0,
+        )
+        return max(requested_mm, tallest + _PATH_CLEARANCE_MARGIN_MM) if tallest else requested_mm
+
     def safe_move_to(
         self,
         point: DeckPoint,
@@ -238,16 +333,22 @@ class Robot:
         clearance_mm: float | None = None,
         feed: int | None = None,
         *,
-        verify: bool = False,
+        verify: bool = True,
     ) -> None:
         """Move in the order X/Y-safe arc: (1) raise this mount's Z/A to
         clearance height, (2) cross to the target's X/Y, (3) descend Z/A to
-        the target -- so a mounted tip never drags across labware.
+        the target -- so a mounted tip never drags across labware. The
+        clearance height itself is `clearance_mm`/travel_z_mm, boosted if
+        needed to clear whatever's tallest between here and there (see
+        _path_clearance_mm) -- covers both crossing between slots (a tall
+        object loaded in a slot the direct route passes over) and moving
+        within one labware's own wells (a source/destination pair whose
+        shared plate has taller neighboring wells or a lid in between).
 
-        verify: see move_to's own docstring -- opt-in, poll-confirms each
-        leg before moving on to the next."""
+        verify: see move_to's own docstring -- on by default."""
         cal = self._require_cal()
-        clr = clearance_mm if clearance_mm is not None else self.travel_z_mm
+        base_clr = clearance_mm if clearance_mm is not None else self.travel_z_mm
+        clr = self._path_clearance_mm(side, (point.x, point.y), base_clr)
         self.raise_z(side, clr, verify=verify)  # 1. up
         xy = cal.deck_to_motor(DeckPoint(point.x, point.y, clr), side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}

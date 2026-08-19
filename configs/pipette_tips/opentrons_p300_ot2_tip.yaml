@@ -22,3 +22,4 @@ name: opentrons_p300_ot2_tip
 brand: Opentrons
 length_mm: 51.7
 max_volume_ul: 300
+inner_diameter_mm: 6.0
