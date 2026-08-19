@@ -130,6 +130,7 @@ class Robot:
         tolerance: int = 5,
         timeout: float = 30.0,
         poll_interval: float = 0.05,
+        stall_timeout: float = 1.0,
     ) -> None:
         """Polls the controller's OWN reported position (M114) until every
         axis in `targets` is within `tolerance` microsteps of its commanded
@@ -151,8 +152,19 @@ class Robot:
         trustworthy to verify against for that axis (same reasoning as
         raise_z's own "nothing trustworthy to compare against" fallback,
         which is what calls a verify=True move here in that situation to
-        begin with)."""
+        begin with).
+
+        `stall_timeout`: if every target axis's reported position stops
+        changing at all for this long while still short of its target,
+        raise immediately rather than waiting out the full `timeout` --
+        e.g. a target beyond a hard axis limit (0, or endstop_limit), which
+        a real (or FakeTransport-simulated) axis clamps against and then
+        simply never approaches any further. Waiting the full timeout for
+        a position that has visibly stopped changing only delays a genuine
+        calibration/target problem from surfacing, it doesn't avoid one."""
         deadline = time.monotonic() + timeout
+        last_pos: dict | None = None
+        stalled_since: float | None = None
         while True:
             pos = self.controller.report_position()
             if all(
@@ -160,10 +172,22 @@ class Robot:
                 for axis, target in targets.items()
             ):
                 return
-            if time.monotonic() >= deadline:
-                last = {a: pos.get(a) for a in targets}
+            now = time.monotonic()
+            current = {axis: pos.get(axis) for axis in targets}
+            if current == last_pos:
+                stalled_since = stalled_since or now
+                if now - stalled_since >= stall_timeout:
+                    raise TimeoutError(
+                        f"axes stopped moving without reaching target (likely clamped at a "
+                        f"hard limit, or an unreachable calibrated target): wanted {targets}, "
+                        f"stalled at {current}"
+                    )
+            else:
+                stalled_since = None
+            last_pos = current
+            if now >= deadline:
                 raise TimeoutError(
-                    f"axes did not settle within {timeout}s: wanted {targets}, last read {last}"
+                    f"axes did not settle within {timeout}s: wanted {targets}, last read {current}"
                 )
             time.sleep(poll_interval)
 

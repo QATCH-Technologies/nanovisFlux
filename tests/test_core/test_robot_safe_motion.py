@@ -38,11 +38,16 @@ def _robot_with_deck(*, travel_z_mm: float = 30.0) -> Robot:
 
     calibration = DeckCalibration(
         xy=AffineTransform2D(a=100.0, b=0.0, tx=0.0, c=0.0, d=100.0, ty=0.0),
-        z_scale=AxisScale(steps_per_mm=100.0),
-        z_zero={MountSide.LEFT: 100_000},
+        z_scale=AxisScale(steps_per_mm=100.0),  # -> 3200 raw microsteps/mm (see units.MICROSTEPS_PER_STEP)
+        # Comfortably above any deck-mm height this file tests (tall_obj's
+        # 80mm + margin, well under 200mm) once converted at 3200
+        # microsteps/mm -- too small a z_zero here previously drove target
+        # raw positions negative for an 85mm clearance, a test-fixture bug
+        # unrelated to the safe_move_to logic being tested.
+        z_zero={MountSide.LEFT: 800_000},
     )
     robot = Robot(
-        FakeTransport(axis_limits={"X": 500_000, "Y": 500_000, "Z": 500_000}),
+        FakeTransport(axis_limits={"X": 500_000, "Y": 500_000, "Z": 800_000}),
         calibration=calibration,
         deck=deck,
         travel_z_mm=travel_z_mm,
