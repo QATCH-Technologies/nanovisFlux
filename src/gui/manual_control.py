@@ -10,14 +10,28 @@ too (see transport/fake.py's real-time G1 simulation), not just real
 hardware, which is why the panel no longer drives repeated discrete
 nudge() calls the way it used to.
 """
+
 from __future__ import annotations
 
 from loguru import logger
-from PyQt5.QtCore import Qt, QPointF, QRectF, QSize, pyqtSignal
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-                             QPushButton, QButtonGroup, QFrame, QStackedWidget,
-                             QDoubleSpinBox, QCheckBox, QFormLayout, QSizePolicy, QScrollArea)
+from PyQt5.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..core import AxisId, MountSide
 from ..geometry.coordinates import DeckPoint
@@ -27,7 +41,7 @@ from .gamepad_input import GamepadInput
 from .style import ACCENT_RED
 from .tokens import TOKENS
 
-_GOTO_MM_RANGE = (-100.0, 1000.0)   # generous bound around a typical deck's extent
+_GOTO_MM_RANGE = (-100.0, 1000.0)  # generous bound around a typical deck's extent
 
 _ICON_SIZE = QSize(16, 16)
 _INK = QColor(*TOKENS["flat_text"][:3])
@@ -59,24 +73,42 @@ _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
 _LINEAR_AXES = (AxisId.X, AxisId.Y, AxisId.Z, AxisId.A)
 
 _KEY_MAP = {
-    Qt.Key_Left: "x-", Qt.Key_Right: "x+",
-    Qt.Key_Up: "y+", Qt.Key_Down: "y-",
-    Qt.Key_PageUp: "z+", Qt.Key_PageDown: "z-",
-    Qt.Key_BracketRight: "plunger+", Qt.Key_BracketLeft: "plunger-",
+    Qt.Key_Left: "x-",
+    Qt.Key_Right: "x+",
+    Qt.Key_Up: "y+",
+    Qt.Key_Down: "y-",
+    Qt.Key_PageUp: "z+",
+    Qt.Key_PageDown: "z-",
+    Qt.Key_BracketRight: "plunger+",
+    Qt.Key_BracketLeft: "plunger-",
 }
 
 #: gamepad axis name -> (begin_jog call, end_jog call), both taking the
 #: JogController as their first argument -- see GamepadInput.axis_speed_changed
 #: and ManualControlPanel._on_gamepad_axis.
+#:
+#: "x"'s sign is inverted here (unlike y/z, passed straight through): s is
+#: raw stick deflection (positive = physical right), but raw motor X maps
+#: to a SMALLER deck x (see the _begin/_end dicts' own comment below on the
+#: same deck-coordinate flip) -- so a right push needs motor direction -1.
+#: This correction deliberately lives here rather than in GamepadInput,
+#: which stays a pure raw-deflection source since that same "x" value also
+#: drives the on-screen stick indicator (_StickIndicator), which must
+#: mirror the *physical* stick position, not the motor direction.
 _GAMEPAD_JOG = {
-    "x": (lambda jog, s: jog.begin_jog(AxisId.X, 1 if s > 0 else -1, abs(s)),
-         lambda jog: jog.end_jog(AxisId.X)),
-    "y": (lambda jog, s: jog.begin_jog(AxisId.Y, 1 if s > 0 else -1, abs(s)),
-         lambda jog: jog.end_jog(AxisId.Y)),
-    "z": (lambda jog, s: jog.begin_jog_z(1 if s > 0 else -1, abs(s)),
-         lambda jog: jog.end_jog_z()),
-    "plunger": (lambda jog, s: jog.begin_jog_plunger(1 if s > 0 else -1, abs(s)),
-               lambda jog: jog.end_jog_plunger()),
+    "x": (
+        lambda jog, s: jog.begin_jog(AxisId.X, -1 if s > 0 else 1, abs(s)),
+        lambda jog: jog.end_jog(AxisId.X),
+    ),
+    "y": (
+        lambda jog, s: jog.begin_jog(AxisId.Y, 1 if s > 0 else -1, abs(s)),
+        lambda jog: jog.end_jog(AxisId.Y),
+    ),
+    "z": (lambda jog, s: jog.begin_jog_z(1 if s > 0 else -1, abs(s)), lambda jog: jog.end_jog_z()),
+    "plunger": (
+        lambda jog, s: jog.begin_jog_plunger(1 if s > 0 else -1, abs(s)),
+        lambda jog: jog.end_jog_plunger(),
+    ),
 }
 
 
@@ -101,8 +133,15 @@ class _StickIndicator(QWidget):
     instead, since the stick indicator lives directly on the pad graphic
     there rather than beside it."""
 
-    def __init__(self, parent=None, *, diameter: int = 56,
-                ring: QColor = _BORDER_STRONG, bg: QColor = _SURFACE2, knob: QColor = _INK):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        diameter: int = 56,
+        ring: QColor = _BORDER_STRONG,
+        bg: QColor = _SURFACE2,
+        knob: QColor = _INK,
+    ):
         super().__init__(parent)
         self.setFixedSize(diameter, diameter)
         self._ring, self._bg, self._knob = ring, bg, knob
@@ -132,8 +171,9 @@ class _StickIndicator(QWidget):
         p.drawEllipse(QPointF(cx + self._dx * travel, cy + self._dy * travel), knob_r, knob_r)
 
 
-def _corner_path(x: float, y: float, w: float, h: float,
-                 tl: float, tr: float, br: float, bl: float):
+def _corner_path(
+    x: float, y: float, w: float, h: float, tl: float, tr: float, br: float, bl: float
+):
     """A rectangle with an independent corner radius per corner (Qt's
     QPainterPath.addRoundedRect only takes one radius for all four) -- used
     by _ControllerStage for shapes modeled on a real gamepad's asymmetric
@@ -156,6 +196,18 @@ def _corner_path(x: float, y: float, w: float, h: float,
     return path
 
 
+def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
+    """Blend c1 (t=0) toward c2 (t=1) -- used for the analog trigger
+    shoulders, whose fill tracks depression continuously rather than
+    snapping on/off like a digital button's highlight."""
+    t = max(0.0, min(1.0, t))
+    return QColor(
+        round(c1.red() + (c2.red() - c1.red()) * t),
+        round(c1.green() + (c2.green() - c1.green()) * t),
+        round(c1.blue() + (c2.blue() - c1.blue()) * t),
+    )
+
+
 #: Every constant below is measured in one fixed 470x300 logical canvas --
 #: _ControllerStage scales its QPainter (and the two stick children's
 #: geometry) by whatever its *current* width works out to relative to this,
@@ -163,20 +215,25 @@ def _corner_path(x: float, y: float, w: float, h: float,
 #: (x, y, w, h) taken directly off the reference mockup rather than having
 #: to be recomputed for every possible panel width.
 _PAD_CANVAS = (470.0, 300.0)
-_PAD_MIN_WIDTH = 260    # below this the face-button letters/hub glyphs stop being legible
-_PAD_MAX_WIDTH = 480    # keeps the illustration (and its height-for-width height) from
-                        # eating so much vertical space that everything below it gets squeezed
+_PAD_MIN_WIDTH = 260  # below this the face-button letters/hub glyphs stop being legible
+_PAD_MAX_WIDTH = 480  # keeps the illustration (and its height-for-width height) from
+# eating so much vertical space that everything below it gets squeezed
 _PAD_BODY_RECT = (35, 26, 400, 200)
 _PAD_SHOULDER_L_TOP = (103, 0, 74, 15)
 _PAD_SHOULDER_L_BOTTOM = (96, 20, 88, 16)
 _PAD_SHOULDER_R_TOP = (293, 0, 74, 15)
 _PAD_SHOULDER_R_BOTTOM = (286, 20, 88, 16)
-_PAD_GRIP_L = (100, 206, 13, (56, 40, 64, 74))    # cx, cy, rotation deg, corner radii
+_PAD_GRIP_L = (100, 206, 13, (56, 40, 64, 74))  # cx, cy, rotation deg, corner radii
 _PAD_GRIP_R = (370, 206, -13, (40, 56, 74, 64))
 _PAD_GRIP_SIZE = (148, 172)
 _PAD_DPAD_V = (132, 144, 18, 56)
 _PAD_DPAD_H = (113, 163, 56, 18)
-_PAD_FACE_BUTTONS = {"Y": (318, 58, 24), "X": (291, 85, 24), "B": (345, 85, 24), "A": (318, 112, 24)}
+_PAD_FACE_BUTTONS = {
+    "Y": (318, 58, 24),
+    "X": (291, 85, 24),
+    "B": (345, 85, 24),
+    "A": (318, 112, 24),
+}
 _PAD_STICK_L = (101, 64, 64)
 _PAD_STICK_R = (305, 138, 64)
 _PAD_HUB_CONNECT = (218, 80, 34)
@@ -191,12 +248,50 @@ class _ControllerStage(QWidget):
     labelled with the same button glyphs as the photo it's modeled on --
     purely a visual reference for "which physical button does what" (see
     the Control map cards built in ManualControlPanel._build_gamepad_page
-    for the actual bindings). The two analog sticks are the one live
-    element on it, mirroring real-time stick deflection while jogging (see
-    ManualControlPanel._on_gamepad_axis) -- everything else here is
-    painted, not click-able, since every action it depicts already has a
-    dedicated real button elsewhere on the panel (mount selector, Zero Z /
-    Read rear sensor / Home, the big EMERGENCY STOP)."""
+    for the actual bindings). Nothing on it is click-able, since every
+    action it depicts already has a dedicated real button elsewhere on the
+    panel (mount selector, Zero Z / Read rear sensor / Home, the big
+    EMERGENCY STOP) -- but it does live-reflect real-time gamepad state:
+    the two analog sticks mirror actual stick deflection while jogging
+    (see ManualControlPanel._on_gamepad_axis); the face buttons, bumpers
+    (LB/RB), d-pad (per direction), and the minus/plus hub buttons light
+    up (accent fill) while physically held (see set_button_pressed, driven
+    by GamepadInput.button_highlight_changed); and the triggers (LT/RT)
+    fill proportionally to how far they're depressed (see
+    set_trigger_level, driven by GamepadInput.trigger_changed).
+
+    The shoulder controls are drawn in the same LT/LB (trigger above
+    bumper) arrangement as the physical pad -- the outer/tip piece
+    (_TOP, nearest the pad's top edge) is the trigger, the piece behind it
+    toward the body (_BOTTOM) is the bumper."""
+
+    #: Digital (on/off) highlightable regions with no dedicated child
+    #: widget (unlike the two sticks or the analog triggers, see
+    #: set_trigger_level) -- paintEvent swaps each one's fill/pen when its
+    #: name is in self._pressed. "minus"/"plus" are the two hub buttons
+    #: with a confirmed hardware binding (Back/View and Start/Menu, button
+    #: indices 6/7, both already wired to real actions elsewhere -- see
+    #: GamepadInput._handle_button); button 7's glyph was originally
+    #: guessed as "square" but confirmed by testing to be "plus" instead
+    #: (see _HIGHLIGHT_BUTTONS). "square"/"start" have no known button
+    #: index, so they're left out here even though they're drawn --
+    #: GamepadInput never emits them.
+    _HIGHLIGHT_NAMES = frozenset(
+        {
+            "A",
+            "B",
+            "X",
+            "Y",
+            "LB",
+            "RB",
+            "minus",
+            "plus",
+            "dpad_up",
+            "dpad_down",
+            "dpad_left",
+            "dpad_right",
+        }
+    )
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -205,14 +300,54 @@ class _ControllerStage(QWidget):
         policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
-        self._connect_icon = icon_utils.icon("controller_connect", _PAD_ACCENT, size=18).pixmap(QSize(18, 18))
+        self._connect_icon = icon_utils.icon("controller_connect", _PAD_ACCENT, size=18).pixmap(
+            QSize(18, 18)
+        )
+        self._start_icon = icon_utils.icon("star_circle", _PAD_ICON_MUTED, size=12).pixmap(
+            QSize(12, 12)
+        )
+        self._start_icon_lit = icon_utils.icon("star_circle", _PAD_DARK, size=12).pixmap(
+            QSize(12, 12)
+        )
+        self._pressed: set[str] = set()
+        self._trigger_level = {"LT": 0.0, "RT": 0.0}
 
         # Sized/positioned for real in _layout_children, called below and
         # again from resizeEvent -- these just need to exist as children
         # before the first layout pass.
-        self.stick_left = _StickIndicator(self, diameter=1, ring=_PAD_ACCENT, bg=_PAD_DARK, knob=_PAD_KNOB)
-        self.stick_right = _StickIndicator(self, diameter=1, ring=_PAD_ACCENT, bg=_PAD_DARK, knob=_PAD_KNOB)
+        self.stick_left = _StickIndicator(
+            self, diameter=1, ring=_PAD_ACCENT, bg=_PAD_DARK, knob=_PAD_KNOB
+        )
+        self.stick_right = _StickIndicator(
+            self, diameter=1, ring=_PAD_ACCENT, bg=_PAD_DARK, knob=_PAD_KNOB
+        )
         self._layout_children()
+
+    def set_button_pressed(self, name: str, pressed: bool) -> None:
+        if name not in self._HIGHLIGHT_NAMES or (name in self._pressed) == pressed:
+            return
+        if pressed:
+            self._pressed.add(name)
+        else:
+            self._pressed.discard(name)
+        self.update()
+
+    def set_trigger_level(self, name: str, value: float) -> None:
+        value = max(0.0, min(1.0, value))
+        if name not in self._trigger_level or self._trigger_level[name] == value:
+            return
+        self._trigger_level[name] = value
+        self.update()
+
+    def clear_live_state(self) -> None:
+        """Reset every gamepad-driven visual (button/d-pad highlights,
+        trigger fill) -- called on disconnect/mode-switch so nothing stays
+        lit from before the gamepad went away."""
+        changed = bool(self._pressed) or any(self._trigger_level.values())
+        self._pressed.clear()
+        self._trigger_level = {k: 0.0 for k in self._trigger_level}
+        if changed:
+            self.update()
 
     def heightForWidth(self, width: int) -> int:
         return round(width * _PAD_CANVAS[1] / _PAD_CANVAS[0])
@@ -237,13 +372,18 @@ class _ControllerStage(QWidget):
             stick.setFixedSize(size, size)
             stick.move(round(x * scale), round(y * scale))
 
-    def _hub_glyph(self, p: QPainter, x: float, y: float, d: float, kind: str) -> None:
+    def _hub_glyph(
+        self, p: QPainter, x: float, y: float, d: float, kind: str, lit: bool = False
+    ) -> None:
         """One small decorative icon inside the center-hub cluster (see
         paintEvent) -- hand-drawn rather than pulled from icon_utils since
         none of the app's existing icon assets are this specific tiny
-        minus/plus/square/play glyph set."""
+        minus/plus/square glyph set. The "start" hub button is the
+        exception -- see self._start_icon (icon_utils' "star_circle").
+        `lit` swaps the stroke to dark, mirroring the face buttons' dark-
+        on-accent look when their circle is highlighted."""
         cx, cy = x + d / 2, y + d / 2
-        pen = QPen(_PAD_ICON_MUTED, 1.6)
+        pen = QPen(_PAD_DARK if lit else _PAD_ICON_MUTED, 1.6)
         pen.setCapStyle(Qt.RoundCap)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
@@ -254,31 +394,28 @@ class _ControllerStage(QWidget):
             p.drawLine(QPointF(cx, cy - 4.5), QPointF(cx, cy + 4.5))
         elif kind == "square":
             p.drawRoundedRect(QRectF(cx - 4, cy - 4, 8, 8), 1.5, 1.5)
-        elif kind == "start":
-            p.setPen(Qt.NoPen)
-            p.setBrush(_PAD_ICON_MUTED)
-            tri = QPainterPath()
-            tri.moveTo(cx - 3.5, cy - 4.5)
-            tri.lineTo(cx - 3.5, cy + 4.5)
-            tri.lineTo(cx + 3.5, cy)
-            tri.closeSubpath()
-            p.drawPath(tri)
-            p.drawRoundedRect(QRectF(cx + 4.5, cy - 4.5, 2, 9), 1, 1)
         p.setPen(Qt.NoPen)
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         scale = self.width() / _PAD_CANVAS[0]
-        p.scale(scale, scale)   # every shape below is in the 470x300 logical canvas
+        p.scale(scale, scale)  # every shape below is in the 470x300 logical canvas
         p.setPen(Qt.NoPen)
 
-        # shoulder buttons (LB/LT, RB/RT) -- physical-only controls, decorative here
-        p.setBrush(_PAD_SHOULDER_TOP)
+        # shoulder controls -- _TOP is the outer/tip piece (nearest the
+        # pad's top edge), where the analog trigger (LT/RT) physically
+        # sits; it fills proportionally to depression (see
+        # set_trigger_level). _BOTTOM sits behind it toward the body,
+        # where the digital bumper (LB/RB) physically sits; it lights
+        # fully while held (see set_button_pressed).
+        p.setBrush(_lerp_color(_PAD_SHOULDER_TOP, _PAD_ACCENT, self._trigger_level["LT"]))
         p.drawPath(_corner_path(*_PAD_SHOULDER_L_TOP, 8, 8, 4, 4))
+        p.setBrush(_lerp_color(_PAD_SHOULDER_TOP, _PAD_ACCENT, self._trigger_level["RT"]))
         p.drawPath(_corner_path(*_PAD_SHOULDER_R_TOP, 8, 8, 4, 4))
-        p.setBrush(_PAD_DARK)
+        p.setBrush(_PAD_ACCENT if "LB" in self._pressed else _PAD_DARK)
         p.drawPath(_corner_path(*_PAD_SHOULDER_L_BOTTOM, 9, 9, 4, 4))
+        p.setBrush(_PAD_ACCENT if "RB" in self._pressed else _PAD_DARK)
         p.drawPath(_corner_path(*_PAD_SHOULDER_R_BOTTOM, 9, 9, 4, 4))
 
         # grips -- rotated rounded rects flaring out from the body
@@ -295,39 +432,69 @@ class _ControllerStage(QWidget):
         p.setBrush(_PAD_BODY)
         p.drawPath(_corner_path(*_PAD_BODY_RECT, 108, 108, 88, 88))
 
-        # d-pad cross (see the Control map's Motion card for its binding)
+        # d-pad cross -- each arm lights up independently for the direction
+        # actually held (see the Control map's Motion card for the
+        # binding). Arms are derived from the same two full-bar rects the
+        # cross's overall footprint is measured as (_PAD_DPAD_V/_H): each
+        # arm is only rounded on its outer corners (matching _V/_H's own
+        # radius) so unlit arms still read as one seamless cross, same as
+        # before this was split up for per-direction highlighting. The
+        # center square where the bars overlap is always dark -- it isn't
+        # itself a direction.
+        vx, vy, vw, vh = _PAD_DPAD_V
+        hx, hy, hw, hh = _PAD_DPAD_H
+        for name, rect, radii in (
+            ("dpad_up", (vx, vy, vw, hy - vy), (4, 4, 0, 0)),
+            ("dpad_down", (vx, hy + hh, vw, vy + vh - hy - hh), (0, 0, 4, 4)),
+            ("dpad_left", (hx, hy, vx - hx, hh), (4, 0, 0, 4)),
+            ("dpad_right", (vx + vw, hy, hx + hw - vx - vw, hh), (0, 4, 4, 0)),
+        ):
+            p.setBrush(_PAD_ACCENT if name in self._pressed else _PAD_DARK)
+            p.drawPath(_corner_path(*rect, *radii))
         p.setBrush(_PAD_DARK)
-        p.drawRoundedRect(QRectF(*_PAD_DPAD_V), 4, 4)
-        p.drawRoundedRect(QRectF(*_PAD_DPAD_H), 4, 4)
+        p.drawRect(QRectF(vx, hy, vw, hh))
 
-        # face buttons -- letters only, not click-able (see the Control
-        # map's Face buttons card for what each one actually does)
+        # face buttons -- not click-able (see the Control map's Face
+        # buttons card for what each one actually does), but each lights
+        # up (accent fill, dark letter) while physically held
         font = QFont(self.font())
         font.setBold(True)
         font.setPointSize(9)
         p.setFont(font)
         for letter, (x, y, d) in _PAD_FACE_BUTTONS.items():
+            lit = letter in self._pressed
             p.setPen(Qt.NoPen)
-            p.setBrush(_PAD_DARK)
+            p.setBrush(_PAD_ACCENT if lit else _PAD_DARK)
             p.drawEllipse(QRectF(x, y, d, d))
-            p.setPen(_PAD_ACCENT)
+            p.setPen(_PAD_DARK if lit else _PAD_ACCENT)
             p.drawText(QRectF(x, y, d, d), Qt.AlignCenter, letter)
 
-        # center hub -- connect-status glyph plus decorative system buttons
-        # (Home / e-stop already have dedicated full-size buttons elsewhere
-        # on the panel, so these mimic the physical pad without duplicating
-        # either as a click target)
+        # center hub -- connect-status glyph plus the pad's small system
+        # buttons; "minus"/"plus" light up while held (confirmed bindings,
+        # see _HIGHLIGHT_NAMES's own comment), "square"/"start" are drawn
+        # the same way but never light since GamepadInput doesn't know
+        # their button index.
         p.setPen(Qt.NoPen)
         p.setBrush(_PAD_DARK)
         cx, cy, cd = _PAD_HUB_CONNECT
         p.drawEllipse(QRectF(cx, cy, cd, cd))
         p.drawPixmap(round(cx + cd / 2 - 9), round(cy + cd / 2 - 9), self._connect_icon)
-        for (x, y, d), kind in ((_PAD_HUB_MINUS, "minus"), (_PAD_HUB_PLUS, "plus"),
-                                (_PAD_HUB_SQUARE, "square"), (_PAD_HUB_START, "start")):
+        for (x, y, d), kind in (
+            (_PAD_HUB_MINUS, "minus"),
+            (_PAD_HUB_PLUS, "plus"),
+            (_PAD_HUB_SQUARE, "square"),
+            (_PAD_HUB_START, "start"),
+        ):
+            lit = kind in self._pressed
             p.setPen(Qt.NoPen)
-            p.setBrush(_PAD_DARK)
+            p.setBrush(_PAD_ACCENT if lit else _PAD_DARK)
             p.drawEllipse(QRectF(x, y, d, d))
-            self._hub_glyph(p, x, y, d, kind)
+            if kind == "start":
+                icon_px = self._start_icon_lit if lit else self._start_icon
+                isize = icon_px.width()
+                p.drawPixmap(round(x + d / 2 - isize / 2), round(y + d / 2 - isize / 2), icon_px)
+            else:
+                self._hub_glyph(p, x, y, d, kind, lit)
 
 
 class _VScrollArea(QScrollArea):
@@ -358,7 +525,7 @@ class ManualControlPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.robot = None
-        self.jog = None            # JogController, set by set_context()
+        self.jog = None  # JogController, set by set_context()
         self.gamepad: GamepadInput | None = None
         self._input_mode = "keyboard"
         self._input_locked = False  # True while a routine is running
@@ -375,11 +542,11 @@ class ManualControlPanel(QWidget):
         # DeckCalibration/robot.example.yaml's calibration points -- the
         # gantry homes to the deck's back-right corner), which the 2D/3D
         # deck view then renders moving left/down on screen (deck_view's
-        # _project is (x, -y), +screen-y is down). GamepadInput's
-        # positive_dir/negative_dir already correct for this (see its own
-        # "down = Z+" comment); these need the same correction so the "->"
-        # /"^"/PgUp glyphs (and the identically-bound arrow keys) actually
-        # move the marker the way they're labelled instead of backwards.
+        # _project is (x, -y), +screen-y is down). _GAMEPAD_JOG above
+        # applies the same correction for x (y/z's raw sign already lines
+        # up); these need it too so the "->" /"^"/PgUp glyphs (and the
+        # identically-bound arrow keys) actually move the marker the way
+        # they're labelled instead of backwards.
         self._begin = {
             "x-": self._guarded(lambda: self.jog.begin_jog(AxisId.X, +1, self.jog.jog_speed)),
             "x+": self._guarded(lambda: self.jog.begin_jog(AxisId.X, -1, self.jog.jog_speed)),
@@ -496,8 +663,15 @@ class ManualControlPanel(QWidget):
         mode_row.addWidget(self.btn_gamepad, 1)
         return mode_row
 
-    def _key_cap(self, text: str, action: str, *, wide: bool = False,
-                icon_name: str | None = None, rotation: float = 0) -> QPushButton:
+    def _key_cap(
+        self,
+        text: str,
+        action: str,
+        *,
+        wide: bool = False,
+        icon_name: str | None = None,
+        rotation: float = 0,
+    ) -> QPushButton:
         """A jog button styled/labelled as the physical key that triggers
         it (e.g. "PgUp"), rather than the semantic action name -- unless
         `icon_name` is given, in which case it shows that icon instead of
@@ -594,8 +768,10 @@ class ManualControlPanel(QWidget):
 
         layout.addLayout(clusters)
 
-        hint = QLabel("arrows = X/Y · PgUp/PgDn = Z · [ ] = plunger · M = cycle mount · "
-                      "Esc = quick stop · keys highlight blue while held")
+        hint = QLabel(
+            "arrows = X/Y · PgUp/PgDn = Z · [ ] = plunger · M = cycle mount · "
+            "Esc = quick stop · keys highlight blue while held"
+        )
         hint.setWordWrap(True)
         hint.setProperty("class", "eyebrow")
         hint.setAlignment(Qt.AlignCenter)
@@ -624,12 +800,14 @@ class ManualControlPanel(QWidget):
         )
         return lbl
 
-    def _control_map_card(self, title: str, rows: list[tuple[QLabel, str]], *, columns: int = 1) -> QFrame:
+    def _control_map_card(
+        self, title: str, rows: list[tuple[QLabel, str]], *, columns: int = 1
+    ) -> QFrame:
         """One category card in the Control map (Motion / Face buttons /
         Fluidics / System) -- a badge naming the physical control paired
         with a plain-text description of what it does."""
         card = QFrame()
-        card.setStyleSheet("QFrame { background: #F7F9FA; border: 1px solid #E1E5E8; border-radius: 6px; }")
+        card.setStyleSheet("QFrame { background: #F7F9FA; border-radius: 6px; }")
         outer = QVBoxLayout(card)
         outer.setContentsMargins(14, 12, 14, 12)
         outer.setSpacing(10)
@@ -664,21 +842,33 @@ class ManualControlPanel(QWidget):
         # the two sticks' live deflection) is click-able.
         stage_frame = QFrame()
         stage_frame.setProperty("class", "panel")
+        # Widget-level stylesheets take precedence over the app-level one
+        # regardless of selector specificity (Qt's own cascade, not CSS's)
+        # -- this drops just the ".panel" class's border while its
+        # background/radius still come through from app_theme.qss.
+        stage_frame.setStyleSheet("QFrame { border: none; }")
         stage_layout = QVBoxLayout(stage_frame)
         stage_layout.setContentsMargins(14, 14, 14, 12)
         stage = _ControllerStage()
-        # No alignment flag here deliberately -- Qt only uses a box-layout
-        # item's sizeHint (never stretching it) once an explicit alignment
-        # is set, which would undo the whole point of _ControllerStage's
-        # Expanding size policy. Leaving it unset fills the panel's width
-        # up to _PAD_MAX_WIDTH; only past that cap does it sit flush left
-        # instead of centered, an acceptable trade for actually scaling.
-        stage_layout.addWidget(stage)
+        # Wrapped in an HBox with a stretch on each side rather than added
+        # directly (or with an alignment flag, which would collapse it to
+        # sizeHint and defeat _ControllerStage's whole Expanding size
+        # policy): below _PAD_MAX_WIDTH the stage's own Expanding policy
+        # outcompetes the two zero-sizeHint stretches for the row's space,
+        # so it keeps scaling with the panel; once it hits the cap, further
+        # space has nowhere else to go and splits evenly between the two
+        # stretches, centering it instead of leaving it flush left.
+        stage_row = QHBoxLayout()
+        stage_row.addStretch(1)
+        stage_row.addWidget(stage)
+        stage_row.addStretch(1)
+        stage_layout.addLayout(stage_row)
         layout.addWidget(stage_frame)
         # _on_gamepad_axis drives these by name, same attributes as before
         # the sticks moved onto the illustration.
         self.stick_left = stage.stick_left
         self.stick_right = stage.stick_right
+        self._controller_stage = stage
 
         map_title = QLabel("CONTROL MAP")
         map_title.setProperty("class", "section-title")
@@ -686,25 +876,54 @@ class ManualControlPanel(QWidget):
 
         control_map = QGridLayout()
         control_map.setSpacing(10)
-        control_map.addWidget(self._control_map_card("MOTION", [
-            (self._control_badge("L stick"), "jog X / Y"),
-            (self._control_badge("R stick"), "jog Z"),
-            (self._control_badge("D-pad"), "step size"),
-        ]), 0, 0)
-        control_map.addWidget(self._control_map_card("FACE BUTTONS", [
-            (self._control_badge("A", circle=True), "stop motion"),
-            (self._control_badge("B", circle=True), "read sensor"),
-            (self._control_badge("X", circle=True), "zero Z"),
-            (self._control_badge("Y", circle=True), "cycle mount"),
-        ], columns=2), 0, 1)
-        control_map.addWidget(self._control_map_card("FLUIDICS", [
-            (self._control_badge("LT / RT"), "dispense − / aspirate +"),
-            (self._control_badge("LB / RB"), "tip up / tip drop"),
-        ]), 1, 0)
-        control_map.addWidget(self._control_map_card("SYSTEM", [
-            (self._control_badge("View"), "home"),
-            (self._control_badge("Menu", danger=True), "e-stop"),
-        ]), 1, 1)
+        control_map.addWidget(
+            self._control_map_card(
+                "MOTION",
+                [
+                    (self._control_badge("L stick"), "jog X / Y"),
+                    (self._control_badge("R stick"), "jog Z"),
+                    (self._control_badge("D-pad"), "step size"),
+                ],
+            ),
+            0,
+            0,
+        )
+        control_map.addWidget(
+            self._control_map_card(
+                "FACE BUTTONS",
+                [
+                    (self._control_badge("A", circle=True), "stop motion"),
+                    (self._control_badge("B", circle=True), "read sensor"),
+                    (self._control_badge("X", circle=True), "zero Z"),
+                    (self._control_badge("Y", circle=True), "cycle mount"),
+                ],
+                columns=2,
+            ),
+            0,
+            1,
+        )
+        control_map.addWidget(
+            self._control_map_card(
+                "FLUIDICS",
+                [
+                    (self._control_badge("LT / RT"), "dispense − / aspirate +"),
+                    (self._control_badge("LB / RB"), "tip up / tip drop"),
+                ],
+            ),
+            1,
+            0,
+        )
+        control_map.addWidget(
+            self._control_map_card(
+                "SYSTEM",
+                [
+                    (self._control_badge("-"), "home"),
+                    (self._control_badge("+", danger=True), "e-stop"),
+                ],
+            ),
+            1,
+            1,
+        )
         layout.addLayout(control_map)
         layout.addStretch(1)
         return page
@@ -797,6 +1016,7 @@ class ManualControlPanel(QWidget):
             if self.jog is None or self._input_locked:
                 return
             fn()
+
         return call
 
     def _guarded_end(self, fn):
@@ -805,14 +1025,17 @@ class ManualControlPanel(QWidget):
         started running while it was held (set_routine_active already
         calls stop_all_jog in that case, but a stray release event should
         never be a no-op that leaves motion running)."""
+
         def call():
             if self.jog is None:
                 return
             fn()
+
         return call
 
-    def _jog_button(self, text: str, action: str, *,
-                    icon_name: str | None = None, rotation: float = 0) -> QPushButton:
+    def _jog_button(
+        self, text: str, action: str, *, icon_name: str | None = None, rotation: float = 0
+    ) -> QPushButton:
         btn = QPushButton("" if icon_name else text)
         if icon_name:
             btn.setIcon(icon_utils.icon(icon_name, _INK, size=16, rotation=rotation))
@@ -830,8 +1053,13 @@ class ManualControlPanel(QWidget):
         zp_enabled = connected and not locked and not rear
         for b in (self.btn_xplus, self.btn_xminus, self.btn_yplus, self.btn_yminus):
             b.setEnabled(xy_enabled)
-        for b in (self.btn_zplus, self.btn_zminus, self.btn_plunger_plus,
-                 self.btn_plunger_minus, self.btn_zero_z):
+        for b in (
+            self.btn_zplus,
+            self.btn_zminus,
+            self.btn_plunger_plus,
+            self.btn_plunger_minus,
+            self.btn_zero_z,
+        ):
             b.setEnabled(zp_enabled)
         self.btn_read_sensor.setEnabled(connected and not locked)
         for b in self.mount_buttons.values():
@@ -873,17 +1101,20 @@ class ManualControlPanel(QWidget):
             return
         try:
             contact = self.jog.capture_z_zero()
-            logger.info(f"{contact.side.value} z_zero captured: "
-                        f"{contact.z_zero_microsteps} microsteps "
-                        f"(tip {contact.tip_length_mm:.1f} mm)")
+            logger.info(
+                f"{contact.side.value} z_zero captured: "
+                f"{contact.z_zero_microsteps} microsteps "
+                f"(tip {contact.tip_length_mm:.1f} mm)"
+            )
         except Exception as exc:
             logger.error(f"zero Z failed: {exc}")
 
     def _go_to_point(self) -> None:
         if self.robot is None or self.jog is None or self._input_locked:
             return
-        point = DeckPoint(self.goto_spins["X"].value(), self.goto_spins["Y"].value(),
-                          self.goto_spins["Z"].value())
+        point = DeckPoint(
+            self.goto_spins["X"].value(), self.goto_spins["Y"].value(), self.goto_spins["Z"].value()
+        )
         side = self.jog.side
         safe = self.goto_safe_check.isChecked()
         try:
@@ -903,8 +1134,10 @@ class ManualControlPanel(QWidget):
                 (self.robot.safe_move_to if safe else self.robot.move_to)(point, side)
             finally:
                 self.robot.controller.set_relative()
-            logger.info(f"moved {side.value} to ({point.x:g}, {point.y:g}, "
-                        f"{point.z:g}) mm{' (safe)' if safe else ''}")
+            logger.info(
+                f"moved {side.value} to ({point.x:g}, {point.y:g}, "
+                f"{point.z:g}) mm{' (safe)' if safe else ''}"
+            )
         except Exception as exc:
             logger.error(f"go-to failed: {exc}")
 
@@ -939,7 +1172,8 @@ class ManualControlPanel(QWidget):
             self._stick_deflection[axis_name] = signed
             if axis_name in ("x", "y"):
                 self.stick_left.set_deflection(
-                    self._stick_deflection["x"], self._stick_deflection["y"])
+                    self._stick_deflection["x"], self._stick_deflection["y"]
+                )
             else:  # "z" -- right stick only ever reads vertical deflection
                 self.stick_right.set_deflection(0.0, self._stick_deflection["z"])
         if self.jog is None:
@@ -953,9 +1187,12 @@ class ManualControlPanel(QWidget):
     def _on_tip_action(self, action: str) -> None:
         if self.robot is None or self.jog is None or self._input_locked:
             return
-        from scripts.gamepad_control import pickup_tip_in_place, eject_tip_in_place
+        from scripts.gamepad_control import eject_tip_in_place, pickup_tip_in_place
+
         try:
-            (pickup_tip_in_place if action == "pickup" else eject_tip_in_place)(self.robot, self.jog.side)
+            (pickup_tip_in_place if action == "pickup" else eject_tip_in_place)(
+                self.robot, self.jog.side
+            )
         except Exception as exc:
             logger.error(f"{action} tip failed: {exc}")
 
@@ -972,16 +1209,21 @@ class ManualControlPanel(QWidget):
             self.status_pill.setText("jog")
             self.status_pill_icon.clear()
 
-    def _on_gamepad_connected(self, connected: bool) -> None:
+    def _on_gamepad_connected(self, connected: bool, name: str = "") -> None:
         if connected:
             _set_pill_class(self.status_pill, "pill-live")
-            self.status_pill.setText("pad connected")
+            self.status_pill.setText(name or "pad connected")
+            self.status_pill.setToolTip(name)
             self.status_pill_icon.setPixmap(
-                icon_utils.icon("controller_connect", _SUCCESS, size=14).pixmap(_ICON_SIZE))
+                icon_utils.icon("controller_connect", _SUCCESS, size=14).pixmap(_ICON_SIZE)
+            )
         else:
             _set_pill_class(self.status_pill, "pill-warn")
             self.status_pill.setText("no gamepad")
-            self.status_pill_icon.setPixmap(icon_utils.icon("gamepad", _MUTED, size=14).pixmap(_ICON_SIZE))
+            self.status_pill.setToolTip("")
+            self.status_pill_icon.setPixmap(
+                icon_utils.icon("gamepad", _MUTED, size=14).pixmap(_ICON_SIZE)
+            )
 
     def _start_gamepad(self) -> None:
         if self.gamepad is not None:
@@ -996,6 +1238,8 @@ class ManualControlPanel(QWidget):
         self.gamepad.read_sensor_requested.connect(self._read_sensor)
         self.gamepad.zero_z_requested.connect(self._zero_z)
         self.gamepad.tip_action_requested.connect(self._on_tip_action)
+        self.gamepad.button_highlight_changed.connect(self._controller_stage.set_button_pressed)
+        self.gamepad.trigger_changed.connect(self._controller_stage.set_trigger_level)
         self.gamepad.connected_changed.connect(self._on_gamepad_connected)
         self.gamepad.status.connect(lambda msg: logger.info(msg))
         self.gamepad.start()
@@ -1008,6 +1252,7 @@ class ManualControlPanel(QWidget):
         self._stick_deflection = {"x": 0.0, "y": 0.0, "z": 0.0}
         self.stick_left.set_deflection(0.0, 0.0)
         self.stick_right.set_deflection(0.0, 0.0)
+        self._controller_stage.clear_live_state()
 
     # -- keyboard entry points, called from MainWindow.keyPressEvent --------
     def handle_key_press(self, key: int, autorepeat: bool) -> bool:
@@ -1037,7 +1282,7 @@ class ManualControlPanel(QWidget):
     # -- lifecycle ------------------------------------------------------------
     def stop_all_jog(self) -> None:
         if self.jog is not None:
-            self.jog.end_jog()   # every axis at once -- see JogController.end_jog
+            self.jog.end_jog()  # every axis at once -- see JogController.end_jog
         if self.gamepad is not None:
             self.gamepad.stop()
 
