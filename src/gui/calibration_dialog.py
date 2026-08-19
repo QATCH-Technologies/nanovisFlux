@@ -2,7 +2,7 @@
 
 The deck<->motor XY affine (see geometry.transform.AffineTransform2D) is
 fit from a set of fixed, physically-marked reference points
-(``robot.deck.calibration_marks`` -- see config/robot.example.yaml's
+(``robot.deck.calibration_marks`` -- see configs/deck.yaml's
 ``deck.calibration_marks`` comment and deck.deck.inset_corner_point): jog a
 chosen *reference mount* to touch each mark you want to use, capture, check
 its box, repeat for at least 3 (up to however many marks the deck has), then

@@ -1,0 +1,49 @@
+{
+  "name": "nanovis transfer example",
+  "steps": [
+    {
+      "kind": "home"
+    },
+    {
+      "kind": "repeat",
+      "times": 24,
+      "body": {
+        "name": "repeat body",
+        "steps": [
+          {
+            "kind": "pick_up_tip",
+            "side": "left",
+            "tip_name": "opentrons_p300_ot2_tip",
+            "press_z": 64.6,
+            "labware": "tiprack1",
+            "advance": true
+          },
+          {
+            "kind": "aspirate",
+            "side": "left",
+            "volume_ul": 5.0,
+            "labware": "source",
+            "well": "A1",
+            "advance": true
+          },
+          {
+            "kind": "dispense",
+            "side": "left",
+            "volume_ul": 5.0,
+            "labware": "dest",
+            "well": "A1",
+            "advance": true,
+            "wait_s": 1.0
+          },
+          {
+            "kind": "drop_tip",
+            "side": "left",
+            "x": 374.0,
+            "y": 385.0,
+            "eject_z": 120.0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -539,8 +539,8 @@ class ManualControlPanel(QWidget):
         # X/Y/Z signs are deliberately the OPPOSITE of JogController's own
         # "positive = away from the endstop" convention: away-from-home
         # raw motor X/Y actually maps to a SMALLER deck x/y (see
-        # DeckCalibration/robot.example.yaml's calibration points -- the
-        # gantry homes to the deck's back-right corner), which the 2D/3D
+        # DeckCalibration/configs/calibration.yaml's calibration points --
+        # the gantry homes to the deck's back-right corner), which the 2D/3D
         # deck view then renders moving left/down on screen (deck_view's
         # _project is (x, -y), +screen-y is down). _GAMEPAD_JOG above
         # applies the same correction for x (y/z's raw sign already lines

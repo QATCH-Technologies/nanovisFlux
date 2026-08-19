@@ -21,11 +21,16 @@ class UltrasonicSensor(Tool):
     than driving any motion. Wraps the firmware's M412 range query (see
     protocol.commands.MeasureDistance), querying whichever slot letter
     corresponds to the mount it's attached to (see _MOUNT_RANGE_SLOT).
+
+    Carries no positioning of its own -- where it sits relative to the
+    gantry's X/Y reference point is a property of which MOUNT it's on, not
+    of this device (the same sensor model would sit at a different offset
+    on a different mount), so that lives in motion.mounts.MOUNT_OFFSET_MM
+    instead.
     """
 
     def __init__(
         self,
-        offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0),
         max_range_mm: float = 4000.0,
         name: str = "ultrasonic",
         brand: str = "",
@@ -33,9 +38,6 @@ class UltrasonicSensor(Tool):
         super().__init__()
         self.name = name  # instance identity, e.g. a specific sensor model/part
         self.brand = brand  # vendor/manufacturer -- "" when unknown/custom
-        # fixed offset from the gantry's X/Y reference point to the sensor's
-        # sensing face (rear mount, so typically -Y and some +Z)
-        self.offset_mm = offset_mm
         self.max_range_mm = max_range_mm
 
     def _slot(self) -> AxisId:

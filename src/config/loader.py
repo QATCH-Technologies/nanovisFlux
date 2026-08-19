@@ -50,7 +50,7 @@ def calibration_sidecar_path(config_path) -> Path:
     button (see gui/calibration_dialog.py) lives for ``config_path`` --
     e.g. "robot.yaml" -> "robot.calibration.yaml", sitting right next to
     it. Deliberately a separate file rather than writing back into the
-    config itself: config files like robot.example.yaml are hand-authored
+    config itself: config files like configs/robot.yaml are hand-authored
     and heavily commented, and round-tripping one through yaml.safe_load /
     safe_dump to patch in a new calibration would silently strip every
     comment. Connecting with the same config_path picks this sidecar up
@@ -76,16 +76,16 @@ def load_calibration_override(config_path) -> dict | None:
 #
 # A robot config's axes/calibration/deck/tips/labware/mounts sections can
 # each be given two ways:
-#   - inline, exactly as robot.example.yaml has always done (a dict, or for
-#     tips/labware a list of dicts) -- unchanged, so an existing single-file
-#     config keeps working with zero edits.
+#   - inline (a dict, or for tips/labware a list of dicts) -- the original,
+#     single-file convention; an existing single-file config keeps working
+#     with zero edits (see test_split_config_loader.py's
+#     test_resolve_robot_config_leaves_inline_sections_untouched).
 #   - as a path (string, resolved relative to the referencing file's own
 #     directory -- NOT the process cwd) to that section's own YAML file, so
 #     one axes/calibration/deck/tool/tip/labware profile can be measured
 #     once and reused by name across multiple robot configs instead of
-#     copy-pasted. See configs/robot.yaml for the split-file convention this
-#     enables, and src/config/robot.example.yaml for the original,
-#     single-file equivalent of the same machine.
+#     copy-pasted. See configs/robot.yaml for the split-file convention
+#     this enables.
 #
 # resolve_robot_config() is the only entry point that needs to know about
 # this: it turns any mix of inline/referenced sections into the fully-inline
@@ -217,8 +217,8 @@ def resolve_robot_config(path: str) -> dict:
     """Load ``path`` and follow any file-reference sections, returning the
     same fully-inline dict shape a single monolithic config has always
     produced. Both load_robot and the GUI's connect flow go through this so
-    a split-file robot.yaml and a single-file robot.example.yaml behave
-    identically from here down."""
+    a split-file config and an inline, single-file one behave identically
+    from here down."""
     cfg = load_config(path)
     base_dir = Path(path).resolve().parent
     resolved = dict(cfg)
@@ -467,9 +467,7 @@ def _build_pipette(cfg: dict, tip_calibrations: dict | None = None) -> Pipette:
 
 
 def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
-    off = cfg.get("offset_mm", {})
     return UltrasonicSensor(
-        offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
         max_range_mm=cfg.get("max_range_mm", 4000.0),
         name=cfg.get("name", "ultrasonic"),
         brand=cfg.get("brand", ""),

@@ -3,11 +3,8 @@ configured travel_speed (not one flat microsteps/s number shared by every
 axis -- see control/jog.py's JogSettings docstring for why that was wrong,
 particularly for Z/A's much finer microstepping), and any configured
 resonance_bands_hz is avoided in the feed actually sent."""
-import pytest
-
 from src.control.jog import JogController, JogSettings
 from src.core import AxisId, MountSide
-from src.protocol.errors import TransportError
 from src.robot import Robot
 from src.transport.fake import FakeTransport
 
@@ -26,15 +23,12 @@ def _sent_g1_feeds(robot) -> list:
 
 
 def _nudge(jog: JogController, axis: AxisId, sign: int) -> None:
-    """nudge() waits for the firmware's 'ok' (unlike continuous jog), and
-    FakeTransport only ever completes a G1 once real wall-clock time has
-    elapsed AND another write_line() call re-checks it -- neither happens
-    inside Controller's blocking read loop, so a real-distance nudge()
-    against FakeTransport always times out. The G1 line itself is captured
-    via on_send() *before* that wait begins (see Controller.execute), so
-    catching the expected timeout here still leaves it inspectable."""
-    with pytest.raises(TransportError):
-        jog.nudge(axis, sign)
+    """nudge() waits for the firmware's 'ok' (unlike continuous jog) --
+    FakeTransport actually completes the G1 in real time (a nudge's own
+    step_microsteps distance is tiny, so this resolves in milliseconds,
+    not a real wait); the G1 line itself is captured via on_send() before
+    that (brief) wait, same as with continuous jog's fire-and-forget."""
+    jog.nudge(axis, sign)
 
 
 def test_nudge_uses_the_axis_own_travel_speed_as_feed():

@@ -13,9 +13,9 @@ from src.protocol.responses import parse_distance
 
 #: microsteps per deck-mm for the synthetic rotated transform below --
 #: matched to the realistic order of magnitude used elsewhere in this repo
-#: (robot.example.yaml's measured X/Y scales are ~150-260 microsteps/mm) so
-#: round()-to-integer-microsteps quantization stays well under a hundredth
-#: of a mm, not an artifact that swamps the assertions.
+#: (configs/calibration.yaml's measured X/Y scales are ~150-260
+#: microsteps/mm) so round()-to-integer-microsteps quantization stays well
+#: under a hundredth of a mm, not an artifact that swamps the assertions.
 _SCALE = 200.0
 
 

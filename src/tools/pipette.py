@@ -93,7 +93,13 @@ class PlungerCalibration:
 
     def volume_for_microsteps(self, microsteps: int, *, aspirating: bool) -> float:
         points = self.aspirate_points if aspirating else self.dispense_points
-        return _interp([(p.microsteps, p.volume_ul) for p in points], microsteps)
+        # _interp needs its points ascending by x (microsteps here) --
+        # aspirate_points/dispense_points are stored ascending by
+        # volume_ul instead (see _sorted_monotonic), which is DESCENDING
+        # microsteps (more volume = fewer microsteps). Sorting explicitly
+        # here rather than relying on that ordering being reversed.
+        pairs = sorted((p.microsteps, p.volume_ul) for p in points)
+        return _interp(pairs, microsteps)
 
     @classmethod
     def from_pairs(cls, aspirate, dispense) -> "PlungerCalibration":

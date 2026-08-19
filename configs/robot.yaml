@@ -10,9 +10,9 @@
 # for exactly how these are followed.
 #
 # Every section can also be given inline instead of by reference (the
-# original, single-file convention) -- see src/config/robot.example.yaml
-# for the same machine written that way, with every field's meaning
-# documented alongside it.
+# original, single-file convention) -- see config/loader.py's own
+# resolve_robot_config docstring for exactly how inline and referenced
+# sections can be freely mixed.
 #
 # tools/labware naming: each referenced tool/tip/labware file declares its
 # own physical identity under `name:`. That same name is repeated here in
@@ -74,10 +74,10 @@ labware:
     instance: source
     name: biorad_96_microplate
     config: labware/wellplates/biorad_96_microplate.yaml
-  - slot: "6"
+  - slot: "3"
     instance: dest
-    name: biorad_96_microplate
-    config: labware/wellplates/biorad_96_microplate.yaml
+    name: qatch_nanoflux_24_well_plate
+    config: labware/wellplates/qatch_nanoflux_24_well_plate.yaml
   - slot: "7"
     instance: aspirate_plate
     name: opentrons_ot2_tip_rack_lid

@@ -4,8 +4,8 @@ This mirrors ``config.loader.load_robot`` almost exactly, but deliberately
 does not use ``loader.build_transport`` / the YAML's own ``transport:``
 section: the whole point of the connection bar is to let an operator pick
 simulated vs. real (and which COM port) independently of whatever a given
-config file happens to say, so the same robot.example.yaml can be pointed at
-either FakeTransport or a real SerialTransport.
+config file happens to say, so the same configs/robot.yaml can be pointed
+at either FakeTransport or a real SerialTransport.
 """
 
 from __future__ import annotations
@@ -39,9 +39,7 @@ def _pipette_from_cfg(cfg: dict, tip_calibrations: dict | None = None) -> Pipett
 
 
 def _ultrasonic_from_cfg(cfg: dict) -> UltrasonicSensor:
-    off = cfg.get("offset_mm", {})
     return UltrasonicSensor(
-        offset_mm=(off.get("x", 0.0), off.get("y", 0.0), off.get("z", 0.0)),
         max_range_mm=cfg.get("max_range_mm", 4000.0),
         name=cfg.get("name", "ultrasonic"),
         brand=cfg.get("brand", ""),

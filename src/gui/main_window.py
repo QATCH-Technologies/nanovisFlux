@@ -204,9 +204,9 @@ class MainWindow(QMainWindow):
                 # resolve_robot_config follows any split-file references
                 # (axes/calibration/deck/tips/labware/mounts each given as a
                 # path to their own YAML rather than inline -- see
-                # config/loader.py) so a split configs/robot.yaml and a
-                # single-file robot.example.yaml both land here as the same
-                # fully-inline dict build_robot expects.
+                # config/loader.py) so a split config and an inline,
+                # single-file one both land here as the same fully-inline
+                # dict build_robot expects.
                 cfg = resolve_robot_config(opts["config_path"])
                 # A calibration persisted from a previous "Save calibration"
                 # (see calibration_dialog.py / config.loader's

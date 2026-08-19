@@ -76,7 +76,7 @@ def build_robot(port: str | None) -> Robot:
     transport = SerialTransport(port) if port else FakeTransport()
 
     # Placeholder calibration -- replace with points/z_zero captured for this
-    # machine (see src/config/robot.example.yaml for the field meanings).
+    # machine (see configs/calibration.yaml for the field meanings).
     calibration = DeckCalibration(
         xy=AffineTransform2D.from_point_pairs(
             [(0, 0), (100, 0), (0, 100)], [(0, 0), (21320, 0), (0, 14478)]

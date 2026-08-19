@@ -35,8 +35,8 @@ Robot.safe_move_to/raise_z/move_vertical_to) -- --aspirate-slot/
 labware (7 and 8 by default), and --aspirate-well/--dispense-well pick a
 well on each (A1 by default). This needs the config's deck to actually be
 calibrated (a real `calibration:` section) and to have labware loaded on
-both slots -- see src/config/robot.example.yaml's `labware:` section for
-the shape. Every move is safe by construction (Robot.safe_move_to always
+both slots -- see configs/robot.yaml's `labware:` section for the shape.
+Every move is safe by construction (Robot.safe_move_to always
 raises to the mount's travel_z_mm clearance height before crossing, and
 only descends once already over the target XY -- the same primitive the
 GUI's manual "Go To" and every routine step already use, not a bespoke
@@ -167,7 +167,7 @@ def _labware_on_slot(robot, slot_name: str):
             return instance_name, lw
     raise SystemExit(
         f"no labware loaded on slot {slot_name!r} -- add a labware: entry with "
-        f'slot: "{slot_name}" to the config (see src/config/robot.example.yaml)'
+        f'slot: "{slot_name}" to the config (see configs/robot.yaml)'
     )
 
 

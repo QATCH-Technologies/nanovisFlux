@@ -1,10 +1,10 @@
 """resolve_robot_config: a robot config's axes/calibration/deck/tips/
 labware/mounts sections can each be given inline (the original, single-file
-convention -- see src/config/robot.example.yaml) or as a reference to that
-section's own YAML (the split-file convention -- see configs/robot.yaml),
-resolved relative to the referencing file's own directory. load_robot and
-the GUI's connect flow both go through this, so both conventions must
-produce the same Robot.
+convention -- see test_resolve_robot_config_leaves_inline_sections_untouched
+below) or as a reference to that section's own YAML (the split-file
+convention -- see configs/robot.yaml), resolved relative to the referencing
+file's own directory. load_robot and the GUI's connect flow both go through
+this, so both conventions must produce the same Robot.
 
 tips/labware/mounts references can additionally declare the `name:` they
 expect the referenced file to carry -- checked against the file's own
@@ -328,7 +328,7 @@ def test_resolve_robot_config_leaves_inline_sections_untouched(tmp_path):
             "deck": _DECK,
             "tips": [{"name": "3d_touch_probe", "length_mm": 63.0}],
             "labware": [{"name": "source", "slot": "1", "wells": {"A1": {"x": 0, "y": 0, "z": 0}}}],
-            "mounts": {"rear": {"type": "ultrasonic", "offset_mm": {"x": 0, "y": 50, "z": 130}}},
+            "mounts": {"rear": {"type": "ultrasonic", "max_range_mm": 4000}},
         },
     )
 
@@ -522,11 +522,13 @@ def test_real_configs_robot_yaml_loads(tmp_path):
     assert set(robot.labware) == {"tiprack1", "source", "dest", "aspirate_plate", "dispense_plate"}
     assert robot.labware["tiprack1"].slot.name == "10"
     assert robot.labware["source"].slot.name == "1"
-    assert robot.labware["dest"].slot.name == "6"
+    assert robot.labware["dest"].slot.name == "3"
     assert robot.labware["aspirate_plate"].slot.name == "7"
     assert robot.labware["dispense_plate"].slot.name == "8"
-    # source/dest share one reusable definition; aspirate/dispense share another
-    assert robot.labware["source"].name == robot.labware["dest"].name == "biorad_96_microplate"
+    # aspirate/dispense share one reusable definition; source (a 96-well
+    # plate) and dest (a distinct 24-well plate) are each their own
+    assert robot.labware["source"].name == "biorad_96_microplate"
+    assert robot.labware["dest"].name == "qatch_nanoflux_24_well_plate"
     assert (
         robot.labware["aspirate_plate"].name
         == robot.labware["dispense_plate"].name
@@ -550,34 +552,3 @@ def test_real_configs_robot_yaml_loads(tmp_path):
     assert rear_tool.name == "tk50_ultrasonic_sensor"
 
 
-def test_real_configs_robot_yaml_matches_single_file_example():
-    """The split /configs/robot.yaml and the monolithic
-    src/config/robot.example.yaml describe the same physical machine --
-    they should resolve to equivalent robots wherever their content
-    actually overlaps (travel_z_mm/axes scales/slot placements were carried
-    over unchanged when splitting). Tip/labware/tool *identity names* are
-    NOT compared here: the split config deliberately replaced the example's
-    role-flavored names (p300_tip, source, dest, ...) with placeholder
-    identity names, kept as addressable instance keys instead (see
-    configs/robot.yaml's header) -- the two files' names diverge on
-    purpose. Tip *count* differs too: the split config also moved the
-    calibration probe out of tips: into mounts.right (a fixed tool, not a
-    swappable pipette tip -- see configs/tools/3d_touch_probe.yaml), so it's
-    one tip fewer than the example, which still lists 3d_touch_probe as a tip."""
-    repo_root = Path(__file__).resolve().parents[2]
-    split = load_robot(str(repo_root / "configs" / "robot.yaml"))
-    example = load_robot(str(repo_root / "src" / "config" / "robot.example.yaml"))
-
-    assert split.travel_z_mm == example.travel_z_mm
-    for axis in AxisId:
-        assert split.axes[axis].config.steps_per_mm == example.axes[axis].config.steps_per_mm
-    assert len(split.tips) == len(example.tips) - 1
-    # placements line up by slot (instance keys were kept identical to the
-    # example's own labware names on purpose, for this comparison)
-    assert set(split.labware) == set(example.labware)
-    for name, lw in split.labware.items():
-        assert lw.slot.name == example.labware[name].slot.name
-    assert isinstance(split.mounts[MountSide.LEFT].tool, Pipette)
-    assert isinstance(example.mounts[MountSide.LEFT].tool, Pipette)
-    assert isinstance(split.mounts[MountSide.REAR].tool, UltrasonicSensor)
-    assert isinstance(example.mounts[MountSide.REAR].tool, UltrasonicSensor)

@@ -23,16 +23,16 @@ pipette_calibration:
   - microsteps: 15000
     volume_ul: 0.0
   - microsteps: 14250
-    volume_ul: 6.01
+    volume_ul: 0.0
   - microsteps: 12125
-    volume_ul: 59.12
+    volume_ul: 17.04
   - microsteps: 10000
-    volume_ul: 112.22
+    volume_ul: 67.14
   - microsteps: 7875
-    volume_ul: 170.34
+    volume_ul: 167.34
   - microsteps: 5750
-    volume_ul: 215.43
+    volume_ul: 217.44
   - microsteps: 3625
-    volume_ul: 270.54
+    volume_ul: 267.54
   - microsteps: 1500
     volume_ul: 307.62

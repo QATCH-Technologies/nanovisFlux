@@ -71,8 +71,8 @@ without --config it also fabricates a smooth synthetic surface so the
 heatmap/PNG output can be exercised end-to-end. Pass --port for real
 hardware, or --config to load a full robot config (for its own transport/
 axis-limit overrides and a properly configured rear ultrasonic mount --
-see src/config/robot.example.yaml); neither is required for this script's
-own motion, which never consults a calibration.
+see configs/robot.yaml); neither is required for this script's own
+motion, which never consults a calibration.
 """
 
 from __future__ import annotations

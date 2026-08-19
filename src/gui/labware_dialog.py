@@ -1,8 +1,8 @@
 """Dialog for adding/swapping labware in a deck slot.
 
 Builds a WellPlateDefinition / ReservoirDefinition / TipRackDefinition --
-the same reusable "vendor datasheet" spec robot.example.yaml's labware:
-section already describes (footprint, well/tip grid, spacing, geometry) --
+the same reusable "vendor datasheet" spec configs/labware/'s own definition
+files already describe (footprint, well/tip grid, spacing, geometry) --
 so placing it goes through Robot.load() exactly the way a config-loaded
 robot would: fit-checked against the slot (GridLabwareDefinition._check_fits)
 and, for a tip rack, registered into robot.tips automatically.

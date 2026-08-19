@@ -97,7 +97,28 @@ class FakeTransport(Transport):
         self._queue += self._handle(line.strip().upper())
 
     def read_line(self, timeout: float | None = None) -> str:
-        return self._queue.pop(0) if self._queue else ""
+        """Blocks (briefly polling), up to `timeout` seconds, rather than
+        checking the queue once and giving up -- a synchronous wait_for_ok
+        G1 (the default -- see protocol.driver.Controller.execute) needs
+        this to actually observe an in-flight move's belated "ok" once
+        real wall-clock time carries it to completion (see _settle /
+        _drain_pending_g1_oks, otherwise only ever invoked from
+        write_line -- nothing previously re-checked them while a caller
+        sat here waiting, so any G1 taking non-zero simulated time timed
+        out unconditionally). Returns "" immediately once nothing is
+        queued AND nothing is in flight -- further waiting couldn't
+        produce anything then."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            self._settle()
+            self._drain_pending_g1_oks()
+            if self._queue:
+                return self._queue.pop(0)
+            if not self._motion:
+                return ""
+            if deadline is not None and time.monotonic() >= deadline:
+                return ""
+            time.sleep(0.01)
 
     def reset_input_buffer(self) -> None:
         self._queue.clear()

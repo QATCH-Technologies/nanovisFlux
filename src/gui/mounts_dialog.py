@@ -62,22 +62,11 @@ class _MountEditor(QWidget):
         uf = QFormLayout(self.ultrasonic_page)
         self.u_name = QLineEdit("ultrasonic")
         self.u_brand = QLineEdit()
-        self.u_off_x = QDoubleSpinBox()
-        self.u_off_x.setRange(-1000, 1000)
-        self.u_off_y = QDoubleSpinBox()
-        self.u_off_y.setRange(-1000, 1000)
-        self.u_off_y.setValue(-40)
-        self.u_off_z = QDoubleSpinBox()
-        self.u_off_z.setRange(-1000, 1000)
-        self.u_off_z.setValue(130)
         self.u_range = QDoubleSpinBox()
         self.u_range.setRange(1, 20000)
         self.u_range.setValue(4000)
         uf.addRow("name", self.u_name)
         uf.addRow("brand", self.u_brand)
-        uf.addRow("offset x (mm)", self.u_off_x)
-        uf.addRow("offset y (mm)", self.u_off_y)
-        uf.addRow("offset z (mm)", self.u_off_z)
         uf.addRow("max range (mm)", self.u_range)
         self.stack.addWidget(self.ultrasonic_page)
 
@@ -106,10 +95,6 @@ class _MountEditor(QWidget):
             self.kind_combo.setCurrentText("ultrasonic")
             self.u_name.setText(tool.name)
             self.u_brand.setText(tool.brand)
-            ox, oy, oz = tool.offset_mm
-            self.u_off_x.setValue(ox)
-            self.u_off_y.setValue(oy)
-            self.u_off_z.setValue(oz)
             self.u_range.setValue(tool.max_range_mm)
         elif isinstance(tool, TouchProbe):
             self.kind_combo.setCurrentText("touch probe")
@@ -132,7 +117,6 @@ class _MountEditor(QWidget):
             )
         if kind == "ultrasonic":
             return UltrasonicSensor(
-                offset_mm=(self.u_off_x.value(), self.u_off_y.value(), self.u_off_z.value()),
                 max_range_mm=self.u_range.value(),
                 name=self.u_name.text().strip() or "ultrasonic",
                 brand=self.u_brand.text().strip(),

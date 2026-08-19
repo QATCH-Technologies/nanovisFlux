@@ -1,14 +1,14 @@
 """Deck calibration-mark geometry: a slot's corner, inset inward by a fixed
 mm offset, is what deck.calibration_marks / the calibration dialog treat as
 a fixed, known reference point (see deck.deck.inset_corner_point and
-config/robot.example.yaml's deck.calibration_marks comment)."""
+configs/deck.yaml's deck.calibration_marks comment)."""
 import pytest
 
 from src.config.loader import build_deck
 from src.deck import Corner, Slot, corner_point, inset_corner_point
 from src.geometry import DeckPoint
 
-#: The 8 confirmed marks from robot.example.yaml's deck.calibration_marks,
+#: The 8 confirmed marks from configs/deck.yaml's deck.calibration_marks,
 #: using its own slot origins/sizes -- caliper-measured 127.85x85.9mm
 #: slots, 137x95mm pitch (4.5mm separators on each side; supersedes an
 #: earlier rough 123x81mm/128x86 estimate that was off by ~5-6%) --

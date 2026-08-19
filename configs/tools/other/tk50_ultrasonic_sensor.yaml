@@ -4,14 +4,13 @@
 #
 # Fixed ultrasonic distance sensor, rear-mounted behind the Z/A mounts. No
 # vertical axis of its own -- it rides along with X/Y only, so it has no
-# mount_axis. offset_mm is the sensor face's fixed position relative to the
-# gantry's X/Y reference point: centered between the left/right mounts
-# (32.5 mm apart) so x=0, and 50 mm behind them so y=+50 (this deck's
-# "behind" = toward the back/slot-12 side, i.e. +y -- flip the sign if your
-# gantry's Y axis runs the other way). See src/tools/ultrasonic.py and M412
-# in firmware/docs/protocol.md -- the wire format is provisional.
+# mount_axis. This device carries no positioning of its own: where it sits
+# relative to the gantry's X/Y reference point is fixed by which MOUNT it's
+# on (see motion.mounts.MOUNT_OFFSET_MM -- REAR is centered between the
+# left/right mounts and 50 mm behind them), not by the sensor itself, so
+# there's no offset_mm here. See src/tools/ultrasonic.py and M412 in
+# firmware/docs/protocol.md -- the wire format is provisional.
 type: ultrasonic
 name: tk50_ultrasonic_sensor
 brand: Lonely Binary
-offset_mm: { x: 0.0, y: 50.0, z: 130.0 }
 max_range_mm: 4000

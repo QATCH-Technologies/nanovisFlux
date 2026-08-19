@@ -540,7 +540,7 @@ class DeckCanvas(QWidget):
         to a pure side-on view (height only, no depth) -- see
         ``_ELEVATION_MIN_DEG``/``_MAX_DEG`` for why we never actually reach
         either extreme. ``y`` is deck depth (slot row "1" at y=0 in front,
-        row "12" at max y in back -- see robot.example.yaml's deck: comment):
+        row "12" at max y in back -- see configs/deck.yaml's own comment):
         the near corner (min x, min y) lands at the bottom of the screen,
         the far corner (max x, max y) at the top, so the front row renders
         nearest the viewer.
