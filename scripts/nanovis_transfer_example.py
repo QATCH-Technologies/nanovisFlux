@@ -11,6 +11,13 @@ physical sequence against the exact same configs/robot.yaml labware; the
 trash drop point/height match between the two for the same reason (see
 _TRASH_OFFSET/_TRASH_EJECT_Z_MM below).
 
+Not written "for" a specific mount: --side picks it at run time, and the
+routine itself only ever learns which mount to use via an explicit
+SwitchMountStep (see src/routines/steps.py) rather than a side baked into
+the Routine object -- the same mechanism a routine would use mid-run to
+address a second mount, e.g. aspirating on the left pipette and dispensing
+on the right one, which this one doesn't need but could.
+
 Runs against the in-memory FakeTransport by default, so it can be exercised
 without hardware attached; pass --port to drive real hardware over serial
 (overriding whatever configs/robot.yaml's own transport: says, same as the
@@ -36,6 +43,7 @@ from src.routines import (
     PickUpTipStep,
     Routine,
     SlotLocation,
+    SwitchMountStep,
     TipSequence,
     WellLocation,
 )
@@ -46,6 +54,8 @@ from src.transport import FakeTransport, SerialTransport
 #: _DEFAULT_CONFIG -- a bare relative string would resolve against wherever
 #: the process happened to be invoked from instead.
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "robot.yaml"
+
+_SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
 
 _TIP_RACK = "tiprack1"        # robot.yaml labware: instance, slot "10"
 _TIP_NAME = "opentrons_p300_ot2_tip"   # robot.yaml tips: entry matching that rack
@@ -65,10 +75,16 @@ _TRASH_OFFSET = DeckPoint(100.0, 100.0, 0.0)
 _TRASH_EJECT_Z_MM = 120.0
 
 
-def build_routine(robot, n_wells: int) -> Routine:
+def build_routine(robot, n_wells: int, side: MountSide) -> Routine:
     """See module docstring. `n_wells` is clamped to the smaller of
     source/dest's own well counts -- the destination (24 wells) in
-    practice, since the source (96 wells) has far more."""
+    practice, since the source (96 wells) has far more.
+
+    `side` is applied via a SwitchMountStep, not the Routine constructor
+    (whose own `side` is only a fallback for a routine that never
+    switches at all -- see Routine.run) -- so which mount runs this is
+    always visible as an explicit step in the routine itself, the same
+    way it would be if this needed to switch mid-run."""
     source_names = list(robot.labware[_SOURCE].wells)
     dest_names = list(robot.labware[_DEST].wells)
     n = min(n_wells, len(source_names), len(dest_names))
@@ -79,8 +95,8 @@ def build_routine(robot, n_wells: int) -> Routine:
         )
 
     tips = TipSequence(_TIP_RACK, rows=8, cols=12, start="A1")
-    routine = Routine(name="nanovis transfer example", side=MountSide.LEFT)
-    routine.add(HomeStep())
+    routine = Routine(name="nanovis transfer example")
+    routine.add(HomeStep(), SwitchMountStep(side))
     for src_name, dest_name in zip(source_names[:n], dest_names[:n]):
         routine.extend(
             [
@@ -103,6 +119,9 @@ def main() -> None:
         "--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport"
     )
     parser.add_argument(
+        "--side", choices=sorted(_SIDES), default="left", help="which mount runs this routine"
+    )
+    parser.add_argument(
         "--wells", type=int, default=24, help="number of source/dest well pairs to run"
     )
     parser.add_argument(
@@ -114,7 +133,7 @@ def main() -> None:
     transport = SerialTransport(args.port) if args.port else FakeTransport()
     robot = build_robot(cfg, transport)
 
-    routine = build_routine(robot, args.wells)
+    routine = build_routine(robot, args.wells, _SIDES[args.side])
     planned = "\n".join(f"  {line}" for line in routine.dry_run())
     logger.info(f"Planned routine ({len(routine.steps)} steps):\n{planned}")
     if args.dry_run:

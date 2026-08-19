@@ -11,9 +11,16 @@ class Step:
     """One instruction in a routine. Steps operate in deck space (slots and
     wells) and delegate the actual motion to the robot -- mirroring the
     protocol layer's 'objects, not strings' idea one level up.
+
+    ``side`` is the routine's *current* mount, threaded through by
+    Routine.run -- normally every step just acts on it and returns None.
+    SwitchMountStep is the one exception: it returns the new MountSide,
+    which Routine.run then uses for every step after it. This is what lets
+    one routine address more than one mount without being written "for" a
+    specific side (see SwitchMountStep's own docstring).
     """
 
-    def execute(self, robot, side: MountSide) -> None:  # pragma: no cover
+    def execute(self, robot, side: MountSide) -> MountSide | None:  # pragma: no cover
         raise NotImplementedError
 
     def describe(self) -> str:
@@ -41,6 +48,32 @@ class MoveStep(Step):
 
     def describe(self):
         return f"move to {self.where}"
+
+
+@dataclass
+class SwitchMountStep(Step):
+    """Make ``mount`` the active side for every step after this one --
+    e.g. an aspirate on the left pipette followed by a dispense on the
+    right one, in a single routine that was never pinned to one side to
+    begin with (see Routine.run). Optionally also moves that mount to
+    ``where`` as part of the same action (the common case: switch to
+    whichever mount needs to act next, right where it needs to act) --
+    equivalent to this step plus a separate MoveStep(where), just as one
+    instruction; leave ``where`` unset to switch without moving.
+    """
+
+    mount: MountSide
+    where: Location | None = None
+    feed: int | None = None
+
+    def execute(self, robot, side):
+        if self.where is not None:
+            robot.safe_move_to(self.where.resolve(robot), self.mount, feed=self.feed)
+        return self.mount
+
+    def describe(self):
+        base = f"switch to {self.mount.value} mount"
+        return f"{base}, move to {self.where}" if self.where is not None else base
 
 
 @dataclass
