@@ -176,15 +176,27 @@ def _resolve_labware_refs(base_dir: Path, cfg_list: list) -> list:
     return resolved
 
 
-def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> dict:
+def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> tuple:
     """Each mount's value is an inline tool dict (has its own ``type``, no
     ``config``), a bare path string, or ``{name, config}`` -- the latter two
     load the tool's own file; ``{name, config}`` additionally checks the
-    declared ``name`` against the file's own (see _check_name_matches)."""
+    declared ``name`` against the file's own (see _check_name_matches).
+
+    Returns ``(resolved, tip_calibrations)``: ``resolved`` is the same
+    plain inline-tool-dict shape an inline mount would already produce
+    (mounts: itself never carries calibration data, so a resolved split
+    config and an inline one still compare equal -- see
+    resolve_robot_config's own docstring/tests). ``tip_calibrations`` is a
+    side dict-of-dicts, populated only for pipette mounts loaded from a
+    file reference (see build_pipette_tip_calibrations) -- kept as a
+    separate return value rather than smuggled into ``resolved`` itself."""
     resolved = {}
+    tip_calibrations = {}
     for side, value in (cfg_dict or {}).items():
+        file_path = None
         if isinstance(value, str):
-            loaded = load_config(str(base_dir / value))
+            file_path = base_dir / value
+            loaded = load_config(str(file_path))
             resolved[side] = loaded.get("mount", loaded)
         elif isinstance(value, dict) and "config" in value:
             file_path = base_dir / value["config"]
@@ -194,7 +206,11 @@ def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> dict:
             resolved[side] = loaded
         else:
             resolved[side] = value
-    return resolved
+        if file_path is not None and resolved[side].get("type") == "pipette":
+            tip_calibrations[side] = build_pipette_tip_calibrations(
+                file_path.resolve().parent, resolved[side]["name"]
+            )
+    return resolved, tip_calibrations
 
 
 def resolve_robot_config(path: str) -> dict:
@@ -217,7 +233,9 @@ def resolve_robot_config(path: str) -> dict:
     if "labware" in cfg:
         resolved["labware"] = _resolve_labware_refs(base_dir, cfg["labware"])
     if "mounts" in cfg:
-        resolved["mounts"] = _resolve_mounts_refs(base_dir, cfg["mounts"])
+        resolved["mounts"], resolved["_pipette_tip_calibrations"] = _resolve_mounts_refs(
+            base_dir, cfg["mounts"]
+        )
     return resolved
 
 
@@ -313,6 +331,52 @@ def build_pipette_calibration(cfg: dict) -> PlungerCalibration:
     )
 
 
+def build_pipette_tip_calibrations(pipette_dir: Path, pipette_name: str) -> dict:
+    """Every measured calibration for ``pipette_name``, one per
+    characterized tip -- see configs/tools/pipettes/<pipette_name>/
+    calibrations/*.yaml (written by scripts/calibrate_pipette.py or
+    scripts/calibration_recovery.py), one file per tip, each holding a
+    ``pipette_calibration:`` section in the same shape
+    build_pipette_calibration reads.
+
+    ``pipette_name`` is its own top-level directory (a sibling of that
+    pipette's own <pipette_name>.yaml, both directly under
+    configs/tools/pipettes/) rather than being nested inside one shared
+    calibrations/ folder -- there are enough distinct pipettes in practice
+    (gen1 vs. gen2, single- vs. multi-channel, ...) that each needs to be
+    unambiguously its own top-level grouping, not one more entry filed
+    under a generic bucket.
+
+    Mount side doesn't affect a plunger's steps<->volume mapping (see
+    PlungerCalibration) -- a pipette's calibrations are the same wherever
+    it's mounted, so unlike ``mounts:`` these are never split by side.
+
+    ``pipette_dir`` is the directory the pipette's OWN tool file lives in
+    (e.g. configs/tools/pipettes/), not the robot config's -- calibrations
+    stay colocated with the pipette definition they belong to, so they're
+    found the same way regardless of which robot config references it.
+
+    Returns {} if this pipette has no calibrations directory yet (the
+    normal case before it's ever been characterized -- Pipette then falls
+    back to its linear PlungerModel; see
+    Pipette._calibration_for_current_tip)."""
+    calib_dir = pipette_dir / pipette_name / "calibrations"
+    if not calib_dir.is_dir():
+        return {}
+    calibrations = {}
+    for file_path in sorted(calib_dir.glob("*.yaml")):
+        section = load_config(str(file_path))
+        section = section.get("pipette_calibration", section)
+        declared = section.get("pipette")
+        if declared is not None and declared != pipette_name:
+            raise ValueError(
+                f"{file_path} declares pipette {declared!r} but lives under "
+                f"{pipette_name}/calibrations/ -- keep the two in sync"
+            )
+        calibrations[section["tip"]] = build_pipette_calibration(section)
+    return calibrations
+
+
 def _build_slot_obstacles(cfg: list) -> list:
     return [
         SlotObstacle(offset=tuple(o["offset"]), size=tuple(o["size"]), height_mm=o["height_mm"])
@@ -388,7 +452,7 @@ def build_tips(cfg: list) -> dict:
     return tips
 
 
-def _build_pipette(cfg: dict) -> Pipette:
+def _build_pipette(cfg: dict, tip_calibrations: dict | None = None) -> Pipette:
     return Pipette(
         name=cfg["name"],
         plunger=PlungerModel(
@@ -396,6 +460,7 @@ def _build_pipette(cfg: dict) -> Pipette:
             bottom_microsteps=cfg.get("bottom_microsteps", 0),
         ),
         max_volume_ul=cfg["max_volume_ul"],
+        tip_calibrations=tip_calibrations,
         brand=cfg.get("brand", ""),
         channels=cfg.get("channels", 1),
     )
@@ -449,9 +514,13 @@ def load_robot(path: str) -> Robot:
     for lw in cfg.get("labware", []):
         robot.load_labware(build_labware(lw), str(lw["slot"]), key=lw.get("instance"))
     # mounted tools
+    pipette_tip_calibrations = cfg.get("_pipette_tip_calibrations", {})
     for side_name, tool_cfg in cfg.get("mounts", {}).items():
         if tool_cfg.get("type") == "pipette":
-            robot.attach(_SIDES[side_name], _build_pipette(tool_cfg))
+            robot.attach(
+                _SIDES[side_name],
+                _build_pipette(tool_cfg, pipette_tip_calibrations.get(side_name)),
+            )
         elif tool_cfg.get("type") == "ultrasonic":
             robot.attach(_SIDES[side_name], _build_ultrasonic(tool_cfg))
         elif tool_cfg.get("type") == "touch_probe":

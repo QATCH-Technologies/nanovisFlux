@@ -139,6 +139,93 @@ def test_load_robot_from_split_config_builds_expected_robot(tmp_path):
     tool = robot.mounts[MountSide.LEFT].tool
     assert isinstance(tool, Pipette)
     assert tool.name == "p300"
+    # no calibrations/p300/ directory next to the pipette file -> falls
+    # back to the linear PlungerModel, same as before this ever existed
+    assert tool.tip_calibrations == {}
+
+
+# -- per-tip calibrations, auto-discovered from calibrations/<pipette name>/ -
+
+
+def _write_pipette_calibration(path: Path, *, pipette: str, tip: str) -> None:
+    """A minimal but valid pipette_calibration: file, in the shape
+    scripts/calibrate_pipette.py writes -- no side: (see this module's own
+    docstring: mount side doesn't affect a plunger's steps<->volume
+    mapping, so calibrations/ is never split by side the way mounts: is)."""
+    _write_yaml(
+        path,
+        {
+            "pipette_calibration": {
+                "pipette": pipette,
+                "tip": tip,
+                "density_mg_per_ul": 0.998,
+                "aspirate": [{"microsteps": 1000, "volume_ul": 0.0}, {"microsteps": 0, "volume_ul": 100.0}],
+                "dispense": [{"microsteps": 1000, "volume_ul": 0.0}, {"microsteps": 0, "volume_ul": 100.0}],
+            }
+        },
+    )
+
+
+def test_load_robot_auto_discovers_pipette_tip_calibrations(tmp_path):
+    """Every *.yaml under <pipette file's own dir>/<pipette name>/
+    calibrations/ becomes one Pipette.tip_calibrations entry, keyed by
+    that file's own tip: -- no explicit listing needed in the pipette's
+    own tool file or in robot.yaml."""
+    robot_path = _build_split_configs(tmp_path)
+    calib_dir = tmp_path / "tools" / "p300" / "calibrations"
+    _write_pipette_calibration(calib_dir / "tip_a.yaml", pipette="p300", tip="tip A")
+    _write_pipette_calibration(calib_dir / "tip_b.yaml", pipette="p300", tip="tip B")
+
+    robot = load_robot(str(robot_path))
+
+    tool = robot.mounts[MountSide.LEFT].tool
+    assert set(tool.tip_calibrations) == {"tip A", "tip B"}
+    assert tool.tip_calibrations["tip A"].microsteps_for_volume(100.0, aspirating=True) == 0
+
+
+def test_pipette_tip_calibrations_are_side_agnostic(tmp_path):
+    """The same <pipette name>/calibrations/ directory applies wherever
+    this pipette is mounted -- calibrating on one side and later moving
+    the pipette to the other mount doesn't lose its calibrations."""
+    _write_yaml(
+        tmp_path / "tools" / "pipette.yaml",
+        {"type": "pipette", "name": "p300", "microsteps_per_ul": 50, "max_volume_ul": 300},
+    )
+    _write_pipette_calibration(
+        tmp_path / "tools" / "p300" / "calibrations" / "tip_a.yaml", pipette="p300", tip="tip A"
+    )
+    robot_path = tmp_path / "robot.yaml"
+    _write_yaml(
+        robot_path,
+        {
+            "transport": {"type": "fake"},
+            "mounts": {
+                "left": {"name": "p300", "config": "tools/pipette.yaml"},
+                "right": {"name": "p300", "config": "tools/pipette.yaml"},
+            },
+        },
+    )
+
+    robot = load_robot(str(robot_path))
+
+    assert set(robot.mounts[MountSide.LEFT].tool.tip_calibrations) == {"tip A"}
+    assert set(robot.mounts[MountSide.RIGHT].tool.tip_calibrations) == {"tip A"}
+
+
+def test_pipette_calibration_file_pipette_name_mismatch_raises(tmp_path):
+    """A calibration file's declared pipette: must agree with the
+    <pipette name>/calibrations/ directory it's found under -- catches a
+    copy-pasted or misplaced file instead of silently attaching someone
+    else's measurements."""
+    robot_path = _build_split_configs(tmp_path)
+    _write_pipette_calibration(
+        tmp_path / "tools" / "p300" / "calibrations" / "tip_a.yaml",
+        pipette="some_other_pipette",
+        tip="tip A",
+    )
+
+    with pytest.raises(ValueError, match="some_other_pipette"):
+        load_robot(str(robot_path))
 
 
 def test_brand_field_plumbed_through_to_labware_tips_and_tools(tmp_path):

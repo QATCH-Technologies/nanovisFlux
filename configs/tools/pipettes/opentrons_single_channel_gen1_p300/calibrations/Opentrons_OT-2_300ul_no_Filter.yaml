@@ -1,7 +1,6 @@
 pipette_calibration:
   pipette: opentrons_single_channel_gen1_p300
   tip: Opentrons OT-2 300ul no Filter
-  side: left
   density_mg_per_ul: 0.998
   aspirate:
   - microsteps: 15000

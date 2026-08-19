@@ -328,24 +328,29 @@ def write_yaml(
     path: str,
     *,
     pipette_name: str,
-    side: str,
     tip: str,
     density: float,
     aspirate: list,
     dispense: list,
 ) -> None:
+    """Writes a pipette_calibration: file in the shape
+    config/loader.py's build_pipette_tip_calibrations reads back -- no
+    `side:` in it: a plunger's steps<->volume mapping doesn't depend on
+    which mount the pipette is on (see PlungerCalibration), so unlike
+    mounts: this is never split by side. Which mount --side drove during
+    THIS run only matters for the measurement itself, not what's saved."""
     import yaml  # lazy dependency, matches config/loader.py's own convention
 
     data = {
         "pipette_calibration": {
             "pipette": pipette_name,
             "tip": tip,
-            "side": side,
             "density_mg_per_ul": density,
             "aspirate": [{"microsteps": m, "volume_ul": v} for m, v in aspirate],
             "dispense": [{"microsteps": m, "volume_ul": v} for m, v in dispense],
         }
     }
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         yaml.safe_dump(data, fh, sort_keys=False)
 
@@ -473,7 +478,11 @@ def main() -> None:
         help="prior aspirate-phase YAML (see --out); required if " "--phase dispense",
     )
     parser.add_argument(
-        "--out", help="output YAML path; default pipette_calibration_<side>_<tip>.yaml"
+        "--out",
+        help="output YAML path; default <config's dir>/tools/pipettes/"
+        "<pipette name>/calibrations/<tip>.yaml -- see config/loader.py's "
+        "build_pipette_tip_calibrations, which auto-discovers every file under a "
+        "pipette's own <pipette name>/calibrations/ directory",
     )
     parser.add_argument("--skip-home", action="store_true")
     parser.add_argument(
@@ -489,13 +498,20 @@ def main() -> None:
     if args.phase == "dispense" and not args.aspirate_from:
         raise SystemExit("--phase dispense requires --aspirate-from a prior Phase A result")
 
-    out_path = args.out or f"pipette_calibration_{args.side}_{args.tip_name}.yaml"
-
     robot = load_robot(args.config)
     side = _SIDES[args.side]
     pipette = robot.mounts[side].tool
     if pipette is None or not hasattr(pipette, "plunger"):
         raise SystemExit(f"no pipette attached to the {args.side} mount in {args.config!r}")
+
+    out_path = args.out or str(
+        Path(args.config).resolve().parent
+        / "tools"
+        / "pipettes"
+        / pipette.name
+        / "calibrations"
+        / f"{'_'.join(args.tip_name.split())}.yaml"
+    )
     if robot.calibration is None:
         raise SystemExit(
             f"{args.config!r} has no deck calibration -- gantry motion here goes through "
@@ -611,7 +627,6 @@ def main() -> None:
         write_yaml(
             out_path,
             pipette_name=pipette.name,
-            side=args.side,
             tip=args.tip_name,
             density=args.density_mg_per_ul,
             aspirate=aspirate_pairs,
@@ -626,7 +641,6 @@ def main() -> None:
         write_yaml(
             out_path,
             pipette_name=pipette.name,
-            side=args.side,
             tip=args.tip_name,
             density=args.density_mg_per_ul,
             aspirate=aspirate_pairs,

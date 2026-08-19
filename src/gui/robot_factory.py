@@ -24,7 +24,7 @@ from ..tools import Pipette, PlungerModel, TouchProbe, UltrasonicSensor
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
 
 
-def _pipette_from_cfg(cfg: dict) -> Pipette:
+def _pipette_from_cfg(cfg: dict, tip_calibrations: dict | None = None) -> Pipette:
     return Pipette(
         name=cfg["name"],
         plunger=PlungerModel(
@@ -32,6 +32,7 @@ def _pipette_from_cfg(cfg: dict) -> Pipette:
             bottom_microsteps=cfg.get("bottom_microsteps", 0),
         ),
         max_volume_ul=cfg["max_volume_ul"],
+        tip_calibrations=tip_calibrations,
         brand=cfg.get("brand", ""),
         channels=cfg.get("channels", 1),
     )
@@ -74,9 +75,13 @@ def build_robot(cfg: dict | None, transport) -> Robot:
     robot.tips = build_tips(cfg.get("tips", []))
     for lw in cfg.get("labware", []):
         robot.load_labware(build_labware(lw), str(lw["slot"]), key=lw.get("instance"))
+    pipette_tip_calibrations = cfg.get("_pipette_tip_calibrations", {})
     for side_name, tool_cfg in cfg.get("mounts", {}).items():
         if tool_cfg.get("type") == "pipette":
-            robot.attach(_SIDES[side_name], _pipette_from_cfg(tool_cfg))
+            robot.attach(
+                _SIDES[side_name],
+                _pipette_from_cfg(tool_cfg, pipette_tip_calibrations.get(side_name)),
+            )
         elif tool_cfg.get("type") == "ultrasonic":
             robot.attach(_SIDES[side_name], _ultrasonic_from_cfg(tool_cfg))
         elif tool_cfg.get("type") == "touch_probe":
