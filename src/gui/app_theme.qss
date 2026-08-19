@@ -59,6 +59,12 @@ QLabel.h1 {
     font-weight: 700;
 }
 
+QLabel.section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
 QLabel.pill {
     background: {{FLAT_SURFACE2}};
     border: 1px solid {{FLAT_BORDER}};

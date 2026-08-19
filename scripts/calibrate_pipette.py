@@ -205,7 +205,7 @@ def run_phase_a(
     *,
     simulate: bool,
 ) -> list:
-    """See module docstring. Returns [(bottom + stroke, volume_ul), ...].
+    """See module docstring. Returns [(bottom - stroke, volume_ul), ...].
 
     dwell_s: how long to hold still, plunger already at its target, at the
     bottom of each aspirate/dispense stroke -- the stepper reaching its
@@ -249,7 +249,7 @@ def run_phase_a(
         logger.info(
             f"-> {volume_ul:.2f} uL" + (f" (avg of {replicates})" if replicates > 1 else "")
         )
-        pairs.append((bottom + stroke, volume_ul))
+        pairs.append((bottom - stroke, volume_ul))
     return pairs
 
 
