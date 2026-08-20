@@ -280,6 +280,35 @@ class Robot:
         if verify:
             self._await_settled({axis: mz}, resend=_send)
 
+    def move_horizontal_to(
+        self,
+        x_mm: float,
+        y_mm: float,
+        side: MountSide,
+        feed: int | None = None,
+        *,
+        verify: bool = True,
+    ) -> None:
+        """Command only X/Y to a deck-mm position, leaving Z/A untouched --
+        the horizontal counterpart to move_vertical_to. No clearance arc
+        (see safe_move_to for that): for a caller already at a safe/working
+        height that just needs to nudge sideways without a detour up and
+        back down (e.g. TipPickup's well-wall touch pattern, moving inside
+        a tip rack well). See move_to's own docstring for what `verify`
+        (on by default, with stall retries) buys."""
+        cal = self._require_cal()
+        xy = cal.deck_to_motor(DeckPoint(x_mm, y_mm, 0.0), side, self.tip_offset(side))
+        xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
+
+        def _send():
+            (self.controller.linear_move if feed else self.controller.rapid_move)(
+                xy_targets, **({"feed": feed} if feed else {})
+            )
+
+        _send()
+        if verify:
+            self._await_settled(xy_targets, resend=_send)
+
     def raise_z(
         self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = True
     ) -> None:

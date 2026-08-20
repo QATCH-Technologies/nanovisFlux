@@ -200,7 +200,9 @@ class Pipette(Tool):
 
     # -- tips -----------------------------------------------------------
     def pick_up_tip(self, xy: DeckPoint, tip: TipGeometry, pickup: TipPickup) -> None:
-        """Seat a tip by pressing onto it, over its position in the rack.
+        """Seat a tip by pressing onto it, over its position in the rack,
+        then (if configured) squares it up by backing off partway and
+        tapping it against the rack well's walls in a '+' pattern.
 
         No tip is installed during the strokes (offset 0), so Z is commanded
         against the bare nozzle reference. After the final stroke the tip is
@@ -211,12 +213,34 @@ class Pipette(Tool):
         robot, side = self._robot, self._mount.side
         top = pickup.press_z_mm
 
-        # Arrive above the tip, then touch its top with the bare nozzle.
+        # Arrive above the tip, then press its top with the bare nozzle.
         robot.safe_move_to(DeckPoint(xy.x, xy.y, top), side)
         for stroke in range(pickup.presses):
             robot.move_vertical_to(top - pickup.engage_mm, side, feed=pickup.feed)
             if stroke < pickup.presses - 1:
                 robot.move_vertical_to(top + pickup.retract_mm, side, feed=pickup.feed)
+
+        if pickup.touch_offset_mm:
+            touch_retract = (
+                pickup.engage_mm / 2
+                if pickup.touch_retract_mm is None
+                else pickup.touch_retract_mm
+            )
+            touch_feed = pickup.touch_feed or pickup.feed
+            robot.move_vertical_to(top - pickup.engage_mm + touch_retract, side, feed=touch_feed)
+            d = pickup.touch_offset_mm
+            # A '+': one horizontal stroke through center (left, then right),
+            # then one vertical stroke through center (front/back), ending
+            # back at center -- quick taps, not a slow scrub.
+            for tx, ty in (
+                (xy.x - d, xy.y),
+                (xy.x + d, xy.y),
+                (xy.x, xy.y),
+                (xy.x, xy.y - d),
+                (xy.x, xy.y + d),
+                (xy.x, xy.y),
+            ):
+                robot.move_horizontal_to(tx, ty, side, feed=touch_feed)
 
         self.current_tip = tip  # now tip-aware
         robot.raise_z(side)  # lift clear at travel height

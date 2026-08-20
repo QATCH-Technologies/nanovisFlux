@@ -278,7 +278,9 @@ class PickUpTipStep(Step):
     param_fields: ClassVar[tuple] = (
         ("side", "side", "left"), ("tip_name", "text", ""), ("press_z", "float", 0.0),
         ("labware", "labware", ""), ("well", "well", ""), ("advance", "bool", False),
-        ("x", "float", 0.0), ("y", "float", 0.0))
+        ("x", "float", 0.0), ("y", "float", 0.0), ("feed", "int_opt", None),
+        ("touch_offset_mm", "float", 1.5), ("touch_retract_mm", "float_opt", None),
+        ("touch_feed", "int_opt", None))
     side: str = "left"
     x: float = 0.0
     y: float = 0.0
@@ -287,6 +289,10 @@ class PickUpTipStep(Step):
     labware: str = ""
     well: str = ""
     advance: bool = False
+    feed: int | None = None  # None = TipPickup's own default press/retract/touch feed
+    touch_offset_mm: float = 1.5  # lateral '+' well-wall touch nudge; 0 disables
+    touch_retract_mm: float | None = None  # lift before touching; None = engage_mm / 2
+    touch_feed: int | None = None  # feed for the touch pattern; None = use `feed`
 
     def __post_init__(self) -> None:
         self._cursor = None
@@ -315,7 +321,14 @@ class PickUpTipStep(Step):
         pt, well_name = _resolve_point(self, robot, default_ref="top")
         where = f"{self.labware}:{well_name}" if well_name else f"({pt.x:.1f}, {pt.y:.1f})"
         log(f"picking up {tip.name} at {where}")
-        tool.pick_up_tip(DeckPoint(pt.x, pt.y), tip, TipPickup(press_z_mm=self.press_z))
+        kwargs = {"press_z_mm": self.press_z, "touch_offset_mm": self.touch_offset_mm}
+        if self.feed is not None:
+            kwargs["feed"] = self.feed
+        if self.touch_retract_mm is not None:
+            kwargs["touch_retract_mm"] = self.touch_retract_mm
+        if self.touch_feed is not None:
+            kwargs["touch_feed"] = self.touch_feed
+        tool.pick_up_tip(DeckPoint(pt.x, pt.y), tip, TipPickup(**kwargs))
 
 
 @dataclass
