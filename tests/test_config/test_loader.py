@@ -520,11 +520,11 @@ def test_real_configs_robot_yaml_loads(tmp_path):
     # 3d_touch_probe is a mounted touch probe now, not a pipette tip
     assert set(robot.tips) == {"opentrons_p300_ot2_tip", "geb_p20_tip"}
     assert set(robot.labware) == {"tiprack1", "source", "dest", "aspirate_plate", "dispense_plate"}
-    assert robot.labware["tiprack1"].slot.name == "10"
+    assert robot.labware["tiprack1"].slot.name == "7"
     assert robot.labware["source"].slot.name == "1"
     assert robot.labware["dest"].slot.name == "3"
-    assert robot.labware["aspirate_plate"].slot.name == "7"
-    assert robot.labware["dispense_plate"].slot.name == "8"
+    assert robot.labware["aspirate_plate"].slot.name == "8"
+    assert robot.labware["dispense_plate"].slot.name == "11"
     # aspirate/dispense share one reusable definition; source (a 96-well
     # plate) and dest (a distinct 24-well plate) are each their own
     assert robot.labware["source"].name == "biorad_96_microplate"

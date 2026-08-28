@@ -1,42 +1,49 @@
-"""Main window: the connection bar, deck view, manual/routine/info tabs and
-the shared console assembled into one "everything visible at once"
-workspace -- deck-centric, with the e-stop and connection controls pinned
-at the top regardless of which right-hand tab is active."""
 from __future__ import annotations
 
 import time
-from loguru import logger
-from PyQt5.QtCore import Qt, QSize, QTimer
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, QTabWidget,
-                             QLabel, QPushButton, QFrame, QMessageBox, QListWidget)
 
-from ..core import AxisId, MountSide
-from ..transport import SerialTransport, SimulatedTransport
+from loguru import logger
+from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import (
+    QFrame,
+    QLabel,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..config.loader import load_calibration_override, resolve_robot_config
 from ..control.jog import JogController
+from ..core import AxisId, MountSide
+from ..geometry.coordinates import DeckPoint
 from ..motion.axis import HOMING_ORDER
 from ..motion.mounts import MOUNT_OFFSET_MM
-from ..geometry.coordinates import DeckPoint
+from ..transport import SerialTransport, SimulatedTransport
 from . import icon_utils
+from .calibration_dialog import CalibrationDialog
 from .connection_bar import ConnectionBar
-from .deck_view import DeckView
-from .manual_control import ManualControlPanel
-from .routine_model import Routine
-from .routine_builder import RoutineBuilderWidget
-from .routine_runner import RoutineRunnerWidget
 from .console_log import ConsoleLog
+from .deck_view import DeckView
 from .log_sink import install_console_sink
+from .manual_control import ManualControlPanel
+from .mounts_dialog import MountsDialog
+from .robot_factory import build_robot
+from .routine_builder import RoutineBuilderWidget
+from .routine_model import Routine
+from .routine_runner import RoutineRunnerWidget
 from .tokens import TOKENS
 from .trace import CommandTracer
-from .robot_factory import build_robot
-from .calibration_dialog import CalibrationDialog
-from .mounts_dialog import MountsDialog
-from ..config.loader import load_calibration_override, resolve_robot_config
 
 _ICON_SIZE = QSize(16, 16)
 _INK = QColor(*TOKENS["flat_text"][:3])
 
-_HOMING_ANIM_INTERVAL_MS = 40  # 25 Hz -- smooth enough for a multi-second sweep
+_HOMING_ANIM_INTERVAL_MS = 40
 
 
 class MainWindow(QMainWindow):
@@ -48,7 +55,7 @@ class MainWindow(QMainWindow):
         self.robot = None
         self.jog: JogController | None = None
         self.tracer: CommandTracer | None = None
-        self._config_path: str | None = None   # for the calibration dialog's persist-to-sidecar
+        self._config_path: str | None = None
         self.routine = Routine(name="untitled routine")
 
         central = QWidget()
@@ -69,7 +76,6 @@ class MainWindow(QMainWindow):
         body_split.setContentsMargins(8, 8, 8, 8)
         outer.addWidget(body_split, 1)
 
-        # -- left: deck & labware / mounts / calibration ---------------------
         left_panel = QFrame()
         left_panel.setProperty("class", "panel")
         left_layout = QVBoxLayout(left_panel)
@@ -96,7 +102,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.btn_calibrate)
         body_split.addWidget(left_panel)
 
-        # -- center: deck view --------------------------------------------------
         center_panel = QFrame()
         center_panel.setProperty("class", "panel")
         center_layout = QVBoxLayout(center_panel)
@@ -105,7 +110,6 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.deck_view, 1)
         body_split.addWidget(center_panel)
 
-        # -- right: manual / routine / info tabs -------------------------------
         right_panel = QFrame()
         right_panel.setProperty("class", "panel")
         right_layout = QVBoxLayout(right_panel)
@@ -139,7 +143,6 @@ class MainWindow(QMainWindow):
         body_split.addWidget(right_panel)
         body_split.setSizes([220, 640, 420])
 
-        # -- bottom: shared console ---------------------------------------------
         console_wrap = QFrame()
         console_wrap.setProperty("class", "panel")
         console_layout = QVBoxLayout(console_wrap)
@@ -153,67 +156,31 @@ class MainWindow(QMainWindow):
         outer.addWidget(console_wrap)
 
         self._position_timer = QTimer(self)
-        # 200ms (5 Hz): a full-length X move (60,000 microsteps at the
-        # default 16,000 microsteps/s travel speed) takes ~3.75s, so 1 Hz
-        # only gave ~4 marker updates across a full traverse -- visibly
-        # choppy. 5 Hz keeps the deck marker tracking smoothly without
-        # over-polling the transport.
         self._position_timer.setInterval(200)
         self._position_timer.timeout.connect(self._poll_position)
-
-        # Post-home sweep: robot.home() is a single blocking call (the
-        # firmware doesn't ack G28 until every requested axis has fully
-        # homed), so there is no real position to poll *during* it -- this
-        # timer instead replays the known homing order/speed as an
-        # animation once the call returns, so the operator still sees the
-        # gantry "arrive" home axis by axis rather than snapping instantly.
         self._homing_anim_timer = QTimer(self)
         self._homing_anim_timer.setInterval(_HOMING_ANIM_INTERVAL_MS)
         self._homing_anim_timer.timeout.connect(self._tick_homing_animation)
         self._homing_schedule: list = []
         self._homing_t0 = 0.0
         self._homing_display: dict = {}
-
-        # Routine motion sweep: a routine step's G0/G1 acks long before (or,
-        # in simulation, entirely unrelated to) the real move actually
-        # finishing -- see SimulatedTransport and RoutineRunner.step_motion's
-        # docstrings -- so there's no honest position to poll mid-step.
-        # Same idea as the homing sweep above, but timed per move from the
-        # distance it was actually commanded to cover (tracked from one
-        # fresh poll at run start, then advanced by each move's own target
-        # -- see _on_routine_step_motion) and its own feed rate, queued so
-        # a burst of near-instant simulated steps still plays back one at a
-        # time instead of overlapping.
         self._routine_anim_timer = QTimer(self)
         self._routine_anim_timer.setInterval(_HOMING_ANIM_INTERVAL_MS)
         self._routine_anim_timer.timeout.connect(self._tick_routine_animation)
-        self._routine_anim_queue: list = []   # pending (before, after, duration) legs
-        self._routine_anim_leg = None         # currently-playing (before, after, duration, t0)
-        self._routine_display_pos: dict = {}  # last-known position, advanced leg by leg
-        self._routine_run_active = False      # True while a routine Run/Step session is active
+        self._routine_anim_queue: list = []
+        self._routine_anim_leg = None
+        self._routine_display_pos: dict = {}
+        self._routine_run_active = False
 
         self.setFocusPolicy(Qt.StrongFocus)
         self.conn_bar.set_status("disconnected")
 
-    # -- connect / disconnect ---------------------------------------------------
     def _on_connect_requested(self, opts: dict) -> None:
         self.conn_bar.set_status("connecting")
         try:
             cfg = None
             if opts.get("config_path"):
-                # resolve_robot_config follows any split-file references
-                # (axes/calibration/deck/tips/labware/mounts each given as a
-                # path to their own YAML rather than inline -- see
-                # config/loader.py) so a split config and an inline,
-                # single-file one both land here as the same fully-inline
-                # dict build_robot expects.
                 cfg = resolve_robot_config(opts["config_path"])
-                # A calibration persisted from a previous "Save calibration"
-                # (see calibration_dialog.py / config.loader's
-                # calibration_sidecar_path) always wins over the config
-                # file's own calibration: -- that's the whole point of
-                # persisting it, so recalibrating once means never redoing
-                # it on a later connect with this same config.
                 override = load_calibration_override(opts["config_path"])
                 if override is not None:
                     cfg = {**cfg, "calibration": override}
@@ -237,12 +204,14 @@ class MainWindow(QMainWindow):
         self.tracer = CommandTracer(robot)
         self.tracer.bus.event.connect(self.console.append_trace)
         self.jog = JogController(robot)
-        self.jog.__enter__()   # relative-mode session for the whole connection
+        self.jog.__enter__()
 
         mode_label = "simulated" if opts["mode"] == "sim" else f"{opts['port']} @ {opts['baud']}"
         self.conn_bar.set_status("connected", f"connected · {mode_label}")
-        logger.info(f"connected ({mode_label})" +
-                    (f" · config: {opts['config_path']}" if opts.get("config_path") else ""))
+        logger.info(
+            f"connected ({mode_label})"
+            + (f" · config: {opts['config_path']}" if opts.get("config_path") else "")
+        )
         if robot.controller.banner:
             logger.info("banner: " + " | ".join(robot.controller.banner))
 
@@ -310,7 +279,7 @@ class MainWindow(QMainWindow):
             start_pos = {}
         try:
             self.robot.home()
-            self.robot.controller.set_relative()   # home() leaves G90; restore ambient jog mode
+            self.robot.controller.set_relative()  # home() leaves G90; restore ambient jog mode
             logger.info("homed")
         except Exception as exc:
             logger.error(f"home failed: {exc}")
@@ -372,7 +341,7 @@ class MainWindow(QMainWindow):
         if elapsed >= total:
             self._homing_anim_timer.stop()
             self._position_timer.start()
-            self._poll_position()   # reconcile the display with the real (homed) position
+            self._poll_position()  # reconcile the display with the real (homed) position
 
     def _on_estop_requested(self) -> None:
         if self.robot is None:
@@ -382,11 +351,14 @@ class MainWindow(QMainWindow):
         try:
             self.robot.emergency_stop()
             logger.warning("EMERGENCY STOP")
-            QMessageBox.critical(self, "Emergency stop",
-                                "Emergency stop sent. Home all axes before resuming motion.")
+            QMessageBox.critical(
+                self, "Emergency stop", "Emergency stop sent. Home all axes before resuming motion."
+            )
         except Exception as exc:
             logger.error(f"EMERGENCY STOP FAILED: {exc}")
-            QMessageBox.critical(self, "Emergency stop failed", f"Could not send emergency stop: {exc}")
+            QMessageBox.critical(
+                self, "Emergency stop failed", f"Could not send emergency stop: {exc}"
+            )
 
     # -- routine run <-> manual lock -------------------------------------------
     def _on_routine_run_state_changed(self, active: bool) -> None:
@@ -510,7 +482,7 @@ class MainWindow(QMainWindow):
                 self._advance_routine_animation()
                 return
             self._routine_anim_leg = ("move", before, after, duration, time.monotonic())
-        else:   # "home"
+        else:  # "home"
             _, schedule = leg
             if schedule[-1][3] <= 0:
                 display = {**self._routine_display_pos, **{axis: 0 for axis, *_ in schedule}}
@@ -534,7 +506,7 @@ class MainWindow(QMainWindow):
                 end = after.get(axis, start)
                 display[axis] = int(round(start + (end - start) * frac))
             finished = frac >= 1.0
-        else:   # "home"
+        else:  # "home"
             _, schedule, t0 = self._routine_anim_leg
             elapsed = time.monotonic() - t0
             total = schedule[-1][3]
@@ -610,7 +582,9 @@ class MainWindow(QMainWindow):
             self.deck_view.update_positions({})
             return
         try:
-            gx, gy = self.robot.calibration.motor_to_deck_xy(pos.get(AxisId.X, 0), pos.get(AxisId.Y, 0))
+            gx, gy = self.robot.calibration.motor_to_deck_xy(
+                pos.get(AxisId.X, 0), pos.get(AxisId.Y, 0)
+            )
         except Exception:
             self.deck_view.update_positions({})
             return
@@ -629,7 +603,7 @@ class MainWindow(QMainWindow):
         for name, lw in self.robot.labware.items():
             slot = lw.slot.name if lw.slot else "?"
             self.labware_list.addItem(f"S{slot} · {name} ({len(lw.wells)} wells)")
-        self.routine_builder.set_robot(self.robot)   # refresh labware/well choices
+        self.routine_builder.set_robot(self.robot)  # refresh labware/well choices
 
     def _refresh_mounts_list(self) -> None:
         self.mounts_list.clear()

@@ -5,7 +5,7 @@ configs/deck.yaml's deck.calibration_marks comment)."""
 import pytest
 
 from src.config.loader import build_deck
-from src.deck import Corner, Slot, corner_point, inset_corner_point
+from src.deck import Corner, Deck, Slot, corner_point, inset_corner_point
 from src.geometry import DeckPoint
 
 #: The 8 confirmed marks from configs/deck.yaml's deck.calibration_marks,
@@ -86,3 +86,34 @@ def test_build_deck_calibration_marks_from_config():
 def test_build_deck_without_calibration_marks_section():
     deck = build_deck({"slots": [{"name": "1", "x": 0, "y": 0, "size": [127.85, 85.9]}]})
     assert deck.calibration_marks == {}
+
+
+# -- Deck.grid ----------------------------------------------------------
+def test_deck_grid_default_numeric_names_and_row_major_pitch():
+    deck = Deck.grid(rows=2, cols=3, origin=DeckPoint(10, 20), pitch=(100.0, 50.0))
+    # Row-major numbering starting at "1", advancing across columns first.
+    assert set(deck.slots) == {"1", "2", "3", "4", "5", "6"}
+    assert deck["1"].origin == DeckPoint(10, 20)
+    assert deck["2"].origin == DeckPoint(110, 20)  # +1 col -> +pitch[0] in x
+    assert deck["3"].origin == DeckPoint(210, 20)
+    assert deck["4"].origin == DeckPoint(10, 70)  # +1 row -> +pitch[1] in y, back to col 0
+    assert deck["6"].origin == DeckPoint(210, 70)
+
+
+def test_deck_grid_explicit_names():
+    deck = Deck.grid(
+        rows=1,
+        cols=2,
+        origin=DeckPoint(0, 0),
+        pitch=(137.0, 95.0),
+        names=["left", "right"],
+    )
+    assert set(deck.slots) == {"left", "right"}
+    assert deck["left"].origin == DeckPoint(0, 0)
+    assert deck["right"].origin == DeckPoint(137.0, 0)
+
+
+def test_deck_grid_slots_have_no_footprint_by_default():
+    deck = Deck.grid(rows=1, cols=1, origin=DeckPoint(0, 0), pitch=(100.0, 100.0))
+    # Deck.grid only positions slots; it does not assign a footprint size.
+    assert deck["1"].size == (0.0, 0.0)

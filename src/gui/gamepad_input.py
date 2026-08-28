@@ -1,17 +1,7 @@
-"""Gamepad polling for manual jog.
-
-Adapted from scripts/gamepad_control.py's GamepadTeleop -- same axis
-indices and button legend (see that module's docstring for the hardware
-caveats) -- but emitting a continuous signed speed per axis (stick/trigger
-deflection -> JogController.begin_jog's speed argument) rather than driving
-a Robot directly. This class is a pure input source; ManualControlPanel
-decides what each signal means.
-"""
 from __future__ import annotations
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-# Both sticks fully (X, Y) before the triggers -- see gamepad_control.py's docstring.
 AXIS_LEFT_STICK_X = 0
 AXIS_LEFT_STICK_Y = 1
 AXIS_RIGHT_STICK_Y = 3
@@ -21,7 +11,7 @@ AXIS_RIGHT_TRIGGER = 5
 DEADZONE = 0.2
 TRIGGER_DEADZONE = 0.12
 POLL_HZ = 30.0
-_SPEED_EPSILON = 0.02   # matches JogController.begin_jog's own restart tolerance
+_SPEED_EPSILON = 0.02
 
 
 def _normalized(raw: float, deadzone: float) -> float:
@@ -31,29 +21,13 @@ def _normalized(raw: float, deadzone: float) -> float:
 
 
 def _trigger_fraction(raw: float) -> float:
-    """SDL2 commonly reports triggers as -1.0 (released) .. 1.0 (pressed)."""
     return max(0.0, min(1.0, (raw + 1.0) / 2.0))
 
 
-#: JOYBUTTONDOWN/UP button index -> name matching a drawable region on
-#: _ControllerStage (face-button circle, shoulder-bumper rect, or hub-
-#: button circle) -- see GamepadInput._handle_button's own comments for
-#: the full button legend. "minus"/"plus" are _ControllerStage's names for
-#: the same Back/View(6)/Start-Menu(7) hub buttons already bound to
-#: home_requested/estop_requested there -- button 7's glyph was originally
-#: guessed as "square" (matching the old panel's square_circle icon for
-#: this same action) but confirmed by testing to actually be the "+"
-#: glyph on this hardware. Two hub buttons in the illustration
-#: ("square"/"start") have no known index on this hardware and are
-#: deliberately left unmapped here -- see _ControllerStage's own
-#: _HIGHLIGHT_NAMES comment.
 _HIGHLIGHT_BUTTONS = {0: "A", 1: "B", 2: "X", 3: "Y", 4: "LB", 5: "RB", 6: "minus", 7: "plus"}
 
 
 class GamepadInput(QObject):
-    #: "x"/"y"/"z"/"plunger", signed speed in [-1, 1] -- 0 means centered/
-    #: released (stop); ManualControlPanel maps nonzero straight onto
-    #: JogController.begin_jog(..., speed=abs(value)) and 0 onto end_jog().
     axis_speed_changed = pyqtSignal(str, float)
     mount_toggle_requested = pyqtSignal()
     home_requested = pyqtSignal()
@@ -62,22 +36,10 @@ class GamepadInput(QObject):
     step_cycle_requested = pyqtSignal(int)
     read_sensor_requested = pyqtSignal()
     zero_z_requested = pyqtSignal()
-    tip_action_requested = pyqtSignal(str)   # "pickup"/"eject"
+    tip_action_requested = pyqtSignal(str)
     status = pyqtSignal(str)
-    #: connected, device name ("" while disconnected) -- e.g. "8BitDo
-    #: Ultimate 2C Wireless Controller", straight from SDL/pygame's own
-    #: Joystick.get_name().
     connected_changed = pyqtSignal(bool, str)
-    #: "A"/"B"/"X"/"Y"/"LB"/"RB"/"minus"/"plus"/"dpad_up"/"dpad_down"/
-    #: "dpad_left"/"dpad_right", True while held -- purely visual, drives
-    #: _ControllerStage.set_button_pressed via ManualControlPanel so the
-    #: on-screen pad lights up the region actually being pressed.
     button_highlight_changed = pyqtSignal(str, bool)
-    #: "LT"/"RT", magnitude in [0, 1] -- purely visual, drives
-    #: _ControllerStage.set_trigger_level so the shoulder illustration
-    #: fills proportionally to how far the trigger is actually pressed.
-    #: Independent of the "plunger" axis's ambiguous-both-pressed refusal
-    #: (see _poll_unsafe) -- this reflects raw trigger position regardless.
     trigger_changed = pyqtSignal(str, float)
 
     def __init__(self, parent=None):
@@ -109,13 +71,6 @@ class GamepadInput(QObject):
         self._pad = None
         self.status.emit("waiting for a gamepad...")
         self.connected_changed.emit(False, "")
-        # Poll continuously from here rather than checking get_count() once
-        # and giving up: right after joystick.init() SDL often hasn't
-        # actually enumerated attached devices yet (needs an event pump
-        # cycle -- see _try_attach), and a one-shot check also meant a
-        # gamepad plugged in *after* switching to this tab was never
-        # detected at all. This way it attaches the moment one shows up,
-        # whether it was already plugged in or shows up later.
         self._timer.start()
 
     def stop(self) -> None:
@@ -153,12 +108,6 @@ class GamepadInput(QObject):
             self.stop()
 
     def _try_attach(self) -> None:
-        """Look for a gamepad this tick -- called every poll while none is
-        attached yet, so one that's plugged in after this tab was opened
-        (or wasn't finished enumerating on the very first check) still gets
-        picked up. pygame.event.pump() is what actually lets SDL notice a
-        newly (or not-yet-fully) enumerated joystick; joystick.init() alone
-        doesn't guarantee get_count() is accurate on the same tick."""
         pygame = self._pygame
         pygame.event.pump()
         if pygame.joystick.get_count() == 0:
@@ -189,33 +138,28 @@ class GamepadInput(QObject):
         lt = pad.get_axis(AXIS_LEFT_TRIGGER) if n_axes > AXIS_LEFT_TRIGGER else -1.0
         rt = pad.get_axis(AXIS_RIGHT_TRIGGER) if n_axes > AXIS_RIGHT_TRIGGER else -1.0
 
-        # Raw, uncorrected sign for every axis here -- this is also what
-        # feeds the on-screen stick-indicator dot (see ManualControlPanel.
-        # _on_gamepad_axis), which needs to mirror the *physical* stick
-        # position, not any deck-coordinate correction. Positive x = right,
-        # positive y = down (down = Z+ on the right stick, this project's
-        # "descending increases microsteps" convention, matching
-        # gamepad_control.py's deliberate choice). Any correction needed to
-        # turn this raw deflection into the right *motor* direction (see
-        # e.g. manual_control.py's _GAMEPAD_JOG["x"]) belongs in
-        # ManualControlPanel, same as it already does for keyboard jogging.
         self._axis_tick("x", lx)
         self._axis_tick("y", ly)
         self._axis_tick("z", ry)
 
         lt_frac = _trigger_fraction(lt)
         rt_frac = _trigger_fraction(rt)
-        lt_speed = 0.0 if lt_frac < TRIGGER_DEADZONE else (lt_frac - TRIGGER_DEADZONE) / (1.0 - TRIGGER_DEADZONE)
-        rt_speed = 0.0 if rt_frac < TRIGGER_DEADZONE else (rt_frac - TRIGGER_DEADZONE) / (1.0 - TRIGGER_DEADZONE)
-        # Visual feedback only -- emitted regardless of the ambiguous-
-        # both-pressed refusal below, so the illustration always reflects
-        # where the triggers actually are.
+        lt_speed = (
+            0.0
+            if lt_frac < TRIGGER_DEADZONE
+            else (lt_frac - TRIGGER_DEADZONE) / (1.0 - TRIGGER_DEADZONE)
+        )
+        rt_speed = (
+            0.0
+            if rt_frac < TRIGGER_DEADZONE
+            else (rt_frac - TRIGGER_DEADZONE) / (1.0 - TRIGGER_DEADZONE)
+        )
         self._emit_trigger("LT", lt_speed)
         self._emit_trigger("RT", rt_speed)
         if lt_speed > 0 and rt_speed == 0:
-            self._emit_speed("plunger", +lt_speed)   # aspirate
+            self._emit_speed("plunger", +lt_speed)  # aspirate
         elif rt_speed > 0 and lt_speed == 0:
-            self._emit_speed("plunger", -rt_speed)   # dispense
+            self._emit_speed("plunger", -rt_speed)  # dispense
         else:
             self._emit_speed("plunger", 0.0)
 
@@ -228,9 +172,6 @@ class GamepadInput(QObject):
         self._emit_speed(name, sign * norm)
 
     def _emit_speed(self, name: str, signed: float) -> None:
-        """Emit only on a meaningful change -- every centered/idle poll
-        (30/sec) would otherwise re-emit 0.0 and make ManualControlPanel
-        call end_jog needlessly often."""
         last = self._last_speed[name]
         if signed == 0.0:
             if last != 0.0:
@@ -241,7 +182,6 @@ class GamepadInput(QObject):
             self.axis_speed_changed.emit(name, signed)
 
     def _emit_trigger(self, name: str, value: float) -> None:
-        """Same change-dedupe as _emit_speed, for trigger_changed."""
         last = self._last_trigger[name]
         if value == 0.0:
             if last != 0.0:
@@ -252,11 +192,11 @@ class GamepadInput(QObject):
             self.trigger_changed.emit(name, value)
 
     def _set_highlight(self, name_or_button: int | str, pressed: bool) -> None:
-        """Track+emit one named region's press state, de-duplicated against
-        what's already known -- both button indices (looked up against
-        _HIGHLIGHT_BUTTONS, silently ignored if unmapped e.g. LT/RT click)
-        and literal names (e.g. "dpad_up") are accepted."""
-        name = _HIGHLIGHT_BUTTONS.get(name_or_button) if isinstance(name_or_button, int) else name_or_button
+        name = (
+            _HIGHLIGHT_BUTTONS.get(name_or_button)
+            if isinstance(name_or_button, int)
+            else name_or_button
+        )
         if name is None:
             return
         was_pressed = name in self._pressed_highlights
@@ -269,29 +209,25 @@ class GamepadInput(QObject):
         self.button_highlight_changed.emit(name, pressed)
 
     def _handle_button(self, button: int) -> None:
-        if button == 7:      # Start/Menu
+        if button == 7:  # Start/Menu
             self.estop_requested.emit()
-        elif button == 0:    # A
+        elif button == 0:  # A
             self.quick_stop_requested.emit()
-        elif button == 1:    # B
+        elif button == 1:  # B
             self.read_sensor_requested.emit()
-        elif button == 2:    # X
+        elif button == 2:  # X
             self.zero_z_requested.emit()
-        elif button == 3:    # Y
+        elif button == 3:  # Y
             self.mount_toggle_requested.emit()
-        elif button == 4:    # LB
+        elif button == 4:  # LB
             self.tip_action_requested.emit("pickup")
-        elif button == 5:    # RB
+        elif button == 5:  # RB
             self.tip_action_requested.emit("eject")
-        elif button == 6:    # Back/View
+        elif button == 6:  # Back/View
             self.home_requested.emit()
 
     def _handle_hat(self, value: tuple) -> None:
         x, y = value
-        # Each arm of the illustration's d-pad cross highlights on its own
-        # (see _ControllerStage.paintEvent's dpad_up/down/left/right) -- a
-        # diagonal hat value (e.g. (1, 1)) lights two arms at once, same as
-        # the physical d-pad would register both directions.
         self._set_highlight("dpad_up", y == 1)
         self._set_highlight("dpad_down", y == -1)
         self._set_highlight("dpad_left", x == -1)
@@ -300,9 +236,6 @@ class GamepadInput(QObject):
             self.step_cycle_requested.emit(+1)
         elif y == -1:
             self.step_cycle_requested.emit(-1)
-        # Left/right cycle the same step size as up/down -- this app only
-        # has the one "step size" dial to adjust, so all four D-pad
-        # directions drive it rather than leaving two of them dead.
         if x == 1:
             self.step_cycle_requested.emit(+1)
         elif x == -1:

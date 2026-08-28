@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.core import AxisId, MountSide
 from src.geometry.calibration import DeckCalibration
 from src.geometry.coordinates import DeckPoint
@@ -124,3 +126,128 @@ def test_safe_move_to_does_not_drop_z_before_crossing_xy() -> None:
     assert move_lines, "expected at least one move"
     assert "Z" not in move_lines[0], f"first move must not touch Z, got {move_lines[0]}"
     assert "X" in move_lines[0] and "Y" in move_lines[0]
+
+
+# -- move_horizontal_to -------------------------------------------------------
+
+
+def test_move_horizontal_to_requires_calibration() -> None:
+    robot = Robot(SimulatedTransport())
+
+    with pytest.raises(RuntimeError, match="not calibrated"):
+        robot.move_horizontal_to(1.0, 2.0, MountSide.LEFT)
+
+
+def test_move_horizontal_to_moves_xy_without_touching_the_vertical_axis() -> None:
+    robot = _robot()
+    robot.connect()
+    robot.home()
+    sent = []
+    robot.controller.on_send = lambda line, command: sent.append(line.strip().upper())
+
+    robot.move_horizontal_to(10.0, 20.0, MountSide.LEFT)
+
+    move_lines = [ln for ln in sent if ln.startswith(("G0", "G1"))]
+    assert len(move_lines) == 1
+    assert "X" in move_lines[0] and "Y" in move_lines[0] and "Z" not in move_lines[0]
+
+
+def test_move_horizontal_to_verifies_by_default() -> None:
+    robot = _robot()
+    robot.connect()
+    robot.home()
+    calls = []
+    robot._await_settled = lambda *a, **k: calls.append((a, k))
+
+    robot.move_horizontal_to(10.0, 20.0, MountSide.LEFT)
+
+    assert calls, "expected _await_settled to be called by default"
+
+
+def test_move_horizontal_to_verify_false_skips_confirmation() -> None:
+    robot = _robot()
+    robot.connect()
+    robot.home()
+    calls = []
+    robot._await_settled = lambda *a, **k: calls.append((a, k))
+
+    robot.move_horizontal_to(10.0, 20.0, MountSide.LEFT, verify=False)
+
+    assert not calls, "verify=False must skip settling confirmation entirely"
+
+
+def test_move_horizontal_to_raises_when_target_is_outside_the_axis_travel_range() -> None:
+    """This calibration's xy transform (a=100, scale factor) blows the X
+    target well past the default X endstop_limit (62500 -- see
+    motion.axis.default_axis_configs) for a deck coordinate this large,
+    which _validate_targets must catch before anything is sent."""
+    robot = _robot()
+    robot.connect()
+
+    with pytest.raises(ValueError, match="outside its travel range"):
+        robot.move_horizontal_to(1000.0, 0.0, MountSide.LEFT)
+
+
+def test_move_horizontal_to_with_feed_sends_a_linear_move() -> None:
+    robot = _robot()
+    robot.connect()
+    robot.home()
+    sent = []
+    robot.controller.on_send = lambda line, command: sent.append(line.strip().upper())
+
+    robot.move_horizontal_to(10.0, 20.0, MountSide.LEFT, feed=600)
+
+    move_lines = [ln for ln in sent if ln.startswith(("G0", "G1"))]
+    assert len(move_lines) == 1
+    assert move_lines[0].startswith("G1"), "an explicit feed must use G1, not the G0 rapid default"
+    assert "F600" in move_lines[0]
+
+
+# -- explicit feed on move_to / move_vertical_to -------------------------------
+
+
+def test_move_to_with_feed_sends_linear_moves_for_both_legs() -> None:
+    """A small Z travel (home is 62.5mm here -- see _robot()'s z_zero
+    comment) and a high feed keep SimulatedTransport's wall-clock-timed G1
+    interpolation (see its own module docstring) fast and deterministic;
+    the point is confirming G1+F is used for both legs, not exercising
+    real-time motion."""
+    robot = _robot()
+    robot.connect()
+    robot.home()
+    sent = []
+    robot.controller.on_send = lambda line, command: sent.append(line.strip().upper())
+
+    robot.move_to(DeckPoint(10.0, 20.0, 62.0), MountSide.LEFT, feed=50_000)
+
+    move_lines = [ln for ln in sent if ln.startswith("G1")]
+    assert len(move_lines) == 2, f"expected both the XY leg and Z leg as G1, got {sent}"
+    assert all("F50000" in ln for ln in move_lines)
+
+
+def test_move_vertical_to_with_feed_sends_a_linear_move() -> None:
+    robot = _robot()
+    robot.connect()
+    robot.home()
+    sent = []
+    robot.controller.on_send = lambda line, command: sent.append(line.strip().upper())
+
+    robot.move_vertical_to(62.0, MountSide.LEFT, feed=50_000)  # small travel from the 62.5mm home
+
+    move_lines = [ln for ln in sent if ln.startswith(("G0", "G1"))]
+    assert len(move_lines) == 1
+    assert move_lines[0].startswith("G1")
+    assert "F50000" in move_lines[0]
+
+
+def test_move_vertical_to_raises_for_a_mount_with_no_vertical_axis() -> None:
+    """REAR has no vertical axis (DeckCalibration.vertical_axis returns None
+    for it). deck_to_motor's returned target dict therefore has no matching
+    key for `[axis]` to index with, so this currently surfaces as a
+    KeyError. Documents the actual current behavior as a regression guard --
+    not an endorsement that KeyError is the ideal error for this case."""
+    robot = _robot()
+    robot.connect()
+
+    with pytest.raises(KeyError):
+        robot.move_vertical_to(10.0, MountSide.REAR)

@@ -13,6 +13,8 @@ near-collision on real hardware:
 
 from __future__ import annotations
 
+import pytest
+
 from src.core import AxisId, MountSide
 from src.deck import Deck, Labware, Slot, SlotObstacle, Well, WellGeometry
 from src.geometry.calibration import DeckCalibration
@@ -119,6 +121,21 @@ def test_path_clearance_falls_back_when_current_position_unknown():
     assert clr == robot.travel_z_mm
 
 
+def test_slots_crossed_skips_dimensionless_slots():
+    """A named slot with no footprint (e.g. a calibration reference point
+    or dock with size left at its (0.0, 0.0) default) has nothing to
+    overlap a path bounding box with -- it must be excluded rather than
+    matching every path via a degenerate always-true overlap test."""
+    deck = Deck()
+    deck.add(Slot(name="1", origin=DeckPoint(0.0, 0.0), size=(50.0, 50.0)))
+    deck.add(Slot(name="dock", origin=DeckPoint(10.0, 10.0)))  # size defaults to (0.0, 0.0)
+    robot = Robot(SimulatedTransport(), deck=deck)
+
+    crossed = robot._slots_crossed((0.0, 0.0), (40.0, 40.0))
+
+    assert [s.name for s in crossed] == ["1"]
+
+
 def test_slot_top_height_considers_obstacles_and_walls_not_just_labware():
     deck = Deck()
     deck.add(
@@ -197,6 +214,36 @@ def test_move_to_and_raise_z_verify_by_default_too():
     assert calls, "raise_z should verify by default"
 
 
+# -- _current_deck_xy --------------------------------------------------------
+
+
+def test_current_deck_xy_returns_none_without_calibration():
+    robot = Robot(SimulatedTransport(), deck=Deck())
+
+    assert robot._current_deck_xy(MountSide.LEFT) is None
+
+
+def test_current_deck_xy_returns_none_when_axes_are_unhomed():
+    """Unhomed axes report -1 (SimulatedTransport's convention for "no
+    trustworthy position yet") -- _current_deck_xy must not translate that
+    into a bogus deck coordinate."""
+    robot = _robot_with_deck()
+    robot.connect()  # never homed
+
+    assert robot._current_deck_xy(MountSide.LEFT) is None
+
+
+def test_current_deck_xy_returns_the_deck_position_once_homed_and_moved():
+    robot = _robot_with_deck()
+    robot.connect()
+    robot.home()
+    robot.move_to(DeckPoint(12.0, 34.0, 5.0), MountSide.LEFT)
+
+    xy = robot._current_deck_xy(MountSide.LEFT)
+
+    assert xy == pytest.approx((12.0, 34.0), abs=0.1)
+
+
 # -- stall -> resend retries -------------------------------------------------
 #
 # Added after a real-hardware run confirmed a physical stall mid-routine
@@ -252,6 +299,26 @@ def test_await_settled_gives_up_after_max_resends():
         assert "2 retries" in str(exc)
 
     assert len(resend_calls) == 2
+
+
+def test_await_settled_times_out_while_still_moving_not_stalled():
+    """Distinct from the stall branch above: position keeps changing on
+    every poll (so the stall path never triggers), it just never reaches
+    the target before the overall timeout elapses -- e.g. a move toward an
+    unreachable target that's still genuinely, slowly, in progress."""
+    robot = _stub_robot()
+    state = {"pos": 0}
+
+    def report():
+        state["pos"] += 1
+        return {AxisId.X: state["pos"]}
+
+    robot.controller.report_position = report
+
+    with pytest.raises(TimeoutError, match="did not settle within"):
+        robot._await_settled(
+            {AxisId.X: 10_000}, timeout=0.05, poll_interval=0.005, stall_timeout=10.0
+        )
 
 
 def test_await_settled_no_resend_fails_immediately_on_stall():

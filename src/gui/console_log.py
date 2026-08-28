@@ -1,15 +1,10 @@
-"""Shared command/response console -- the one place every sent line, its
-reply, and any sensor reading show up, regardless of whether it came from a
-manual jog, a routine step, or calibration. Docked at the bottom of the main
-window so it stays visible no matter which right-hand tab is active."""
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QPlainTextEdit
 from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QPlainTextEdit
 
-from .trace import TraceEvent
 from . import style as S
-
+from .trace import TraceEvent
 
 _LEVEL_MARK = {"WARNING": "!", "ERROR": "✗", "CRITICAL": "✗", "SUCCESS": "✓"}
 
@@ -32,7 +27,5 @@ class ConsoleLog(QPlainTextEdit):
             self.appendPlainText(f"  → {'ok' if ev.ok else 'NOT ok'}")
 
     def append_log(self, level: str, message: str) -> None:
-        """Show one loguru record (see gui/log_sink.py) -- "#" for a plain
-        info/debug line, a level mark for anything more notable."""
         mark = _LEVEL_MARK.get(level, "#")
         self.appendPlainText(f"{mark} {message}")

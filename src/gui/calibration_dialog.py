@@ -1,47 +1,33 @@
-"""Calibration wizard.
-
-The deck<->motor XY affine (see geometry.transform.AffineTransform2D) is
-fit from a set of fixed, physically-marked reference points
-(``robot.deck.calibration_marks`` -- see configs/deck.yaml's
-``deck.calibration_marks`` comment and deck.deck.inset_corner_point): jog a
-chosen *reference mount* to touch each mark you want to use, capture, check
-its box, repeat for at least 3 (up to however many marks the deck has), then
-fit. Unlike the old free-typed-deck-mm convention, every mark's nominal
-deck (x, y) is fixed and known ahead of time -- the operator only supplies
-the motor position found there.
-
-Whichever mount is actually touching each point (the "reference mount")
-almost never sits exactly on the gantry's own shared X/Y reference point --
-see motion.mounts.MOUNT_OFFSET_MM -- so each captured deck point is shifted
-by that mount's known offset before fitting, exactly mirroring the math
-DeckCalibration.deck_to_motor uses at move time (see its _reference_xy
-docstring). Get this step wrong and every subsequent RIGHT-mount move would
-be off by the mount spacing again.
-
-A per-mount Z touch-off (jog the tip down onto a known-flat surface, then
-capture) finds that mount's nozzle-reference z_zero the same way
-JogController.capture_z_zero / DeckCalibration.touch_off_z_zero do, just
-walked through explicitly here since there may be no calibration yet for
-those to build on.
-
-"Save calibration..." persists to a *sidecar* file next to whatever config
-was used to connect (see config.loader.calibration_sidecar_path) rather
-than the config itself, so it never strips that file's own comments -- and
-connecting again with that same config picks the sidecar back up
-automatically (config.loader.load_calibration_override), so a recalibration
-survives a reconnect without the operator redoing anything.
-"""
 from __future__ import annotations
 
 import math
 
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
-                             QDoubleSpinBox, QPushButton, QGroupBox, QComboBox, QCheckBox,
-                             QScrollArea, QWidget, QDialogButtonBox, QMessageBox, QFileDialog)
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
-from ..core import AxisId, MountSide
 from ..config.loader import calibration_sidecar_path
-from ..geometry import AffineTransform2D, AxisScale, DeckCalibration, MICROSTEPS_PER_STEP
+from ..core import AxisId, MountSide
+from ..geometry import (
+    MICROSTEPS_PER_STEP,
+    AffineTransform2D,
+    AxisScale,
+    DeckCalibration,
+)
 from ..motion.mounts import MOUNT_OFFSET_MM
 
 _REF_MOUNT_CHOICES = (MountSide.LEFT, MountSide.RIGHT, MountSide.REAR)
@@ -49,9 +35,6 @@ _MIN_CALIBRATION_POINTS = 3
 
 
 def _mark_sort_key(name: str):
-    """Numeric marks (slot names like "1", "10") sort in slot order rather
-    than lexicographic ("1", "10", "3", ...); anything non-numeric falls
-    back to plain string order after all the numeric ones."""
     try:
         return (0, int(name))
     except ValueError:
@@ -69,7 +52,9 @@ class CalibrationDialog(QDialog):
         root = QVBoxLayout(self)
 
         ref_row = QHBoxLayout()
-        ref_row.addWidget(QLabel("Reference mount (the one you're jogging to touch each point below):"))
+        ref_row.addWidget(
+            QLabel("Reference mount (the one you're jogging to touch each point below):")
+        )
         self.ref_mount_combo = QComboBox()
         self.ref_mount_combo.addItems([s.value for s in _REF_MOUNT_CHOICES])
         default_side = jog.side if jog is not None else MountSide.LEFT
@@ -78,14 +63,20 @@ class CalibrationDialog(QDialog):
         ref_row.addStretch(1)
         root.addLayout(ref_row)
 
-        xy_group = QGroupBox(f"XY calibration — select {_MIN_CALIBRATION_POINTS}+ deck reference marks")
+        xy_group = QGroupBox(
+            f"XY calibration — select {_MIN_CALIBRATION_POINTS}+ deck reference marks"
+        )
         xy_outer = QVBoxLayout(xy_group)
 
         self._mark_rows = []
         marks = getattr(robot.deck, "calibration_marks", None) if robot.deck is not None else None
         if not marks:
-            xy_outer.addWidget(QLabel("no calibration marks configured on this deck "
-                                      "(see deck.calibration_marks in the robot config)"))
+            xy_outer.addWidget(
+                QLabel(
+                    "no calibration marks configured on this deck "
+                    "(see deck.calibration_marks in the robot config)"
+                )
+            )
         else:
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
@@ -125,6 +116,7 @@ class CalibrationDialog(QDialog):
                     tip_length = self.robot.tip_offset(side)
                     state["contact"], state["tip_length"] = contact, tip_length
                     label.setText(f"contact {contact}  (tip {tip_length:.1f} mm)")
+
                 return capture
 
             btn.clicked.connect(make_zcapture())
@@ -134,16 +126,20 @@ class CalibrationDialog(QDialog):
             self._z_zero[side] = state
         root.addWidget(z_group)
 
-        note_text = ("Jog the reference mount's tip (or a dedicated calibration probe) down onto a "
-                    "known-flat reference surface before capturing its Z touch-off. For XY, jog the "
-                    "same mount to touch each mark you want to use, capture its motor position, and "
-                    "make sure its checkbox is ticked -- at least 3 captured, checked points are "
-                    "required before you can apply or save. \"Apply\" only affects this session; "
-                    "\"Save calibration...\" persists it")
-        note_text += (f" to {calibration_sidecar_path(self.config_path).name} next to the loaded "
-                      "config, so it's picked up automatically the next time you connect with it."
-                      if self.config_path else
-                      " to a file -- connect with a config to have it picked up automatically next time.")
+        note_text = (
+            "Jog the reference mount's tip (or a dedicated calibration probe) down onto a "
+            "known-flat reference surface before capturing its Z touch-off. For XY, jog the "
+            "same mount to touch each mark you want to use, capture its motor position, and "
+            "make sure its checkbox is ticked -- at least 3 captured, checked points are "
+            'required before you can apply or save. "Apply" only affects this session; '
+            '"Save calibration..." persists it'
+        )
+        note_text += (
+            f" to {calibration_sidecar_path(self.config_path).name} next to the loaded "
+            "config, so it's picked up automatically the next time you connect with it."
+            if self.config_path
+            else " to a file -- connect with a config to have it picked up automatically next time."
+        )
         note = QLabel(note_text)
         note.setWordWrap(True)
         note.setProperty("class", "eyebrow")
@@ -156,7 +152,6 @@ class CalibrationDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
-    # -- one row per configured calibration mark -------------------------
     def _make_mark_row(self, mark) -> QHBoxLayout:
         row = QHBoxLayout()
         corner_label = mark.corner.value.replace("_", "-")
@@ -186,17 +181,11 @@ class CalibrationDialog(QDialog):
         self._mark_rows.append({"mark": mark, "checkbox": checkbox, "state": state})
         return row
 
-    # -- shared by Apply and Save-to-file --------------------------------
     def _reference_points(self):
-        """(deck_pts, motor_pts) for the checked, captured marks, each deck
-        point shifted from "where the reference mount touched" to "what the
-        gantry's own shared reference point was" -- see
-        DeckCalibration._reference_xy for the matching math this mirrors.
-        Returns (None, None) (after warning the operator why) if fewer than
-        _MIN_CALIBRATION_POINTS marks are checked-and-captured."""
         if not self._mark_rows:
-            QMessageBox.warning(self, "No calibration marks",
-                                "this deck has no calibration_marks configured")
+            QMessageBox.warning(
+                self, "No calibration marks", "this deck has no calibration_marks configured"
+            )
             return None, None
 
         side = MountSide(self.ref_mount_combo.currentText())
@@ -204,13 +193,15 @@ class CalibrationDialog(QDialog):
         checked = [r for r in self._mark_rows if r["checkbox"].isChecked()]
         missing = [r["mark"].name for r in checked if r["state"]["motor"] is None]
         if missing:
-            QMessageBox.warning(self, "Incomplete",
-                                "capture motor XY for: " + ", ".join(missing))
+            QMessageBox.warning(self, "Incomplete", "capture motor XY for: " + ", ".join(missing))
             return None, None
         if len(checked) < _MIN_CALIBRATION_POINTS:
-            QMessageBox.warning(self, "Not enough points",
-                                f"select at least {_MIN_CALIBRATION_POINTS} calibration marks "
-                                f"({len(checked)} checked)")
+            QMessageBox.warning(
+                self,
+                "Not enough points",
+                f"select at least {_MIN_CALIBRATION_POINTS} calibration marks "
+                f"({len(checked)} checked)",
+            )
             return None, None
 
         deck_pts = [(r["mark"].point.x - ox, r["mark"].point.y - oy) for r in checked]
@@ -219,44 +210,22 @@ class CalibrationDialog(QDialog):
 
     def _z_zero_microsteps(self) -> dict:
         z_scale = AxisScale(steps_per_mm=self.z_steps_per_mm.value())
-        return {side: int(z_scale.to_microsteps(state["tip_length"]) + state["contact"])
-                for side, state in self._z_zero.items() if state["contact"] is not None}
+        return {
+            side: int(z_scale.to_microsteps(state["tip_length"]) + state["contact"])
+            for side, state in self._z_zero.items()
+            if state["contact"] is not None
+        }
 
     def _fit_residual_report(self, xy: AffineTransform2D, deck_pts, motor_pts) -> str:
-        """How well `xy` reproduces its OWN input points: run each captured
-        motor position back through the inverse transform and compare to
-        the deck point it was fit against. Exactly 0mm for exactly 3
-        points (they determine the fit precisely); nonzero for 4+ means
-        the marks disagree with each other under a single affine map --
-        e.g. a jog didn't land precisely on one mark.
-
-        This can NOT catch every marks' assumed nominal position being off
-        by the same consistent scale (they're all internally consistent
-        with each other in that case, since they all come from the same
-        deck.calibration_marks geometry) -- see _scale_sanity_check for
-        that class of error, which this dialog's real-world moves were
-        showing (see its module docstring)."""
         inv = xy.inverse()
-        errors = [math.hypot(*(a - b for a, b in zip(inv.apply(*motor), deck)))
-                 for deck, motor in zip(deck_pts, motor_pts)]
+        errors = [
+            math.hypot(*(a - b for a, b in zip(inv.apply(*motor), deck)))
+            for deck, motor in zip(deck_pts, motor_pts)
+        ]
         rms = math.sqrt(sum(e * e for e in errors) / len(errors))
         return f"fit residual: {rms:.2f} mm RMS, {max(errors):.2f} mm worst-case, {len(errors)} point(s)"
 
     def _scale_sanity_check(self, xy: AffineTransform2D) -> str | None:
-        """Compare the fit's own implied microsteps-per-mm (from its a/b/c/d
-        coefficients -- the length of the transformed unit deck-x/deck-y
-        vectors) against each axis's independently-measured steps_per_mm
-        (AxisConfig, from a full-travel measurement -- see
-        geometry.units.MEASURED_AXIS_TRAVEL_MM / the robot config's own
-        axes: overrides). These come from two unrelated measurements, so
-        they should roughly agree. A consistent percentage mismatch on
-        BOTH axes -- as opposed to noisy per-point residuals -- points at
-        deck.calibration_marks' (or deck.slots') assumed geometry not
-        matching the physical deck, not a fit or code defect: every mark's
-        nominal position is derived from that same assumed geometry, so
-        they're all self-consistent with each other even when that whole
-        geometry is off. None if either axis has no configured
-        steps_per_mm to compare against, or both agree within 2%."""
         x_axis, y_axis = self.robot.axes.get(AxisId.X), self.robot.axes.get(AxisId.Y)
         if x_axis is None or y_axis is None:
             return None
@@ -270,12 +239,14 @@ class CalibrationDialog(QDialog):
         dy_pct = (fit_y / axis_y_scale - 1) * 100
         if abs(dx_pct) < 2 and abs(dy_pct) < 2:
             return None
-        return (f"note: this fit implies {fit_x:.2f}/{fit_y:.2f} steps/mm (X/Y) vs. the axis "
-               f"config's {axis_x_scale:.2f}/{axis_y_scale:.2f} ({dx_pct:+.1f}% / {dy_pct:+.1f}%). "
-               "A consistent mismatch on both axes usually means the calibration marks' assumed "
-               "deck geometry (deck.calibration_marks / deck.slots in the robot config) doesn't "
-               "match the physical deck -- verify the marks' real positions with calipers, or "
-               "recalibrate with more/further-spread marks.")
+        return (
+            f"note: this fit implies {fit_x:.2f}/{fit_y:.2f} steps/mm (X/Y) vs. the axis "
+            f"config's {axis_x_scale:.2f}/{axis_y_scale:.2f} ({dx_pct:+.1f}% / {dy_pct:+.1f}%). "
+            "A consistent mismatch on both axes usually means the calibration marks' assumed "
+            "deck geometry (deck.calibration_marks / deck.slots in the robot config) doesn't "
+            "match the physical deck -- verify the marks' real positions with calipers, or "
+            "recalibrate with more/further-spread marks."
+        )
 
     def _apply(self) -> None:
         deck_pts, motor_pts = self._reference_points()
@@ -288,10 +259,15 @@ class CalibrationDialog(QDialog):
             return
 
         z_scale = AxisScale(steps_per_mm=self.z_steps_per_mm.value())
-        self.robot.calibration = DeckCalibration(xy=xy, z_scale=z_scale, z_zero=self._z_zero_microsteps())
+        self.robot.calibration = DeckCalibration(
+            xy=xy, z_scale=z_scale, z_zero=self._z_zero_microsteps()
+        )
 
-        lines = ["Deck calibration updated for this session.",
-                "", self._fit_residual_report(xy, deck_pts, motor_pts)]
+        lines = [
+            "Deck calibration updated for this session.",
+            "",
+            self._fit_residual_report(xy, deck_pts, motor_pts),
+        ]
         scale_note = self._scale_sanity_check(xy)
         if scale_note:
             lines += ["", scale_note]
@@ -301,16 +277,14 @@ class CalibrationDialog(QDialog):
         deck_pts, motor_pts = self._reference_points()
         if deck_pts is None:
             return
-        # Default to the sidecar path for whatever config we connected
-        # with, so accepting the dialog's default is enough to make this
-        # calibration reload automatically next connect (see
-        # config.loader.calibration_sidecar_path / load_calibration_override
-        # and this class's docstring) -- falls back to a bare filename if
-        # there's no known config (e.g. connected without one).
-        default_path = (str(calibration_sidecar_path(self.config_path))
-                        if self.config_path else "calibration.yaml")
-        path, _ = QFileDialog.getSaveFileName(self, "Save calibration", default_path,
-                                              "YAML files (*.yaml *.yml)")
+        default_path = (
+            str(calibration_sidecar_path(self.config_path))
+            if self.config_path
+            else "calibration.yaml"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save calibration", default_path, "YAML files (*.yaml *.yml)"
+        )
         if not path:
             return
         data = {
@@ -320,22 +294,29 @@ class CalibrationDialog(QDialog):
                     "motor": [list(m) for m in motor_pts],
                 },
                 "z_scale": {"steps_per_mm": self.z_steps_per_mm.value()},
-                "z_zero": {side.value: msteps for side, msteps in self._z_zero_microsteps().items()},
+                "z_zero": {
+                    side.value: msteps for side, msteps in self._z_zero_microsteps().items()
+                },
             }
         }
         try:
             import yaml  # lazy dependency, matches config/loader.py's own convention
+
             with open(path, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(data, fh, sort_keys=False)
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
             return
         from pathlib import Path
-        is_sidecar = (self.config_path is not None
-                     and Path(path) == calibration_sidecar_path(self.config_path))
-        detail = ("It will be picked up automatically next time you connect with this config."
-                  if is_sidecar else
-                  "Load it later via the connection bar's config path field, or move/rename it to "
-                  f"{calibration_sidecar_path(self.config_path).name if self.config_path else '<config>.calibration.yaml'} "
-                  "next to your robot config to have it load automatically.")
+
+        is_sidecar = self.config_path is not None and Path(path) == calibration_sidecar_path(
+            self.config_path
+        )
+        detail = (
+            "It will be picked up automatically next time you connect with this config."
+            if is_sidecar
+            else "Load it later via the connection bar's config path field, or move/rename it to "
+            f"{calibration_sidecar_path(self.config_path).name if self.config_path else '<config>.calibration.yaml'} "
+            "next to your robot config to have it load automatically."
+        )
         QMessageBox.information(self, "Calibration saved", f"Wrote {path}\n\n{detail}")

@@ -1,22 +1,27 @@
-"""Top bar: connect to a simulated or real controller, home, and the
-always-visible e-stop. Pinned at the top of the main window regardless of
-which tab/panel is active below, per the "E-stop & connection pinned
-top-right always" direction from the original wireframe sketch."""
 from __future__ import annotations
+
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton, QComboBox, QSpinBox,
-                             QLineEdit, QCheckBox, QFileDialog, QButtonGroup, QFrame)
+from PyQt5.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSpinBox,
+    QWidget,
+)
 
 from . import icon_utils
 from . import style as S
 from .tokens import TOKENS
 
-#: Anchored to this file's own location (src/gui/), not the process cwd --
-#: three .parent hops up (gui -> src -> project root) reaches the /configs
-#: split-file layout (see config/loader.py's resolve_robot_config).
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent.parent / "configs" / "robot.yaml"
 _ICON_SIZE = QSize(16, 16)
 _INK = QColor(*TOKENS["flat_text"][:3])
@@ -31,7 +36,7 @@ _STATUS_COLORS = {
 
 
 class ConnectionBar(QWidget):
-    connect_requested = pyqtSignal(dict)   # {mode, port, baud, config_path|None}
+    connect_requested = pyqtSignal(dict)  # {mode, port, baud, config_path|None}
     disconnect_requested = pyqtSignal()
     home_requested = pyqtSignal()
     estop_requested = pyqtSignal()
@@ -126,7 +131,6 @@ class ConnectionBar(QWidget):
         self._refresh_ports()
         self._set_mode("sim")
 
-    # -- helpers ----------------------------------------------------------
     def _vline(self) -> QFrame:
         line = QFrame()
         line.setFrameShape(QFrame.VLine)
@@ -142,6 +146,7 @@ class ConnectionBar(QWidget):
     def _refresh_ports(self) -> None:
         try:
             from serial.tools import list_ports
+
             ports = [p.device for p in list_ports.comports()]
         except Exception:
             ports = []
@@ -152,8 +157,9 @@ class ConnectionBar(QWidget):
             self.port_combo.setEditText(current)
 
     def _browse_config(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Robot config", str(_DEFAULT_CONFIG.parent),
-                                              "YAML files (*.yaml *.yml)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Robot config", str(_DEFAULT_CONFIG.parent), "YAML files (*.yaml *.yml)"
+        )
         if path:
             self.config_edit.setText(path)
             self.config_check.setChecked(True)
@@ -163,27 +169,48 @@ class ConnectionBar(QWidget):
             self.disconnect_requested.emit()
             return
         mode = "real" if self.btn_real.isChecked() else "sim"
-        self.connect_requested.emit({
-            "mode": mode,
-            "port": self.port_combo.currentText().strip(),
-            "baud": self.baud_spin.value(),
-            "config_path": self.config_edit.text().strip() if self.config_check.isChecked() else None,
-        })
+        self.connect_requested.emit(
+            {
+                "mode": mode,
+                "port": self.port_combo.currentText().strip(),
+                "baud": self.baud_spin.value(),
+                "config_path": (
+                    self.config_edit.text().strip() if self.config_check.isChecked() else None
+                ),
+            }
+        )
 
-    # -- state driven by MainWindow ---------------------------------------
     def set_status(self, state: str, message: str = "") -> None:
         color = _STATUS_COLORS.get(state, _STATUS_COLORS["disconnected"])
         self.status_dot.setStyleSheet(f"color: {color}; font-size: 14px;")
-        labels = {"disconnected": "not connected", "connecting": "connecting…",
-                 "connected": "connected", "error": "connection error"}
+        labels = {
+            "disconnected": "not connected",
+            "connecting": "connecting…",
+            "connected": "connected",
+            "error": "connection error",
+        }
         self.status_text.setText(message or labels.get(state, state))
 
         connected = state == "connected"
         self.btn_connect.setText("Disconnect" if connected else "Connect")
         self.btn_connect.setEnabled(state != "connecting")
-        for w in (self.btn_sim, self.btn_real, self.port_combo, self.baud_spin,
-                 self.btn_refresh, self.config_check, self.config_edit, self.btn_browse):
-            w.setEnabled((not connected) and state != "connecting" and
-                        (w not in (self.port_combo, self.btn_refresh, self.baud_spin) or self.btn_real.isChecked()))
+        for w in (
+            self.btn_sim,
+            self.btn_real,
+            self.port_combo,
+            self.baud_spin,
+            self.btn_refresh,
+            self.config_check,
+            self.config_edit,
+            self.btn_browse,
+        ):
+            w.setEnabled(
+                (not connected)
+                and state != "connecting"
+                and (
+                    w not in (self.port_combo, self.btn_refresh, self.baud_spin)
+                    or self.btn_real.isChecked()
+                )
+            )
         self.btn_home.setEnabled(connected)
         self.btn_estop.setEnabled(connected)
