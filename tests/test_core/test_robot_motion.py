@@ -23,8 +23,13 @@ def _robot() -> Robot:
     # _await_settled would poll forever for a raw position this
     # calibration can legitimately ask for but the simulated hardware's default
     # ceiling can't reach. Widened here to match this test's own numbers,
-    # not a real safety limit.
-    return Robot(SimulatedTransport(axis_limits={"Z": 300_000}), calibration=calibration)
+    # not a real safety limit. Robot._validate_targets checks the same
+    # range on robot.axes directly, independent of the simulated transport,
+    # so it needs widening here too -- otherwise every move in this file
+    # would raise ValueError before SimulatedTransport is ever reached.
+    robot = Robot(SimulatedTransport(axis_limits={"Z": 300_000}), calibration=calibration)
+    robot.axes[AxisId.Z].config.endstop_limit = 300_000
+    return robot
 
 
 def test_move_to_sends_xy_before_z() -> None:

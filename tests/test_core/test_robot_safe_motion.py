@@ -52,6 +52,12 @@ def _robot_with_deck(*, travel_z_mm: float = 30.0) -> Robot:
         deck=deck,
         travel_z_mm=travel_z_mm,
     )
+    # Robot._validate_targets checks robot.axes' own endstop_limit
+    # independently of SimulatedTransport's axis_limits above -- widen both
+    # in lockstep, or every move in this file raises ValueError before the
+    # simulated transport is ever reached.
+    for axis, limit in ((AxisId.X, 500_000), (AxisId.Y, 500_000), (AxisId.Z, 800_000)):
+        robot.axes[axis].config.endstop_limit = limit
     robot.load_labware(_labware("source", 10.0), "1", key="source")
     robot.load_labware(_labware("tall_obj", 80.0), "2", key="tall_obj")
     robot.load_labware(_labware("dest", 10.0), "3", key="dest")

@@ -1,3 +1,24 @@
+"""Axis configuration and runtime state for robot motion control.
+
+This module defines the static configuration and runtime state abstractions
+used by the motion layer to represent individual controller axes.
+
+:class:`AxisConfig` contains the hardware- and firmware-dependent parameters
+for an axis, including travel limits, homing behavior, motion speeds,
+acceleration, endstop characteristics, optional unit scaling, and measured
+resonance bands. Keeping these values in configuration objects allows the
+motion implementation to remain independent of machine-specific constants.
+
+:class:`Axis` wraps an :class:`AxisConfig` with mutable runtime state,
+including whether the axis has been homed and its most recently known
+controller position.
+
+The module also provides :data:`HOMING_ORDER`, the application-level axis
+ordering used when sequencing homing-related UI or control operations, and
+:func:`default_axis_configs`, which constructs the reference firmware
+configuration for all supported axes.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,63 +29,107 @@ from ..geometry.units import default_axis_scale
 
 @dataclass
 class AxisConfig:
-    """Static configuration for one axis. Load these from YAML/JSON so no
-    magic numbers live in code. The defaults below mirror the firmware."""
+    """Static hardware and motion configuration for one controller axis.
+
+    Axis configuration contains the parameters required to safely operate and
+    home an axis. These values are intended to be loaded from external
+    configuration such as YAML or JSON rather than hard-coded throughout the
+    motion implementation.
+
+    Attributes:
+        axis: Identifier of the configured axis.
+        endstop_limit: Maximum permitted position in microsteps according to
+            the controller's hard endstop limit.
+        homing_dir_forward: Whether the axis homes in the controller's
+            forward direction.
+        invert: Whether the axis direction is inverted relative to the
+            controller's nominal positive direction.
+        travel_speed: Default travel speed in microsteps per second.
+        homing_speed: Homing speed in microsteps per second.
+        travel_accel: Travel acceleration in microsteps per second squared.
+        endstop_bounce: Endstop debounce or bounce distance parameter in
+            controller units.
+        steps_per_mm: Optional conversion factor from millimeters to
+            microsteps. This is `None` for axes without a defined linear
+            scale.
+        resonance_bands_hz: Resonance frequency bands, represented as
+            `(low_hz, high_hz)` pairs in full motor-step frequency. Feed
+            rates falling within these bands should be avoided by the motion
+            profile logic.
+    """
 
     axis: AxisId
-    endstop_limit: int  # microsteps; hard ceiling (M201 can only tighten)
+    endstop_limit: int
     homing_dir_forward: bool
     invert: bool
-    travel_speed: float  # microsteps/s
+    travel_speed: float
     homing_speed: float
     travel_accel: float
     endstop_bounce: int
     steps_per_mm: float | None = None
-    #: (low_hz, high_hz) pairs, in FULL motor-step Hz (i.e. pre-microstepping
-    #: -- a stepper's rotor still detents/rings at the full-step rate
-    #: regardless of microstepping, which only smooths position *within* a
-    #: step), that make this axis vibrate/sound bad and should never be
-    #: commanded as a feed rate. Empty by default -- nobody has measured
-    #: this machine's actual resonant bands yet; see motion.resonance for
-    #: how these get avoided once populated (e.g. via configs/axes.yaml).
     resonance_bands_hz: tuple = ()
 
 
 @dataclass
 class Axis:
-    """Runtime state wrapper around an AxisConfig."""
+    """Axis configuration and runtime state for robot motion control.
+
+    This module defines the static configuration and runtime state abstractions
+    used by the motion layer to represent individual controller axes.
+
+    :class:`AxisConfig` contains the hardware- and firmware-dependent parameters
+    for an axis, including travel limits, homing behavior, motion speeds,
+    acceleration, endstop characteristics, optional unit scaling, and measured
+    resonance bands. Keeping these values in configuration objects allows the
+    motion implementation to remain independent of machine-specific constants.
+
+    :class:`Axis` wraps an :class:`AxisConfig` with mutable runtime state,
+    including whether the axis has been homed and its most recently known
+    controller position.
+
+    The module also provides :data:`HOMING_ORDER`, the application-level axis
+    ordering used when sequencing homing-related UI or control operations, and
+    :func:`default_axis_configs`, which constructs the reference firmware
+    configuration for all supported axes.
+    """
 
     config: AxisConfig
     homed: bool = False
-    position: int = 0  # last known microsteps (abs, as firmware reports)
+    position: int = 0
 
     @property
     def id(self) -> AxisId:
+        """Return the identifier of the configured axis.
+
+        Returns:
+            AxisId: Axis identifier associated with :attr:`config`.
+        """
         return self.config.axis
 
 
-#: The sequence the firmware homes axes in on a bare ``G28`` (see
-#: OT2-stepper-controller.ino's G28 handler). NOTE: the .ino file's own
-#: comment says "Homing order: A, Z, Y, X, B, C" but the code right below it
-#: actually calls home_stepper in the order A, Z, X, Y, B, C -- a real
-#: mismatch between the comment and what the firmware does. This constant
-#: follows the documented/intended order (A, Z, Y, X, B, C) since that's
-#: what was specified for the GUI's homing animation; it has no effect on
-#: real axis order (fixed in firmware) and is purely for sequencing the
-#: live-view animation to match operator expectations.
 HOMING_ORDER = (AxisId.A, AxisId.Z, AxisId.Y, AxisId.X, AxisId.B, AxisId.C)
+"""Application-level axis order used for homing sequences.
+
+This ordering follows the documented and intended homing sequence rather than
+the exact internal call order currently implemented by the reference
+firmware. It is used for application-level sequencing, such as live-view
+homing animations, and does not alter the firmware's own axis homing order
+when a bare `G28` command is issued.
+"""
 
 
 def default_axis_configs() -> dict:
-    """The six axes as configured in the reference firmware."""
-    # Matches firmware ENDSTOP_LIMITS[6] = {62500, 54000, 175000, 175000,
-    # 20000, 20000} (order X, Y, Z, A, B, C; OT2-stepper-controller.ino).
-    # X/Y/Z/A have been bumped in firmware more than once since this was
-    # last synced -- see firmware/CHANGELOG.md's 1.1.0-alpha ("Update motor
-    # max power, endstop limits, and homing speeds") and 1.1.2-alpha ("Y
-    # ENDSTOP LIMIT increased from 50000 to 54000") -- while this stayed at
-    # an older, unrelated set of values the whole time. B/C were never
-    # touched by either change and already matched.
+    """Construct the default configuration for all supported axes.
+
+    The returned configurations represent the reference motion-controller
+    firmware settings for the six supported axes. Linear axes X, Y, Z, and A
+    receive their corresponding `steps_per_mm` scale; B and C do not have a
+    defined linear scale and therefore use `None`.
+
+    Returns:
+        dict[AxisId, AxisConfig]: Mapping from each supported axis identifier
+        to its default :class:`AxisConfig`.
+    """
     limit = {
         AxisId.X: 62500,
         AxisId.Y: 54000,

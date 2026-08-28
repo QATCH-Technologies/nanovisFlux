@@ -1,28 +1,20 @@
-"""Stepper resonance-band avoidance.
+"""Utilities for avoiding configured mechanical stepper resonance bands.
 
-Every stepper motor has one or more mechanical resonant frequencies (tied
-to the motor/leadscrew/carriage system, not the driver electronics) where
-commanding it to step at that rate makes it ring audibly and vibrate badly
-instead of turning smoothly. This module doesn't measure or predict where
-those bands are for any particular machine -- it only nudges a computed
-feed rate away from bands that have been *configured* (see
-``motion.axis.AxisConfig.resonance_bands_hz``), leaving them empty (no
-avoidance at all) until someone actually characterizes the hardware.
+Stepper resonance occurs at machine-specific mechanical frequencies where a
+motor and its attached mechanics may vibrate or produce excessive noise. This
+module does not characterize or predict those frequencies. Instead, it
+provides utilities for avoiding resonance bands that have already been
+measured and configured on an axis.
 
-Bands are expressed in FULL motor-step Hz -- the physically meaningful unit
-for stepper resonance. Microstepping (see geometry.units.MICROSTEPS_PER_STEP)
-only interpolates position *within* one full step; the rotor still detents
-at the full-step rate regardless of how finely that step is subdivided, so
-a resonance band doesn't move around depending on the microstepping setting
-the way it would if expressed directly in microsteps/s. Everything here
-converts to/from microsteps/s (the wire protocol's own feed unit -- see
-protocol.commands.LinearMove) only at the boundary.
+Resonance bands are expressed in full motor-step frequency (Hz), while motion
+commands use microsteps per second. The conversion between these units is
+performed at the module boundary using
+:data:`geometry.units.MICROSTEPS_PER_STEP`.
 
-To characterize a real band: jog the axis slowly across its range at a
-series of speeds (or run a slow constant-speed sweep) and listen/feel for
-where it rings -- note the approximate microsteps/s, divide by
-MICROSTEPS_PER_STEP to get full-step Hz, and add the (low, high) pair to
-that axis's ``resonance_bands_hz`` in configs/axes.yaml.
+The primary public functions are :func:`feed_in_resonance_band`, which tests
+whether a requested feed falls within a configured resonance band, and
+:func:`avoid_resonant_feed`, which selects the nearest feed rate outside all
+applicable bands while respecting caller-provided speed limits.
 """
 
 from __future__ import annotations
@@ -30,11 +22,27 @@ from __future__ import annotations
 from ..geometry.units import MICROSTEPS_PER_STEP
 
 
-def feed_in_resonance_band(
-    feed: float, bands_hz, microsteps_per_step: int = MICROSTEPS_PER_STEP
-):
-    """The (low_hz, high_hz) band (full-step Hz) that ``feed`` (microsteps/s)
-    falls in, or None if it's clear of all of them."""
+def feed_in_resonance_band(feed: float, bands_hz, microsteps_per_step: int = MICROSTEPS_PER_STEP):
+    """Return the resonance band containing a feed rate, if any.
+
+    `feed` is expressed in microsteps per second, while each configured
+    resonance band is expressed as a `(low_hz, high_hz)` interval in full
+    motor-step frequency. The feed is converted implicitly by comparing it
+    against the corresponding microstep-rate bounds.
+
+    Band boundaries are inclusive.
+
+    Args:
+        feed: Requested feed rate in microsteps per second.
+        bands_hz: Iterable of `(low_hz, high_hz)` resonance bands expressed
+            in full motor-step Hz.
+        microsteps_per_step: Number of microsteps corresponding to one full
+            motor step.
+
+    Returns:
+        tuple[float, float] | None: The first configured resonance band
+        containing `feed`, or `None` if the feed is outside all bands.
+    """
     for low, high in bands_hz:
         if low * microsteps_per_step <= feed <= high * microsteps_per_step:
             return (low, high)
@@ -42,16 +50,39 @@ def feed_in_resonance_band(
 
 
 def _walk_clear(
-    feed: float, bands_hz, microsteps_per_step: int, direction: int, limit: float | None
+    feed: float,
+    bands_hz,
+    microsteps_per_step: int,
+    direction: int,
+    limit: float | None,
 ) -> float | None:
-    """Push ``feed`` in ``direction`` (+1 up, -1 down), one violated band's
-    far edge at a time, until it lands clear of every band in ``bands_hz``
-    -- chaining straight through adjacent/overlapping bands (landing just
-    past one band that turns out to be the start of the next moves on
-    again, rather than reporting clear prematurely). None if ``limit``
-    (ceiling going up / floor going down) is crossed before that happens,
-    or if it doesn't converge within a bounded number of steps -- either
-    way, this direction isn't a viable escape."""
+    """Search in one direction for a feed rate outside all resonance bands.
+
+    Starting at `feed`, the search moves just beyond the far edge of each
+    encountered resonance band. This allows adjacent or overlapping bands to
+    be traversed as a single blocked region rather than incorrectly treating
+    the first cleared band as a valid landing point.
+
+    The search terminates successfully when a feed outside every configured
+    band is found. It fails when the requested direction crosses `limit` or
+    when the bounded search cannot reach a clear feed.
+
+    Args:
+        feed: Starting feed rate in microsteps per second.
+        bands_hz: Iterable of `(low_hz, high_hz)` resonance bands expressed
+            in full motor-step Hz.
+        microsteps_per_step: Number of microsteps corresponding to one full
+            motor step.
+        direction: Search direction. `+1` searches toward higher feed
+            rates; `-1` searches toward lower feed rates.
+        limit: Optional hard limit in the search direction. When searching
+            upward this is the maximum permitted feed; when searching
+            downward it is the minimum permitted feed.
+
+    Returns:
+        float | None: The first feed rate found outside all resonance bands,
+        or `None` if the direction cannot provide a valid escape.
+    """
     current = feed
     for _ in range(len(bands_hz) + 1):
         band = feed_in_resonance_band(current, bands_hz, microsteps_per_step)
@@ -72,21 +103,37 @@ def avoid_resonant_feed(
     floor: float = 0.0,
     microsteps_per_step: int = MICROSTEPS_PER_STEP,
 ) -> float:
-    """``feed`` (microsteps/s), nudged clear of every band in ``bands_hz``
-    (full-step Hz) that it currently falls inside.
+    """Adjust a feed rate to avoid configured resonance bands.
 
-    Tries moving clear in both directions (see ``_walk_clear``) and picks
-    whichever landing point is closer to the original ``feed`` --
-    minimizing how much the requested speed actually changes.
+    If `feed` is already outside every configured resonance band, it is
+    returned unchanged. Otherwise, the function searches both higher and
+    lower feed rates for the nearest value that lies outside all bands.
 
-    ``ceiling``/``floor`` (also microsteps/s) are hard limits from the
-    caller -- e.g. an axis's own configured travel_speed -- that a nudge
-    must never cross even if that means landing back inside a band: a
-    safety/mechanical ceiling always wins over dodging a bad sound. If
-    neither direction can escape within [floor, ceiling], the original
-    ``feed`` is simply clamped into that range and returned -- that's a
-    genuinely unavoidable band given the caller's limits, a configuration
-    problem this function can't solve, not something to loop forever over.
+    The selected candidate minimizes the absolute change from the requested
+    feed. `ceiling` and `floor` constrain the adjustment and are treated
+    as hard caller-provided motion limits. If neither direction provides a
+    valid escape within those limits, the original feed is clamped to the
+    permitted range and returned.
+
+    Resonance bands are specified in full motor-step Hz, whereas `feed`,
+    `ceiling`, and `floor` are expressed in microsteps per second.
+
+    Args:
+        feed: Requested feed rate in microsteps per second.
+        bands_hz: Iterable of `(low_hz, high_hz)` resonance bands expressed
+            in full motor-step Hz.
+        ceiling: Optional maximum permitted feed rate in microsteps per
+            second. A resonance-avoidance adjustment never exceeds this
+            value.
+        floor: Minimum permitted feed rate in microsteps per second.
+            Defaults to zero.
+        microsteps_per_step: Number of microsteps corresponding to one full
+            motor step.
+
+    Returns:
+        float: The nearest feed rate outside all applicable resonance bands
+        while respecting the specified limits. If no clear feed is reachable,
+        returns the requested feed clamped to `[floor, ceiling]`.
     """
     if not bands_hz or feed_in_resonance_band(feed, bands_hz, microsteps_per_step) is None:
         return feed

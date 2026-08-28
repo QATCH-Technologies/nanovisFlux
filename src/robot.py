@@ -256,6 +256,35 @@ class Robot:
             raise RuntimeError("deck is not calibrated; set robot.calibration first")
         return self.calibration
 
+    def _validate_targets(self, targets: dict) -> None:
+        """Reject a computed motor target before it's sent to the controller.
+
+        A target outside an axis's ``[0, endstop_limit]`` travel range can
+        never actually be reached -- home is 0 on every axis and real
+        firmware can't move past either bound, so the axis just stalls
+        wherever it's clamped. Catching that here turns what would
+        otherwise surface as an opaque `_await_settled` stall timeout,
+        minutes later and pointing at the wrong layer, into an immediate
+        error naming the offending axis, its bad target, and its valid
+        range -- e.g. a deck calibration affine transform extrapolated
+        past the deck-mm range it was actually fitted against.
+
+        Args:
+            targets: Mapping of axis identifiers to computed motor targets.
+
+        Raises:
+            ValueError: If any target falls outside its axis's configured
+                travel range.
+        """
+        for axis, target in targets.items():
+            limit = self.axes[axis].config.endstop_limit
+            if not 0 <= target <= limit:
+                raise ValueError(
+                    f"computed target for axis {axis.value} is {target} microsteps, "
+                    f"outside its travel range [0, {limit}] -- check deck calibration "
+                    "and labware placement"
+                )
+
     def home(self, *axes: AxisId) -> None:
         """Home the specified motion axes.
 
@@ -373,11 +402,14 @@ class Robot:
 
         Raises:
             RuntimeError: If deck calibration is not configured.
+            ValueError: If a computed motor target falls outside its axis's
+                configured travel range.
             TimeoutError: If verification is enabled and motion fails to settle.
         """
         cal = self._require_cal()
         xy = cal.deck_to_motor(point, side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
+        self._validate_targets(xy_targets)
 
         def _send():
             if feed is not None:
@@ -411,11 +443,14 @@ class Robot:
 
         Raises:
             RuntimeError: If deck calibration is not configured.
+            ValueError: If the computed motor target falls outside the axis's
+                configured travel range.
             TimeoutError: If verification is enabled and the axis fails to settle.
         """
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
         mz = cal.deck_to_motor(DeckPoint(0, 0, deck_z_mm), side, self.tip_offset(side))[axis]
+        self._validate_targets({axis: mz})
 
         def _send():
             if axis is None:
@@ -453,11 +488,14 @@ class Robot:
 
         Raises:
             RuntimeError: If deck calibration is not configured.
+            ValueError: If a computed motor target falls outside its axis's
+                configured travel range.
             TimeoutError: If verification is enabled and the axes fail to settle.
         """
         cal = self._require_cal()
         xy = cal.deck_to_motor(DeckPoint(x_mm, y_mm, 0.0), side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
+        self._validate_targets(xy_targets)
 
         def _send():
             if feed is not None:
@@ -487,6 +525,8 @@ class Robot:
 
         Raises:
             RuntimeError: If deck calibration is not configured.
+            ValueError: If the computed motor target falls outside the axis's
+                configured travel range.
             TimeoutError: If verification is enabled and the move fails to settle.
         """
         target = clearance_mm if clearance_mm is not None else self.travel_z_mm
@@ -625,6 +665,8 @@ class Robot:
 
         Raises:
             RuntimeError: If deck calibration is not configured.
+            ValueError: If a computed motor target falls outside its axis's
+                configured travel range.
             TimeoutError: If verification is enabled and a motion leg fails to
                 settle.
         """
@@ -634,6 +676,7 @@ class Robot:
         self.raise_z(side, clr, verify=verify)
         xy = cal.deck_to_motor(DeckPoint(point.x, point.y, clr), side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
+        self._validate_targets(xy_targets)
 
         def _send():
             self.controller.rapid_move(xy_targets)
