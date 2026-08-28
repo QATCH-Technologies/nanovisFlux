@@ -1,0 +1,38 @@
+pipette_calibration:
+  pipette: opentrons_single_channel_gen1_p300
+  tip: Opentrons OT-2 300ul no Filter
+  density_mg_per_ul: 0.998
+  aspirate:
+  - microsteps: 15000
+    volume_ul: 0.0
+  - microsteps: 14250
+    volume_ul: 6.01
+  - microsteps: 12125
+    volume_ul: 59.12
+  - microsteps: 10000
+    volume_ul: 112.22
+  - microsteps: 7875
+    volume_ul: 170.34
+  - microsteps: 5750
+    volume_ul: 215.43
+  - microsteps: 3625
+    volume_ul: 270.54
+  - microsteps: 1500
+    volume_ul: 307.62
+  dispense:
+  - microsteps: 15000
+    volume_ul: 0.0
+  - microsteps: 14250
+    volume_ul: 0.0
+  - microsteps: 12125
+    volume_ul: 17.04
+  - microsteps: 10000
+    volume_ul: 67.14
+  - microsteps: 7875
+    volume_ul: 167.34
+  - microsteps: 5750
+    volume_ul: 217.44
+  - microsteps: 3625
+    volume_ul: 267.54
+  - microsteps: 1500
+    volume_ul: 307.62

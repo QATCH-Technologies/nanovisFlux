@@ -1,0 +1,12 @@
+name: opentrons_ot2_tip_rack_lid
+brand: Opentrons
+well_geometry:
+  shape: rectangular
+  width_mm: 120.9
+  length_mm: 78.5
+  depth_mm: 18.0
+  bottom: flat
+  bottom_clearance_mm: 1.5
+  max_volume_ul: 170832
+wells:
+  A1: { x: 61.5, y: 40.35, z: 19.1 }

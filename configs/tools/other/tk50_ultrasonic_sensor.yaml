@@ -1,0 +1,4 @@
+type: ultrasonic
+name: tk50_ultrasonic_sensor
+brand: Lonely Binary
+max_range_mm: 4000

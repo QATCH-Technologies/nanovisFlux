@@ -1,0 +1,68 @@
+# OpenFlux Main Robot Configuration
+# 
+# This top-level file defines settings specific to this robot instance and references
+# reusable hardware profiles (axes, deck, labware, tools) via relative paths.
+# 
+# Usage: robot = openflux.config.load_robot("configs/robot.yaml")
+
+transport:
+  type: serial      # simulated | serial | tcp
+  port: "COM6"      # Required when type: serial
+  baudrate: 115200
+
+travel_z_mm: 120    # Safe clearance Z-height used by safe_move_to
+timeout: 30         # Default operation timeout in seconds
+
+# Core hardware definitions resolved relative to this file's directory.
+# (These can also be replaced with inline dictionaries).
+axes: axes.yaml
+calibration: calibration.yaml
+deck: deck.yaml
+
+# Consumable pipette tip geometries.
+# Note: Tips are picked up/dropped items, not permanently mounted tools.
+tips:
+  - name: opentrons_p300_ot2_tip
+    config: pipette_tips/opentrons_p300_ot2_tip.yaml
+  - name: geb_p20_tip
+    config: pipette_tips/geb_p20_tip.yaml
+
+# Labware assigned to specific deck slots.
+# - `slot`: The deck slot number ("1".."12").
+# - `instance`: Addressable alias used in routines (e.g., robot.labware["source"]). 
+#               Defaults to `name` if omitted.
+# - `name`: The physical hardware identifier (must match the loaded config).
+# - `config`: Path to the reusable labware definition.
+labware:
+  - slot: "7"
+    instance: tiprack1
+    name: opentrons_300ul_ot2_tip_rack
+    config: labware/tipracks/opentrons_300ul_ot2_tip_rack.yaml
+  - slot: "1"
+    instance: source
+    name: biorad_96_microplate
+    config: labware/wellplates/biorad_96_microplate.yaml
+  - slot: "3"
+    instance: dest
+    name: qatch_nanoflux_24_well_plate
+    config: labware/wellplates/qatch_nanoflux_24_well_plate.yaml
+  - slot: "8"
+    instance: aspirate_plate
+    name: opentrons_ot2_tip_rack_lid
+    config: labware/reservoirs/opentrons_ot2_tip_rack_lid.yaml
+  - slot: "11"
+    instance: dispense_plate
+    name: opentrons_ot2_tip_rack_lid
+    config: labware/reservoirs/opentrons_ot2_tip_rack_lid.yaml
+
+# Tools permanently attached to the gantry mounts.
+mounts:
+  left:
+    name: opentrons_single_channel_gen1_p300
+    config: tools/pipettes/opentrons_single_channel_gen1_p300.yaml
+  right:
+    name: 3d_touch_probe
+    config: tools/other/3d_touch_probe.yaml
+  rear:
+    name: tk50_ultrasonic_sensor
+    config: tools/other/tk50_ultrasonic_sensor.yaml

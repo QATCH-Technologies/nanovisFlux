@@ -1,0 +1,36 @@
+# Deck <-> Motor Calibration
+#
+# NOTE: The three points below are legacy fallback examples. It is highly 
+# recommended to regenerate this transform using the "Calibrate Deck..." GUI 
+# dialog, which utilizes the reachable calibration marks defined in `deck.yaml`.
+#
+# Coordinate System:
+# - Motor (0, 0) is homed at the back-right (beyond slot 12).
+# - Deck X/Y coordinates decrease as motor steps increase (moving toward slot 1).
+calibration:
+  points:
+    deck:
+    - x: 28.25
+      y: 9.0
+    - x: 28.25
+      y: 266.9
+    - x: 406.1
+      y: 266.9
+    motor:
+    - - 60409
+      - 54000
+    - - 60460
+      - 14043
+    - - 1401
+      - 14326
+
+  z_scale:
+    steps_per_mm: 25.0
+
+  # Tip-independent nozzle reference height. 
+  # This value represents the motor microstep count where the BARE nozzle would 
+  # touch the deck (z=0). Do not manually input raw contact readings here if 
+  # measured with a tip attached. Prefer using the GUI's "Zero Z" button, which 
+  # automatically offsets the raw reading by the attached tip's length.
+  z_zero:
+    left: 203906

@@ -1,0 +1,274 @@
+/* app_theme.qss -- nanovisFlux control GUI
+
+Tokenized replacement for the old literal-hex QSS in style.py. Placeholders
+like {{FLAT_TEXT}} are substituted by style.py's load_stylesheet() from
+tokens.py's TOKENS (colors) and typography.py's font stacks (FONT_SANS /
+FONT_MONO) before this is applied app-wide via QApplication.setStyleSheet().
+Structure and selector names carried over 1:1 from the app's own established
+classes (.panel, .card, .eyebrow, .h1, .pill, .mono, #estop, #primary, .jog,
+#console) -- this is nanovisFlux's own widget tree, not a copy of NanovisQ's
+(whose app_theme.qss targets widgets this app doesn't have, like #signInBtn
+or #ConsoleContainer). Kept monochrome with exactly two semantic accents --
+red for the e-stop, green for "connected" -- see the module's own prior
+design note: that's deliberate, so those two things stay the only color an
+operator's eye needs to find fast; the shared blue flat_accent is used only
+for input focus rings, never for hover/checked fills. */
+
+* {
+    font-family: {{FONT_SANS}};
+    color: {{FLAT_TEXT}};
+}
+
+QWidget {
+    background: transparent;
+}
+
+/* Qt Style Sheets break ties between equally-specific type selectors by
+   source order, and QDialog IS-A QWidget -- so this rule MUST come after
+   the generic QWidget background-transparent rule above, or that one wins
+   for every QDialog too and the window renders with no background at all. */
+QMainWindow, QWidget#centralRoot, QDialog {
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 1,
+        stop: 0 {{BG_GRADIENT_START}}, stop: 1 {{BG_GRADIENT_END}}
+    );
+}
+
+QFrame.panel, QWidget.panel {
+    background: {{FLAT_SURFACE}};
+    border: 1px solid {{FLAT_BORDER}};
+    border-radius: 6px;
+}
+
+QFrame.card {
+    background: {{FLAT_SURFACE}};
+    border: 1px solid {{FLAT_BORDER}};
+    border-radius: 4px;
+}
+
+QLabel.eyebrow {
+    color: {{FLAT_TEXT_MUTED}};
+    font-size: 10px;          /* typography.TYPE_CAPTION */
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+QLabel.h1 {
+    font-size: 14px;          /* typography.TYPE_TITLE */
+    font-weight: 700;
+}
+
+QLabel.section-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+QLabel.pill {
+    background: {{FLAT_SURFACE2}};
+    border: 1px solid {{FLAT_BORDER}};
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: {{FLAT_TEXT_MUTED}};
+}
+QLabel.pill-live {
+    background: {{FLAT_SUCCESS_WEAK}};
+    border: 1px solid {{FLAT_SUCCESS}};
+    color: {{FLAT_SUCCESS}};
+}
+QLabel.pill-warn {
+    background: {{FLAT_WARNING_WEAK}};
+    border: 1px solid {{FLAT_WARNING}};
+    color: {{FLAT_WARNING}};
+}
+
+QLabel.mono {
+    font-family: {{FONT_MONO}};
+}
+
+QPushButton {
+    background: {{FLAT_SURFACE}};
+    border: 1px solid {{FLAT_BORDER_STRONG}};
+    border-radius: 4px;
+    padding: 5px 12px;
+}
+QPushButton:hover { background: {{FLAT_SURFACE2}}; }
+QPushButton:pressed { background: {{FLAT_BORDER}}; }
+QPushButton:disabled { color: {{FLAT_TEXT_MUTED}}; border-color: {{FLAT_BORDER}}; }
+QPushButton:checked { background: {{FLAT_TEXT}}; color: {{FLAT_SURFACE}}; border-color: {{FLAT_TEXT}}; }
+
+QPushButton#estop {
+    background: {{FLAT_ERROR}};
+    color: {{FLAT_ON_ACCENT}};
+    border: 1px solid {{FLAT_ERROR_HOVER}};
+    border-radius: 4px;
+    font-weight: 700;
+    padding: 6px 18px;
+}
+QPushButton#estop:hover { background: {{FLAT_ERROR_HOVER}}; }
+QPushButton#estop:disabled {
+    background: {{FLAT_ERROR_WEAK}};
+    border-color: {{FLAT_ERROR_WEAK}};
+    color: {{FLAT_TEXT_MUTED}};
+}
+
+QPushButton#primary {
+    background: {{FLAT_TEXT}};
+    color: {{FLAT_SURFACE}};
+    border-color: {{FLAT_TEXT}};
+}
+QPushButton#primary:hover { background: {{FLAT_TEXT_HOVER}}; }
+QPushButton#primary:disabled {
+    background: {{FLAT_BORDER}};
+    color: {{FLAT_TEXT_MUTED}};
+    border-color: {{FLAT_BORDER}};
+}
+
+QPushButton.jog {
+    min-width: 40px;
+    min-height: 34px;
+    font-weight: 600;
+}
+
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
+    background: {{FLAT_SURFACE}};
+    border: 1px solid {{FLAT_BORDER_STRONG}};
+    border-radius: 4px;
+    padding: 3px 6px;
+    selection-background-color: {{FLAT_TEXT}};
+    selection-color: {{FLAT_SURFACE}};
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {
+    border: 1px solid {{FLAT_ACCENT}};
+}
+
+QPlainTextEdit#console {
+    background: {{FLAT_SURFACE2}};
+    border: 1px solid {{FLAT_BORDER_STRONG}};
+    font-family: {{FONT_MONO}};
+    font-size: 11px;
+}
+
+QTabWidget::pane {
+    border: 1px solid {{FLAT_BORDER}};
+    border-radius: 6px;
+    background: {{FLAT_SURFACE}};
+    top: -1px;
+}
+QTabBar::tab {
+    background: transparent;
+    padding: 6px 14px;
+    color: {{FLAT_TEXT_MUTED}};
+    border-bottom: 2px solid transparent;
+}
+QTabBar::tab:selected {
+    color: {{FLAT_TEXT}};
+    border-bottom: 2px solid {{FLAT_TEXT}};
+    font-weight: 600;
+}
+
+QListWidget {
+    background: {{FLAT_SURFACE}};
+    border: 1px solid {{FLAT_BORDER}};
+    border-radius: 4px;
+}
+QListWidget::item {
+    border-bottom: 1px solid {{FLAT_BORDER}};
+    padding: 2px;
+}
+QListWidget::item:selected {
+    background: {{FLAT_SURFACE2}};
+    color: {{FLAT_TEXT}};
+}
+
+/* Splitter handles deliberately stay visible (unlike NanovisQ's fully
+   transparent ones) -- this app's 3-pane layouts (deck / manual controls /
+   routine builder) benefit from a discoverable drag handle. */
+QSplitter::handle {
+    background: {{FLAT_BORDER}};
+}
+
+QScrollBar:vertical { width: 10px; background: transparent; }
+QScrollBar::handle:vertical { background: {{SCROLLBAR_HANDLE}}; border-radius: 5px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: {{SCROLLBAR_HANDLE_HOVER}}; }
+QScrollBar:horizontal { height: 10px; background: transparent; }
+QScrollBar::handle:horizontal { background: {{SCROLLBAR_HANDLE}}; border-radius: 5px; min-width: 24px; }
+QScrollBar::handle:horizontal:hover { background: {{SCROLLBAR_HANDLE_HOVER}}; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    width: 0px; height: 0px; background: none;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QGroupBox {
+    border: 1px solid {{FLAT_BORDER}};
+    border-radius: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 4px;
+    color: {{FLAT_TEXT_MUTED}};
+}
+
+/* ═══════════════════════════════════════════════════════
+   GENERIC DROPDOWN / MENU FALLBACK
+   Base styling for any QComboBox or QMenu popup -- always its own
+   top-level window, so it needs a visible border regardless of what's
+   behind it. Adapted near-verbatim from NanovisQ's app_theme.qss (this
+   section is already generic Qt-widget rules, not app-specific object
+   names).
+   ═══════════════════════════════════════════════════════ */
+QComboBox::drop-down {
+    border: none;
+    background: transparent;
+    width: 22px;
+}
+QComboBox QAbstractItemView {
+    background-color: {{FLAT_SURFACE}};
+    border: 1px solid {{POPUP_BORDER}};
+    border-radius: 8px;
+    color: {{FLAT_TEXT}};
+    padding: 4px;
+    selection-background-color: {{FLAT_ACCENT_RING}};
+    selection-color: {{FLAT_ACCENT}};
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    border-radius: 6px;
+    padding-left: 8px;
+}
+
+QMenu {
+    background-color: {{FLAT_SURFACE}};
+    border: 1px solid {{POPUP_BORDER}};
+    border-radius: 8px;
+    padding: 5px 0px;
+}
+QMenu::item {
+    padding: 6px 22px;
+    color: {{FLAT_TEXT}};
+    background: transparent;
+}
+QMenu::item:selected {
+    background: {{FLAT_ACCENT_RING}};
+    color: {{FLAT_ACCENT}};
+}
+QMenu::item:disabled {
+    color: {{FLAT_TEXT_MUTED}};
+}
+QMenu::separator {
+    height: 1px;
+    background: {{CTRL_HAIRLINE}};
+    margin: 4px 8px;
+}

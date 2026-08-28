@@ -1,0 +1,19 @@
+# Per-Axis Hardware Configuration
+# 
+# Any axis or parameter omitted will fall back to firmware defaults.
+#
+# steps_per_mm: 
+#   Measured in FULL motor steps per mm. The system automatically multiplies 
+#   this by 32 (microsteps/step) to derive the firmware microstep values.
+#
+# resonance_bands_hz (Optional): 
+#   List of [low, high] frequency bands (in full-step Hz) that cause excessive 
+#   machine vibration. Jogging and nudging operations will automatically avoid 
+#   cruising within these speeds. 
+#   To calibrate: Find the ringing speed in microsteps/s, divide by 32, and 
+#   add the range. (e.g., resonance_bands_hz: [[110, 140]])
+
+X: { steps_per_mm: 4.57 }
+Y: { steps_per_mm: 5.16 }
+Z: { steps_per_mm: 25.0 }
+A: { steps_per_mm: 25.0 }

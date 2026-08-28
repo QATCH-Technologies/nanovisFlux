@@ -1,0 +1,15 @@
+name: biorad_96_microplate
+brand: Bio-Rad
+well_geometry:
+  shape: circular
+  diameter_mm: 6.9
+  depth_mm: 10.9
+  bottom: round
+  bottom_clearance_mm: 1.5
+  max_volume_ul: 360
+grid:
+  rows: 8
+  cols: 12
+  origin: { x: 14.0, y: 11.4, z: 15.6 }
+  row_spacing_mm: 9
+  col_spacing_mm: 9

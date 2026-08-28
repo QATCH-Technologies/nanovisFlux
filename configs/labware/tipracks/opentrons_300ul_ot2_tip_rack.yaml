@@ -1,0 +1,14 @@
+name: opentrons_300ul_ot2_tip_rack
+brand: Opentrons
+well_geometry:
+  shape: circular
+  diameter_mm: 7.11
+  depth_mm: 60.1
+  bottom: flat
+  bottom_clearance_mm: 0
+grid:
+  rows: 8
+  cols: 12
+  origin: { x: 15.3, y: 11.6, z: 64.6 }
+  row_spacing_mm: 9
+  col_spacing_mm: 9
