@@ -23,6 +23,7 @@ without hardware attached; pass --port to drive real hardware over serial
 (overriding whatever configs/robot.yaml's own transport: says, same as the
 GUI connection bar -- see gui/robot_factory.py).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,13 +58,13 @@ _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "robot.ya
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
 
-_TIP_RACK = "tiprack1"        # robot.yaml labware: instance, slot "10"
-_TIP_NAME = "opentrons_p300_ot2_tip"   # robot.yaml tips: entry matching that rack
-_SOURCE = "source"            # robot.yaml labware: instance, slot "1" (96-well)
-_DEST = "dest"                # robot.yaml labware: instance, slot "3" (nanovis 24-well)
-_PRESS_Z_MM = 64.6            # tiprack1's own measured first-contact height (its grid.origin.z)
+_TIP_RACK = "tiprack1"  # robot.yaml labware: instance, slot "10"
+_TIP_NAME = "opentrons_p300_ot2_tip"  # robot.yaml tips: entry matching that rack
+_SOURCE = "source"  # robot.yaml labware: instance, slot "1" (96-well)
+_DEST = "dest"  # robot.yaml labware: instance, slot "3" (nanovis 24-well)
+_PRESS_Z_MM = 64.6  # tiprack1's own measured first-contact height (its grid.origin.z)
 _VOLUME_UL = 5.0
-_PAUSE_S = 1.0                # "with pause" -- let the last drop fall before lifting away
+_PAUSE_S = 1.0  # "with pause" -- let the last drop fall before lifting away
 
 #: Trash drop point: slot 12's origin (see configs/deck.yaml) plus an offset
 #: comfortably inside its 170x164mm footprint and clear of its front-left
@@ -116,7 +117,9 @@ def build_routine(robot, n_wells: int, side: MountSide) -> Routine:
                 AspirateStep(_VOLUME_UL, WellLocation(_SOURCE, src_name)),
                 DispenseStep(_VOLUME_UL, WellLocation(_DEST, dest_name)),
                 DelayStep(_PAUSE_S),
-                DropTipStep(SlotLocation("12", offset=_TRASH_OFFSET), _TRASH_EJECT_Z_MM),
+                DropTipStep(
+                    SlotLocation("12", offset=_TRASH_OFFSET), _TRASH_EJECT_Z_MM
+                ),
             ]
         )
     return routine
@@ -126,18 +129,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--config", default=str(_DEFAULT_CONFIG), help="robot config YAML")
     parser.add_argument(
-        "--port", help="serial port for real hardware (e.g. COM6); omit to use the simulated transport"
+        "--config", default=str(_DEFAULT_CONFIG), help="robot config YAML"
     )
     parser.add_argument(
-        "--side", choices=sorted(_SIDES), default="left", help="which mount runs this routine"
+        "--port",
+        default="COM6",
+        help="serial port for real hardware (e.g. COM6); omit to use the simulated transport",
+    )
+    parser.add_argument(
+        "--side",
+        choices=sorted(_SIDES),
+        default="left",
+        help="which mount runs this routine",
     )
     parser.add_argument(
         "--wells", type=int, default=24, help="number of source/dest well pairs to run"
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="print the planned steps and exit without connecting"
+        "--dry-run",
+        action="store_true",
+        help="print the planned steps and exit without connecting",
     )
     args = parser.parse_args()
 
@@ -153,7 +165,10 @@ def main() -> None:
 
     with robot:
         routine.run(
-            robot, on_step=lambda i, s: logger.info(f"[{i + 1}/{len(routine.steps)}] {s.describe()}")
+            robot,
+            on_step=lambda i, s: logger.info(
+                f"[{i + 1}/{len(routine.steps)}] {s.describe()}"
+            ),
         )
     logger.info("Done.")
 
