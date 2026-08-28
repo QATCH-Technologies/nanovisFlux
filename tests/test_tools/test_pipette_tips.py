@@ -68,6 +68,53 @@ def _int_after(line: str, letter: str) -> int:
     return int(re.search(rf"{letter}(-?\d+)", line).group(1))
 
 
+# -- misc plunger-wiring guards (rest of the lane's pipette.py gaps) ----------
+
+
+def test_uses_plunger_is_true():
+    pipette = Pipette(
+        name="p300", plunger=PlungerModel(microsteps_per_ul=50, bottom_microsteps=15000), max_volume_ul=300
+    )
+    assert pipette.uses_plunger() is True
+
+
+def test_aspirate_rejects_a_volume_that_would_exceed_capacity():
+    robot = _robot_with_pipette()
+    pipette = robot.left()
+    pipette.current_volume_ul = 290.0
+
+    with pytest.raises(ValueError, match="exceed pipette capacity"):
+        pipette.aspirate(20.0)  # 290 + 20 > 300 max_volume_ul
+
+    assert pipette.current_volume_ul == 290.0  # rejected before the tracked volume was touched
+
+
+def test_move_plunger_requires_attachment():
+    pipette = Pipette(
+        name="p300", plunger=PlungerModel(microsteps_per_ul=50, bottom_microsteps=15000), max_volume_ul=300
+    )
+
+    with pytest.raises(RuntimeError, match="must be mounted"):
+        pipette.aspirate(10.0)
+
+
+def test_move_plunger_requires_a_plunger_axis():
+    calibration = DeckCalibration(
+        xy=AffineTransform2D(a=100.0, b=0.0, tx=0.0, c=0.0, d=100.0, ty=0.0),
+        z_scale=AxisScale(steps_per_mm=100.0),
+    )
+    robot = Robot(SimulatedTransport(), calibration=calibration)
+    pipette = Pipette(
+        name="rear_pipette",
+        plunger=PlungerModel(microsteps_per_ul=50, bottom_microsteps=15000),
+        max_volume_ul=300,
+    )
+    robot.attach(MountSide.REAR, pipette)  # rear mount has no plunger axis
+
+    with pytest.raises(RuntimeError, match="no plunger axis"):
+        pipette.aspirate(10.0)
+
+
 # -- pick_up_tip --------------------------------------------------------------
 
 

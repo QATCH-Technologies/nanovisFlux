@@ -262,16 +262,6 @@ class MainWindow(QMainWindow):
     def _on_home_requested(self) -> None:
         if self.robot is None:
             return
-        # A continuous jog's move is deliberately sent without waiting for
-        # its 'ok' (see JogController) and only gets cleaned up when it's
-        # properly released. Home pressed while one is still in flight --
-        # held stick/key plus a Home shortcut, gamepad Back/View with the
-        # stick still deflected -- would otherwise send G28 right on top of
-        # unstopped motion, AND the G28 response read would consume that
-        # stale unread reply instead of its own, making home() return
-        # almost immediately instead of actually waiting out the homing
-        # sequence. Stopping first (a no-op if nothing was jogging) avoids
-        # both.
         self.manual_panel.stop_all_jog()
         try:
             start_pos = self.robot.controller.report_position()
@@ -279,20 +269,14 @@ class MainWindow(QMainWindow):
             start_pos = {}
         try:
             self.robot.home()
-            self.robot.controller.set_relative()  # home() leaves G90; restore ambient jog mode
+            self.robot.controller.set_relative()
             logger.info("homed")
         except Exception as exc:
             logger.error(f"home failed: {exc}")
             return
         self._start_homing_animation(start_pos)
 
-    # -- homing animation --------------------------------------------------
     def _build_home_schedule(self, start_pos: dict, axes) -> list:
-        """Sequential per-axis sweep back to zero, in HOMING_ORDER (matching
-        real firmware behavior -- a G28 homes axes one at a time, not all
-        together), each timed by its own configured homing speed. Shared by
-        the manual Home button's sweep (all axes) and a routine-embedded
-        Home step's (whichever axes it actually asked for)."""
         want = set(axes)
         schedule = []
         t = 0.0
@@ -310,11 +294,6 @@ class MainWindow(QMainWindow):
         return schedule
 
     def _start_homing_animation(self, start_pos: dict) -> None:
-        """Replay the known homing order/speed as a sweep back to zero, axis
-        by axis, once ``robot.home()`` (a single blocking G28) has returned.
-        Pure GUI polish -- doesn't talk to the robot -- so it can't race the
-        real position poll; that timer is paused for the duration and
-        restarted (with an immediate poll) once the sweep finishes."""
         schedule = self._build_home_schedule(start_pos, tuple(AxisId))
         self._position_timer.stop()
         if not schedule:
@@ -341,7 +320,7 @@ class MainWindow(QMainWindow):
         if elapsed >= total:
             self._homing_anim_timer.stop()
             self._position_timer.start()
-            self._poll_position()  # reconcile the display with the real (homed) position
+            self._poll_position()
 
     def _on_estop_requested(self) -> None:
         if self.robot is None:
@@ -360,20 +339,11 @@ class MainWindow(QMainWindow):
                 self, "Emergency stop failed", f"Could not send emergency stop: {exc}"
             )
 
-    # -- routine run <-> manual lock -------------------------------------------
     def _on_routine_run_state_changed(self, active: bool) -> None:
         self.manual_panel.set_routine_active(active)
         self.routine_builder.set_locked(active)
         self._routine_run_active = active
         if active:
-            # A routine step's controller calls share the CommandTracer lock
-            # with this timer's own M114 poll -- left running, a poll landing
-            # mid-step would just block the whole GUI thread until the step's
-            # commands release the lock. Pause it for the run; the per-step
-            # motion sweep (see _on_routine_step_motion) covers the display
-            # in the meantime, starting from one fresh poll (each leg after
-            # that is derived from the step's own commanded targets, not
-            # polled -- see RoutineRunner.step_motion).
             self._position_timer.stop()
             try:
                 self._routine_display_pos = self.robot.controller.report_position()
@@ -383,21 +353,9 @@ class MainWindow(QMainWindow):
             self._routine_anim_queue = []
             self._routine_anim_leg = None
         elif not self._routine_anim_queue and self._routine_anim_leg is None:
-            # Nothing left to sweep -- resume real polling right away.
-            # Otherwise leave it paused: the routine itself can finish (in
-            # simulation, near-instantly) well before the sweep timed to its
-            # real feed rate has finished playing -- _advance_routine_animation
-            # resumes polling once the queue actually drains, so a live poll
-            # never fights the sweep over the same display.
             self._position_timer.start()
             self._poll_position()
 
-    # -- routine motion sweep ---------------------------------------------------
-    #: Axes with real deck-space travel -- the ones the deck view actually
-    #: draws from (see _update_deck_markers/_mount_deck_z). Plunger axes
-    #: (B/C) are excluded: they move during Aspirate/Dispense too, but
-    #: animating them would just make e.g. a slow, feed-less aspirate hold
-    #: the sweep open long after the marker itself has already arrived.
     _SPATIAL_AXES = (AxisId.X, AxisId.Y, AxisId.Z, AxisId.A)
 
     def _routine_leg_duration(self, before: dict, after: dict, feed) -> float:
@@ -426,8 +384,6 @@ class MainWindow(QMainWindow):
 
     def _on_routine_step_motion(self, legs: list) -> None:
         if not legs:
-            # Nothing to sweep (Wait, a raw line, ...) -- resync so the next
-            # real leg's "before" reflects what actually happened.
             try:
                 self._routine_display_pos = self.robot.controller.report_position()
             except Exception:
@@ -443,14 +399,6 @@ class MainWindow(QMainWindow):
             self._advance_routine_animation()
 
     def _on_routine_step_home(self, axes: tuple) -> None:
-        """A routine-embedded Home step homed ``axes`` -- queue the same
-        sequential, per-axis sweep the manual Home button uses (see
-        _build_home_schedule), filtered to whichever axes this step
-        actually asked for. Starts from the tracked display position, not
-        a live poll: a live poll here would race a still-settling
-        preceding move exactly like step_motion's legs do (see its
-        docstring), and G28 is instant in SimulatedTransport, so by the time
-        one could be taken it'd already show the post-home result."""
         before = dict(self._routine_display_pos)
         schedule = self._build_home_schedule(before, axes)
         if not schedule:
@@ -466,8 +414,6 @@ class MainWindow(QMainWindow):
             self._routine_anim_leg = None
             self._routine_anim_timer.stop()
             if not self._routine_run_active:
-                # The routine session already ended while this last leg was
-                # still sweeping -- resume real polling now that it's done.
                 self._position_timer.start()
                 self._poll_position()
             return
@@ -475,8 +421,6 @@ class MainWindow(QMainWindow):
         if leg[0] == "move":
             _, before, after, duration = leg
             if duration <= 0:
-                # No rate to time a sweep against (or no real distance) --
-                # just show where it ended up and move on to the next leg.
                 self.manual_panel.update_positions(after)
                 self._update_deck_markers(after)
                 self._advance_routine_animation()
@@ -525,7 +469,6 @@ class MainWindow(QMainWindow):
         if finished:
             self._advance_routine_animation()
 
-    # -- dialogs ------------------------------------------------------------------
     def _open_calibration_dialog(self) -> None:
         if self.robot is None:
             return
@@ -537,17 +480,11 @@ class MainWindow(QMainWindow):
         if MountsDialog(self.robot, self).exec_():
             self._refresh_mounts_list()
 
-    # -- polling / refresh ------------------------------------------------------------
     def _poll_position(self) -> None:
         if self.robot is None:
             return
         jog = self.manual_panel.jog
         if jog is not None and jog.is_jogging:
-            # A continuous jog's move is in flight with its 'ok' left
-            # deliberately unread (see JogController's docstring) -- an
-            # M114 sent now would read that stray reply instead of its own
-            # and come back empty/wrong. Skip this tick; end_jog() already
-            # re-syncs position itself the moment the jog actually stops.
             return
         try:
             pos = self.robot.controller.report_position()
@@ -557,14 +494,6 @@ class MainWindow(QMainWindow):
         self._update_deck_markers(pos)
 
     def _mount_deck_z(self, side: MountSide, pos: dict) -> float:
-        """Real deck-mm height of ``side``'s mount, from its vertical axis's
-        raw position and the Z calibration (inverting DeckCalibration.
-        deck_to_motor's z math) -- 0.0 (the DeckPoint default, which the
-        deck view then falls back to _GANTRY_HEIGHT_MM for, same as before)
-        wherever there's no vertical axis, no z_zero calibrated for this
-        side, or no live reading yet. At home (raw 0), this correctly comes
-        out near the top of travel -- home is up, see DeckCalibration's own
-        docstring -- rather than the previous hardcoded ~40cm guess."""
         cal = self.robot.calibration
         axis = cal.vertical_axis(side)
         if axis is None or side not in cal.z_zero:
@@ -591,8 +520,6 @@ class MainWindow(QMainWindow):
         markers = {}
         for side in (MountSide.LEFT, MountSide.RIGHT, MountSide.REAR):
             ox, oy = MOUNT_OFFSET_MM[side]
-            # _mount_deck_z returns 0.0 for REAR (no vertical axis of its
-            # own -- see its docstring), matching the previous hardcoded z.
             markers[side] = DeckPoint(gx + ox, gy + oy, self._mount_deck_z(side, pos))
         self.deck_view.update_positions(markers)
 
@@ -624,7 +551,6 @@ class MainWindow(QMainWindow):
         ]
         self.info_label.setText("\n".join(lines))
 
-    # -- keyboard jog -----------------------------------------------------------------
     def keyPressEvent(self, event) -> None:
         if self.manual_panel.handle_key_press(event.key(), event.isAutoRepeat()):
             return

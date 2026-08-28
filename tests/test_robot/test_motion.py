@@ -195,12 +195,12 @@ def test_move_horizontal_to_with_feed_sends_a_linear_move() -> None:
     sent = []
     robot.controller.on_send = lambda line, command: sent.append(line.strip().upper())
 
-    robot.move_horizontal_to(10.0, 20.0, MountSide.LEFT, feed=600)
+    robot.move_horizontal_to(10.0, 20.0, MountSide.LEFT, feed=50_000)
 
     move_lines = [ln for ln in sent if ln.startswith(("G0", "G1"))]
     assert len(move_lines) == 1
     assert move_lines[0].startswith("G1"), "an explicit feed must use G1, not the G0 rapid default"
-    assert "F600" in move_lines[0]
+    assert "F50000" in move_lines[0]
 
 
 # -- explicit feed on move_to / move_vertical_to -------------------------------

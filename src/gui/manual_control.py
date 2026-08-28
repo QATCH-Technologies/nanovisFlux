@@ -1,16 +1,3 @@
-"""Manual jog panel: keyboard or gamepad input driving a JogController.
-
-Every jog action is a continuous move: press and hold (a key, an on-screen
-jog button, or a gamepad stick/trigger deflection) calls
-JogController.begin_jog, which commands a move toward the axis's endstop
-limit -- as far as it can physically go, the practical "max step size" --
-at a feed proportional to speed; release calls end_jog, which quick-stops
-it wherever it's gotten to. This now works correctly against SimulatedTransport
-too (see transport/simulated.py's real-time G1 simulation), not just real
-hardware, which is why the panel no longer drives repeated discrete
-nudge() calls the way it used to.
-"""
-
 from __future__ import annotations
 
 from loguru import logger
@@ -41,8 +28,7 @@ from .gamepad_input import GamepadInput
 from .style import ACCENT_RED
 from .tokens import TOKENS
 
-_GOTO_MM_RANGE = (-100.0, 1000.0)  # generous bound around a typical deck's extent
-
+_GOTO_MM_RANGE = (-100.0, 1000.0)
 _ICON_SIZE = QSize(16, 16)
 _INK = QColor(*TOKENS["flat_text"][:3])
 _ON_ACCENT = QColor(*TOKENS["flat_on_accent"][:3])
@@ -50,12 +36,6 @@ _SUCCESS = QColor(*TOKENS["flat_success"][:3])
 _MUTED = QColor(*TOKENS["flat_text_muted"][:3])
 _SURFACE2 = QColor(*TOKENS["flat_surface2"][:3])
 _BORDER_STRONG = QColor(*TOKENS["flat_border_strong"][:3])
-
-#: Literal spec colors for the controller-stage illustration (_ControllerStage,
-#: below) -- a small self-contained dark palette modeled on the physical
-#: gamepad's own molding/silkscreen colors, deliberately NOT drawn from
-#: tokens.TOKENS (which is the app's light-theme control palette, unrelated
-#: to what a black gamepad actually looks like).
 _PAD_BODY = QColor("#33383E")
 _PAD_DARK = QColor("#22262B")
 _PAD_SHOULDER_TOP = QColor("#2B2F34")
@@ -66,10 +46,6 @@ _PAD_ICON_MUTED = QColor("#8B9096")
 
 _MOUNT_BUTTONS = (("L", MountSide.LEFT), ("R", MountSide.RIGHT), ("rear", MountSide.REAR))
 _MOUNT_ORDER = [MountSide.LEFT, MountSide.RIGHT, MountSide.REAR]
-
-#: Axes with a known linear-travel calibration (see
-#: geometry.units.MEASURED_AXIS_TRAVEL_MM) -- shown with a cm readout
-#: alongside raw microsteps. B/C are plunger axes (volumetric, not linear).
 _LINEAR_AXES = (AxisId.X, AxisId.Y, AxisId.Z, AxisId.A)
 
 _KEY_MAP = {
@@ -83,18 +59,6 @@ _KEY_MAP = {
     Qt.Key_BracketLeft: "plunger-",
 }
 
-#: gamepad axis name -> (begin_jog call, end_jog call), both taking the
-#: JogController as their first argument -- see GamepadInput.axis_speed_changed
-#: and ManualControlPanel._on_gamepad_axis.
-#:
-#: "x"'s sign is inverted here (unlike y/z, passed straight through): s is
-#: raw stick deflection (positive = physical right), but raw motor X maps
-#: to a SMALLER deck x (see the _begin/_end dicts' own comment below on the
-#: same deck-coordinate flip) -- so a right push needs motor direction -1.
-#: This correction deliberately lives here rather than in GamepadInput,
-#: which stays a pure raw-deflection source since that same "x" value also
-#: drives the on-screen stick indicator (_StickIndicator), which must
-#: mirror the *physical* stick position, not the motor direction.
 _GAMEPAD_JOG = {
     "x": (
         lambda jog, s: jog.begin_jog(AxisId.X, -1 if s > 0 else 1, abs(s)),
@@ -113,25 +77,12 @@ _GAMEPAD_JOG = {
 
 
 def _set_pill_class(label: QLabel, css_class: str) -> None:
-    """Swap a QLabel's "class" dynamic property and force Qt to re-match
-    the stylesheet -- setProperty alone doesn't repaint, since Qt caches
-    class-selector results per widget until explicitly re-polished."""
     label.setProperty("class", css_class)
     label.style().unpolish(label)
     label.style().polish(label)
 
 
 class _StickIndicator(QWidget):
-    """A small circle mimicking one analog stick: a fixed outer ring plus
-    an inner knob that offsets toward the live deflection direction,
-    proportional to magnitude -- so the on-screen gamepad page visibly
-    "moves" the same way the physical stick does while jogging. `dx`/`dy`
-    are each in [-1, 1]; see set_deflection.
-
-    `ring`/`bg`/`knob` default to the plain-panel palette (used standalone);
-    _ControllerStage overrides them to match its own dark-pad illustration
-    instead, since the stick indicator lives directly on the pad graphic
-    there rather than beside it."""
 
     def __init__(
         self,
@@ -174,14 +125,6 @@ class _StickIndicator(QWidget):
 def _corner_path(
     x: float, y: float, w: float, h: float, tl: float, tr: float, br: float, bl: float
 ):
-    """A rectangle with an independent corner radius per corner (Qt's
-    QPainterPath.addRoundedRect only takes one radius for all four) -- used
-    by _ControllerStage for shapes modeled on a real gamepad's asymmetric
-    silhouette (e.g. the body is far more rounded on top than on the
-    bottom). Each corner is a quadratic curve toward the rect's own corner
-    point -- a standard rounded-rect approximation, and one that sidesteps
-    QPainterPath.arcTo's clockwise/counter-clockwise angle convention
-    entirely."""
     path = QPainterPath()
     path.moveTo(x + tl, y)
     path.lineTo(x + w - tr, y)
@@ -208,22 +151,15 @@ def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
     )
 
 
-#: Every constant below is measured in one fixed 470x300 logical canvas --
-#: _ControllerStage scales its QPainter (and the two stick children's
-#: geometry) by whatever its *current* width works out to relative to this,
-#: recomputed on every resize, so these stay simple hand-measured numbers
-#: (x, y, w, h) taken directly off the reference mockup rather than having
-#: to be recomputed for every possible panel width.
 _PAD_CANVAS = (470.0, 300.0)
-_PAD_MIN_WIDTH = 260  # below this the face-button letters/hub glyphs stop being legible
-_PAD_MAX_WIDTH = 480  # keeps the illustration (and its height-for-width height) from
-# eating so much vertical space that everything below it gets squeezed
+_PAD_MIN_WIDTH = 260
+_PAD_MAX_WIDTH = 480
 _PAD_BODY_RECT = (35, 26, 400, 200)
 _PAD_SHOULDER_L_TOP = (103, 0, 74, 15)
 _PAD_SHOULDER_L_BOTTOM = (96, 20, 88, 16)
 _PAD_SHOULDER_R_TOP = (293, 0, 74, 15)
 _PAD_SHOULDER_R_BOTTOM = (286, 20, 88, 16)
-_PAD_GRIP_L = (100, 206, 13, (56, 40, 64, 74))  # cx, cy, rotation deg, corner radii
+_PAD_GRIP_L = (100, 206, 13, (56, 40, 64, 74))
 _PAD_GRIP_R = (370, 206, -13, (40, 56, 74, 64))
 _PAD_GRIP_SIZE = (148, 172)
 _PAD_DPAD_V = (132, 144, 18, 56)
@@ -244,38 +180,6 @@ _PAD_HUB_START = (251, 120, 20)
 
 
 class _ControllerStage(QWidget):
-    """A static, non-interactive illustration of the physical gamepad,
-    labelled with the same button glyphs as the photo it's modeled on --
-    purely a visual reference for "which physical button does what" (see
-    the Control map cards built in ManualControlPanel._build_gamepad_page
-    for the actual bindings). Nothing on it is click-able, since every
-    action it depicts already has a dedicated real button elsewhere on the
-    panel (mount selector, Zero Z / Read rear sensor / Home, the big
-    EMERGENCY STOP) -- but it does live-reflect real-time gamepad state:
-    the two analog sticks mirror actual stick deflection while jogging
-    (see ManualControlPanel._on_gamepad_axis); the face buttons, bumpers
-    (LB/RB), d-pad (per direction), and the minus/plus hub buttons light
-    up (accent fill) while physically held (see set_button_pressed, driven
-    by GamepadInput.button_highlight_changed); and the triggers (LT/RT)
-    fill proportionally to how far they're depressed (see
-    set_trigger_level, driven by GamepadInput.trigger_changed).
-
-    The shoulder controls are drawn in the same LT/LB (trigger above
-    bumper) arrangement as the physical pad -- the outer/tip piece
-    (_TOP, nearest the pad's top edge) is the trigger, the piece behind it
-    toward the body (_BOTTOM) is the bumper."""
-
-    #: Digital (on/off) highlightable regions with no dedicated child
-    #: widget (unlike the two sticks or the analog triggers, see
-    #: set_trigger_level) -- paintEvent swaps each one's fill/pen when its
-    #: name is in self._pressed. "minus"/"plus" are the two hub buttons
-    #: with a confirmed hardware binding (Back/View and Start/Menu, button
-    #: indices 6/7, both already wired to real actions elsewhere -- see
-    #: GamepadInput._handle_button); button 7's glyph was originally
-    #: guessed as "square" but confirmed by testing to be "plus" instead
-    #: (see _HIGHLIGHT_BUTTONS). "square"/"start" have no known button
-    #: index, so they're left out here even though they're drawn --
-    #: GamepadInput never emits them.
     _HIGHLIGHT_NAMES = frozenset(
         {
             "A",
@@ -312,9 +216,6 @@ class _ControllerStage(QWidget):
         self._pressed: set[str] = set()
         self._trigger_level = {"LT": 0.0, "RT": 0.0}
 
-        # Sized/positioned for real in _layout_children, called below and
-        # again from resizeEvent -- these just need to exist as children
-        # before the first layout pass.
         self.stick_left = _StickIndicator(
             self, diameter=1, ring=_PAD_ACCENT, bg=_PAD_DARK, knob=_PAD_KNOB
         )
@@ -340,9 +241,6 @@ class _ControllerStage(QWidget):
         self.update()
 
     def clear_live_state(self) -> None:
-        """Reset every gamepad-driven visual (button/d-pad highlights,
-        trigger fill) -- called on disconnect/mode-switch so nothing stays
-        lit from before the gamepad went away."""
         changed = bool(self._pressed) or any(self._trigger_level.values())
         self._pressed.clear()
         self._trigger_level = {k: 0.0 for k in self._trigger_level}
@@ -361,11 +259,6 @@ class _ControllerStage(QWidget):
         self._layout_children()
 
     def _layout_children(self) -> None:
-        """Re-derive the two stick indicators' size/position from the
-        stage's *current* width -- unlike the painted shapes in paintEvent
-        (which live inside one `p.scale()`'d coordinate space), these are
-        real child widgets, so they need their own geometry recomputed by
-        hand on every resize."""
         scale = (self.width() or round(_PAD_CANVAS[0] * 0.8)) / _PAD_CANVAS[0]
         for stick, (x, y, d) in ((self.stick_left, _PAD_STICK_L), (self.stick_right, _PAD_STICK_R)):
             size = max(10, round(d * scale))
@@ -375,13 +268,6 @@ class _ControllerStage(QWidget):
     def _hub_glyph(
         self, p: QPainter, x: float, y: float, d: float, kind: str, lit: bool = False
     ) -> None:
-        """One small decorative icon inside the center-hub cluster (see
-        paintEvent) -- hand-drawn rather than pulled from icon_utils since
-        none of the app's existing icon assets are this specific tiny
-        minus/plus/square glyph set. The "start" hub button is the
-        exception -- see self._start_icon (icon_utils' "star_circle").
-        `lit` swaps the stroke to dark, mirroring the face buttons' dark-
-        on-accent look when their circle is highlighted."""
         cx, cy = x + d / 2, y + d / 2
         pen = QPen(_PAD_DARK if lit else _PAD_ICON_MUTED, 1.6)
         pen.setCapStyle(Qt.RoundCap)
@@ -400,15 +286,8 @@ class _ControllerStage(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         scale = self.width() / _PAD_CANVAS[0]
-        p.scale(scale, scale)  # every shape below is in the 470x300 logical canvas
+        p.scale(scale, scale)
         p.setPen(Qt.NoPen)
-
-        # shoulder controls -- _TOP is the outer/tip piece (nearest the
-        # pad's top edge), where the analog trigger (LT/RT) physically
-        # sits; it fills proportionally to depression (see
-        # set_trigger_level). _BOTTOM sits behind it toward the body,
-        # where the digital bumper (LB/RB) physically sits; it lights
-        # fully while held (see set_button_pressed).
         p.setBrush(_lerp_color(_PAD_SHOULDER_TOP, _PAD_ACCENT, self._trigger_level["LT"]))
         p.drawPath(_corner_path(*_PAD_SHOULDER_L_TOP, 8, 8, 4, 4))
         p.setBrush(_lerp_color(_PAD_SHOULDER_TOP, _PAD_ACCENT, self._trigger_level["RT"]))
@@ -417,8 +296,6 @@ class _ControllerStage(QWidget):
         p.drawPath(_corner_path(*_PAD_SHOULDER_L_BOTTOM, 9, 9, 4, 4))
         p.setBrush(_PAD_ACCENT if "RB" in self._pressed else _PAD_DARK)
         p.drawPath(_corner_path(*_PAD_SHOULDER_R_BOTTOM, 9, 9, 4, 4))
-
-        # grips -- rotated rounded rects flaring out from the body
         p.setBrush(_PAD_GRIP)
         gw, gh = _PAD_GRIP_SIZE
         for cx, cy, angle, radii in (_PAD_GRIP_L, _PAD_GRIP_R):
@@ -427,20 +304,8 @@ class _ControllerStage(QWidget):
             p.rotate(angle)
             p.drawPath(_corner_path(-gw / 2, -gh / 2, gw, gh, *radii))
             p.restore()
-
-        # body
         p.setBrush(_PAD_BODY)
         p.drawPath(_corner_path(*_PAD_BODY_RECT, 108, 108, 88, 88))
-
-        # d-pad cross -- each arm lights up independently for the direction
-        # actually held (see the Control map's Motion card for the
-        # binding). Arms are derived from the same two full-bar rects the
-        # cross's overall footprint is measured as (_PAD_DPAD_V/_H): each
-        # arm is only rounded on its outer corners (matching _V/_H's own
-        # radius) so unlit arms still read as one seamless cross, same as
-        # before this was split up for per-direction highlighting. The
-        # center square where the bars overlap is always dark -- it isn't
-        # itself a direction.
         vx, vy, vw, vh = _PAD_DPAD_V
         hx, hy, hw, hh = _PAD_DPAD_H
         for name, rect, radii in (
@@ -453,10 +318,6 @@ class _ControllerStage(QWidget):
             p.drawPath(_corner_path(*rect, *radii))
         p.setBrush(_PAD_DARK)
         p.drawRect(QRectF(vx, hy, vw, hh))
-
-        # face buttons -- not click-able (see the Control map's Face
-        # buttons card for what each one actually does), but each lights
-        # up (accent fill, dark letter) while physically held
         font = QFont(self.font())
         font.setBold(True)
         font.setPointSize(9)
@@ -468,12 +329,6 @@ class _ControllerStage(QWidget):
             p.drawEllipse(QRectF(x, y, d, d))
             p.setPen(_PAD_DARK if lit else _PAD_ACCENT)
             p.drawText(QRectF(x, y, d, d), Qt.AlignCenter, letter)
-
-        # center hub -- connect-status glyph plus the pad's small system
-        # buttons; "minus"/"plus" light up while held (confirmed bindings,
-        # see _HIGHLIGHT_NAMES's own comment), "square"/"start" are drawn
-        # the same way but never light since GamepadInput doesn't know
-        # their button index.
         p.setPen(Qt.NoPen)
         p.setBrush(_PAD_DARK)
         cx, cy, cd = _PAD_HUB_CONNECT
