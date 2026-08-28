@@ -71,7 +71,19 @@ _PAUSE_S = 1.0                # "with pause" -- let the last drop fall before li
 #: travel_z_mm -- the safest available choice (guaranteed clear of every
 #: known obstacle, including the bin's 85mm walls) for an as-yet-unverified
 #: exact drop height. Both match configs/routines/nanovis_transfer_example.json.
-_TRASH_OFFSET = DeckPoint(100.0, 100.0, 0.0)
+#:
+#: (100.0, 100.0) was the original theoretical choice but proved
+#: unreachable on real hardware: slot 12 has no deck.yaml calibration mark
+#: of its own (deliberately -- "the gantry cannot always reach it in
+#: practice", see deck.yaml), so its position is always extrapolated from
+#: the nearest marks ("9"/"11"), and 100mm deep on Y extrapolated past the
+#: gantry's actual Y travel limit (raised ValueError from
+#: Robot._validate_targets: computed Y target went negative). (60.0, 60.0)
+#: was verified reachable against the recalibrated deck via
+#: scripts/check_trash_reach.py -- comfortable margin from both the axis
+#: limits and the obstacle block (~22mm clearance on each side), unlike
+#: shallower alternatives that clip the obstacle corner.
+_TRASH_OFFSET = DeckPoint(60.0, 60.0, 0.0)
 _TRASH_EJECT_Z_MM = 120.0
 
 

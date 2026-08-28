@@ -1,11 +1,37 @@
+"""Two-dimensional affine transforms for calibrated coordinate conversion.
+
+This module provides a dependency-free affine transformation type for mapping
+between two-dimensional coordinate frames. It supports translation, scaling,
+rotation, and skew, making it suitable for converting between physical deck
+coordinates and motor coordinates when the two frames are not perfectly
+axis-aligned.
+
+Transforms can be inverted and can be fitted from three or more corresponding
+source and destination points using least-squares estimation. The fitting
+implementation uses a small Gaussian-elimination solver rather than requiring
+an external numerical dependency.
+"""
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 
 def _solve3(a: list, b: list) -> list:
-    """Gaussian elimination for a 3x3 system (dependency-free)."""
+    """Solve a 3x3 linear system using Gaussian elimination.
+
+    Args:
+        a: Three-by-three coefficient matrix.
+        b: Three-element right-hand-side vector.
+
+    Returns:
+        list: Three-element solution vector.
+
+    Raises:
+        ValueError: If the coefficient matrix is singular or numerically
+            degenerate.
+    """
     m = [row[:] + [b[i]] for i, row in enumerate(a)]
     for col in range(3):
         piv = max(range(col, 3), key=lambda r: abs(m[r][col]))
@@ -23,8 +49,27 @@ def _solve3(a: list, b: list) -> list:
 
 @dataclass(frozen=True)
 class AffineTransform2D:
-    """Maps (x, y) -> (a x + b y + tx, c x + d y + ty). Rich enough to absorb
-    offset, scale, rotation and skew between the deck and motor frames."""
+    """Represent a two-dimensional affine coordinate transformation.
+
+    The transform maps a source point ``(x, y)`` to a destination point using
+    the equations::
+
+        x' = a*x + b*y + tx
+        y' = c*x + d*y + ty
+
+    The linear component can represent rotation, independent scaling, and
+    skew, while ``tx`` and ``ty`` represent translation. This makes the
+    transform suitable for calibration between physical and machine
+    coordinate frames.
+
+    Attributes:
+        a: X contribution to the transformed X coordinate.
+        b: Y contribution to the transformed X coordinate.
+        tx: Translation applied to the transformed X coordinate.
+        c: X contribution to the transformed Y coordinate.
+        d: Y contribution to the transformed Y coordinate.
+        ty: Translation applied to the transformed Y coordinate.
+    """
 
     a: float
     b: float
@@ -34,9 +79,31 @@ class AffineTransform2D:
     ty: float
 
     def apply(self, x: float, y: float) -> tuple[float, float]:
+        """Transform a two-dimensional point into the destination frame.
+
+        Args:
+            x: Source-frame X coordinate.
+            y: Source-frame Y coordinate.
+
+        Returns:
+            tuple[float, float]: Transformed ``(x, y)`` coordinates.
+        """
         return (self.a * x + self.b * y + self.tx, self.c * x + self.d * y + self.ty)
 
-    def inverse(self) -> "AffineTransform2D":
+    def inverse(self) -> AffineTransform2D:
+        """Return the inverse coordinate transformation.
+
+        The inverse maps points from the destination frame back into the source
+        frame. The linear portion must be nonsingular for an inverse to exist.
+
+        Returns:
+            AffineTransform2D: A transform that reverses this transform.
+
+        Raises:
+            ValueError: If the linear portion of the transform has a zero or
+                numerically negligible determinant and therefore cannot be
+                inverted.
+        """
         det = self.a * self.d - self.b * self.c
         if abs(det) < 1e-12:
             raise ValueError("non-invertible transform")
@@ -47,18 +114,37 @@ class AffineTransform2D:
         )
 
     @classmethod
-    def from_point_pairs(cls, src: Sequence, dst: Sequence) -> "AffineTransform2D":
-        """Least-squares affine fit from src[i] -> dst[i], for 3 or more
-        (non-collinear) pairs. Exact for exactly 3 points; a best fit for
-        more (overdetermined) points.
+    def from_point_pairs(
+        cls,
+        src: Sequence,
+        dst: Sequence,
+    ) -> AffineTransform2D:
+        """Fit an affine transform from corresponding source and destination points.
 
-        Both cases go through the same normal-equations 3x3 system --
-        ``(AtA) theta = At d``, solved with the dependency-free ``_solve3``
-        above -- rather than numpy.lstsq, so this stays a lightweight,
-        dependency-free module. For exactly 3 non-collinear points this
-        reduces to the same unique answer a direct solve would give (AtA is
-        then square and invertible, so the normal equations and the direct
-        system share one solution)."""
+        The method estimates the transform satisfying ``src[i] -> dst[i]`` for
+        three or more corresponding two-dimensional points. With exactly three
+        non-collinear pairs, the resulting transform is the unique exact affine
+        solution. With additional pairs, a least-squares fit is computed using
+        the normal equations.
+
+        The implementation intentionally avoids external numerical dependencies
+        and solves the resulting 3x3 systems with the module's internal Gaussian
+        elimination routine.
+
+        Args:
+            src: Sequence of source ``(x, y)`` coordinate pairs.
+            dst: Sequence of corresponding destination ``(x, y)`` coordinate
+                pairs.
+
+        Returns:
+            AffineTransform2D: Best-fit affine transformation mapping ``src`` to
+            ``dst``.
+
+        Raises:
+            ValueError: If ``src`` and ``dst`` contain different numbers of
+                points, fewer than three point pairs are supplied, or the
+                calibration geometry is degenerate.
+        """
         if len(src) != len(dst):
             raise ValueError("src and dst must have the same number of points")
         if len(src) < 3:

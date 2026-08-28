@@ -1,3 +1,26 @@
+"""Calibration models and coordinate transforms for robot deck motion.
+
+This module provides the calibration layer that connects physical deck-space
+coordinates, expressed in millimeters, with controller-space motor
+coordinates, expressed in microsteps.
+
+XY calibration is represented by a full two-dimensional affine transform
+learned from corresponding deck and motor calibration points. Mount-specific
+mechanical offsets are applied around that shared gantry reference transform so
+that each physical mount resolves to its actual deck position, including when
+the calibrated XY transform contains rotation or non-uniform scaling.
+
+Z calibration is represented independently for each vertically actuated mount
+using a linear axis scale and a calibrated ``z_zero`` reference. The
+calibration can be established either automatically through a controller probe
+operation or manually by touching a reference surface and recording the
+current axis position.
+
+The module intentionally remains largely independent of the protocol layer.
+Protocol-specific imports required for automated probing are performed lazily
+inside :meth:`DeckCalibration.probe_z_zero`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,7 +34,24 @@ from .units import AxisScale
 
 @dataclass
 class ZContact:
-    """Result of a Z calibration touch, however it was made."""
+    """Represent the result of a Z-axis deck contact calibration.
+
+    A contact records both the raw controller position at which the tip or
+    probe contacted the reference surface and the derived nozzle-reference
+    zero position. The result is independent of whether contact was detected
+    automatically by a probe command or manually by an operator.
+
+    Attributes:
+        side: Mount whose vertical axis was calibrated.
+        contact_microsteps: Vertical-axis position in microsteps at the moment
+            the tip or probe contacted the reference surface.
+        z_zero_microsteps: Derived nozzle-reference position corresponding to
+            deck ``z = 0``.
+        tip_length_mm: Length of the attached tip or probe below the nozzle
+            reference, in millimeters.
+        xy: Deck-space position at which automated contact was performed.
+            ``None`` for a manual touch-off.
+    """
 
     side: MountSide
     contact_microsteps: int  # vertical-axis position at contact
@@ -22,11 +62,31 @@ class ZContact:
 
 @dataclass
 class DeckCalibration:
-    """The bridge between deck space (mm) and motor space (microsteps).
+    """Convert between calibrated deck coordinates and motor coordinates.
 
-    XY is a full affine transform learned from calibration points. Z is a
-    per-mount linear map: a reference microstep value at deck z = 0 plus a
-    scale. Home is up, so descending toward the deck increases microsteps.
+    ``DeckCalibration`` is the bridge between physical deck-space positions,
+    expressed in millimeters, and controller motor positions, expressed in
+    microsteps.
+
+    XY coordinates are transformed using a full affine calibration learned
+    from corresponding deck and motor points. Mount-specific mechanical
+    offsets are incorporated around this shared gantry reference transform so
+    that coordinates represent the selected physical mount rather than merely
+    the gantry reference point.
+
+    Z calibration is modeled independently from XY. Each vertically actuated
+    mount has a calibrated ``z_zero`` position corresponding to deck
+    ``z = 0``, while :attr:`z_scale` converts physical Z distances to motor
+    microsteps. Because the robot's home direction is upward, increasing deck
+    depth corresponds to increasing vertical-axis microsteps.
+
+    Attributes:
+        xy: Affine transformation between deck-space XY coordinates and the
+            gantry's motor-space XY reference coordinates.
+        z_scale: Unit conversion used to translate physical Z distances into
+            motor microsteps.
+        z_zero: Mapping from :class:`MountSide` to the calibrated vertical
+            motor position corresponding to deck ``z = 0`` for that mount.
     """
 
     xy: AffineTransform2D
@@ -34,7 +94,16 @@ class DeckCalibration:
     z_zero: dict = field(default_factory=dict)  # MountSide -> microsteps at deck z=0
 
     def vertical_axis(self, side: MountSide) -> AxisId | None:
-        """None for a mount with no vertical axis (e.g. MountSide.REAR)."""
+        """Return the vertical controller axis associated with a mount.
+
+        Args:
+            side: Mount whose vertical axis should be identified.
+
+        Returns:
+            AxisId | None: ``AxisId.Z`` for the left mount,
+            ``AxisId.A`` for the right mount, or ``None`` when the mount has no
+            independent vertical axis.
+        """
         if side is MountSide.LEFT:
             return AxisId.Z
         if side is MountSide.RIGHT:
@@ -42,29 +111,55 @@ class DeckCalibration:
         return None
 
     def _reference_xy(self, point: DeckPoint, side: MountSide) -> tuple:
-        """Motor (X, Y) that places ``side``'s mount at deck ``point``.
+        """Convert a mount target into the shared gantry reference coordinates.
 
-        ``self.xy`` maps the gantry's shared X/Y *reference* point (not any
-        particular mount) between deck mm and motor microsteps. Each mount
-        sits at a fixed mechanical offset from that reference (see
-        ``motion.mounts.MOUNT_OFFSET_MM``): ``mount_deck_pos =
-        reference_deck_pos + offset``, so placing the mount at ``point``
-        means driving the reference to ``point - offset`` first. Subtracting
-        the offset *before* ``xy.apply`` (rather than converting it via a
-        flat per-axis mm/microstep scale) carries it through the affine's
-        own rotation/scale, so this stays exact even for a rotated
-        calibration -- not just the axis-aligned case.
+        The requested ``point`` represents the desired position of the selected
+        mount, while the affine transform operates on the gantry's common XY
+        reference point. The mount's fixed mechanical offset is therefore
+        subtracted in deck space before applying the affine transformation.
+
+        Applying the offset before the affine transform preserves the calibrated
+        rotation and scale of the transform and avoids treating the mount offset
+        as though it were already expressed in motor coordinates.
+
+        Args:
+            point: Desired deck-space position of the selected mount.
+            side: Mount that should occupy ``point``.
+
+        Returns:
+            tuple: Motor-space ``(x, y)`` coordinates for the shared gantry
+            reference point.
         """
         ox, oy = MOUNT_OFFSET_MM.get(side, (0.0, 0.0))
         return self.xy.apply(point.x - ox, point.y - oy)
 
-    def deck_to_motor(self, point: DeckPoint, side: MountSide, tip_length_mm: float = 0.0) -> dict:
-        """Motor targets that place the *working point* at ``point`` (deck mm).
+    def deck_to_motor(
+        self,
+        point: DeckPoint,
+        side: MountSide,
+        tip_length_mm: float = 0.0,
+    ) -> dict:
+        """Convert a deck-space working point into controller motor targets.
 
-        ``z_zero`` is the nozzle-reference position (tip-independent), so the
-        tip end is ``tip_length_mm`` below the nozzle. To land the tip end at
-        ``point.z`` the nozzle must sit ``tip_length_mm`` higher, i.e. fewer
-        microsteps (home is up). One calibration serves every tip length.
+        XY coordinates are transformed for the requested physical mount. For a
+        vertically actuated mount, the Z target is additionally computed from the
+        calibrated mount-specific ``z_zero`` and the configured Z scale.
+
+        ``z_zero`` represents the nozzle reference rather than the end of an
+        attached tip. Consequently, ``tip_length_mm`` raises the nozzle reference
+        above the requested working point so that the tip end reaches the target.
+        This allows the same Z calibration to be used with tools of different
+        lengths.
+
+        Args:
+            point: Desired working-point position in deck coordinates.
+            side: Mount whose working point should reach ``point``.
+            tip_length_mm: Length of the attached tip or tool below the nozzle
+                reference, in millimeters.
+
+        Returns:
+            dict[AxisId, int]: Integer motor targets for the required X/Y axes and,
+            when applicable, the selected mount's vertical axis.
         """
         mx, my = self._reference_xy(point, side)
         targets = {AxisId.X: round(mx), AxisId.Y: round(my)}
@@ -74,22 +169,52 @@ class DeckCalibration:
             targets[vertical] = int(zref - self.z_scale.to_microsteps(point.z + tip_length_mm))
         return targets
 
-    def z_zero_from_contact(self, contact_microsteps: int, tip_length_mm: float = 0.0) -> int:
-        """Given the microsteps at which a probe of length ``tip_length_mm``
-        touched deck z = 0, return the nozzle-reference ``z_zero``.
+    def z_zero_from_contact(
+        self,
+        contact_microsteps: int,
+        tip_length_mm: float = 0.0,
+    ) -> int:
+        """Derive the nozzle reference zero from a deck contact position.
 
-        At contact the tip end is on the surface, so the nozzle reference is
-        ``tip_length_mm`` above it: ``z_zero = contact + msteps(tip_length)``.
+        At contact, the end of the tip or probe is at deck ``z = 0``. The nozzle
+        reference therefore lies ``tip_length_mm`` above the deck surface. The
+        corresponding microstep distance is added to the contact position to
+        obtain the tip-independent nozzle reference.
+
+        Args:
+            contact_microsteps: Vertical-axis position in microsteps at contact.
+            tip_length_mm: Length of the attached tip or probe below the nozzle
+                reference, in millimeters.
+
+        Returns:
+            int: Nozzle-reference ``z_zero`` position in microsteps.
         """
         return int(contact_microsteps + self.z_scale.to_microsteps(tip_length_mm))
 
-    def motor_to_deck_xy(self, mx: float, my: float, side: MountSide | None = None) -> tuple:
-        """Inverse of ``_reference_xy``: the deck (x, y) under raw motor
-        position ``(mx, my)``. ``side=None`` (the default) reports the
-        gantry reference point itself, as before. Passing ``side`` instead
-        reports where THAT mount's tip actually is -- add its fixed offset
-        back on top of the reference point (mirrors ``_reference_xy``'s
-        subtraction)."""
+    def motor_to_deck_xy(
+        self,
+        mx: float,
+        my: float,
+        side: MountSide | None = None,
+    ) -> tuple:
+        """Convert raw motor-space XY coordinates back to deck coordinates.
+
+        The inverse affine transform first recovers the shared gantry reference
+        position. When ``side`` is provided, that mount's fixed mechanical offset
+        is then added so the result represents the physical deck position beneath
+        the selected mount.
+
+        Args:
+            mx: Motor-space X coordinate.
+            my: Motor-space Y coordinate.
+            side: Optional mount whose physical deck position should be returned.
+                When omitted, the returned coordinates describe the shared gantry
+                reference point.
+
+        Returns:
+            tuple: Deck-space ``(x, y)`` coordinates corresponding to the supplied
+            motor position.
+        """
         rx, ry = self.xy.inverse().apply(mx, my)
         if side is None:
             return rx, ry
@@ -97,29 +222,34 @@ class DeckCalibration:
         return rx + ox, ry + oy
 
     def motor_to_deck_z(
-        self, raw_microsteps: float, side: MountSide, tip_length_mm: float = 0.0
+        self,
+        raw_microsteps: float,
+        side: MountSide,
+        tip_length_mm: float = 0.0,
     ) -> float | None:
-        """Inverse of ``deck_to_motor``'s Z half: the deck-mm height (of
-        whatever ``tip_length_mm`` currently hangs below the nozzle) that
-        ``side``'s vertical axis being at ``raw_microsteps`` corresponds to.
-        None for a mount with no vertical axis (mirrors ``vertical_axis``)
-        or one with no ``z_zero`` calibrated yet -- there's nothing to
-        invert against. Used by ``Robot.raise_z`` to tell whether a mount
-        is already above a target clearance height before commanding a
-        move that would otherwise unconditionally pull it down to exactly
-        that height."""
+        """Convert a mount's raw vertical motor position to deck height.
+
+        The inverse Z calibration uses the mount-specific ``z_zero`` and
+        :attr:`z_scale` to determine the deck height of the working point.
+        ``tip_length_mm`` accounts for the distance between the nozzle reference
+        and the end of the attached tip or tool.
+
+        Args:
+            raw_microsteps: Current vertical-axis position in microsteps.
+            side: Mount whose calibrated Z reference should be used.
+            tip_length_mm: Length of the attached tip or tool below the nozzle
+                reference, in millimeters.
+
+        Returns:
+            float | None: Deck-space height in millimeters, or ``None`` when the
+            mount has no vertical axis or has not yet received a Z calibration.
+        """
         vertical = self.vertical_axis(side)
         if vertical is None or side not in self.z_zero:
             return None
         zref = self.z_zero[side]
         return self.z_scale.to_mm(zref - raw_microsteps) - tip_length_mm
 
-    # -- z calibration: finding z_zero is calibrating the deck's Z ------
-    #
-    # Both methods below need a live ``robot`` (controller + axis config),
-    # so the import of protocol types stays lazy -- geometry otherwise has
-    # no dependency on the protocol layer, and importing this module should
-    # never require one.
     def probe_z_zero(
         self,
         robot,
@@ -132,14 +262,45 @@ class DeckCalibration:
         max_descent_microsteps: int | None = None,
         commit: bool = True,
     ) -> ZContact:
-        """Find z_zero for ``side`` by touching a conductive surface at
-        ``xy`` with an automated G38.2 probe. Works in raw microsteps for the
-        descent, so it does NOT need a prior Z calibration (that would be
-        circular) -- only the XY affine, to position over the target.
+        """Automatically calibrate a mount's Z zero by probing a reference surface.
 
-        Whatever is on the nozzle -- a bare calibration probe or a
-        disposable tip -- is described by ``tip_length_mm``; the result is
-        the tip-independent nozzle reference, written back into ``z_zero``.
+        The mount is first raised to a safe raw microstep position and positioned
+        over the supplied deck-space XY location using the existing XY affine
+        calibration. It then performs a controller ``G38.2`` probe toward the
+        deck until contact is detected.
+
+        The descent is specified entirely in raw microsteps so this procedure does
+        not depend on an existing Z calibration. Only the XY calibration is
+        required to position the mount over the probe location.
+
+        After contact, the exact vertical-axis position is read from the
+        controller and converted into the tip-independent nozzle ``z_zero``.
+        Unless ``commit`` is false, the resulting value is stored in
+        :attr:`z_zero`. The mount is then retracted to the configured safe
+        position.
+
+        Args:
+            robot: Robot instance providing the controller, axis configuration,
+                and motion state required for probing.
+            side: Mount whose vertical axis is being calibrated.
+            xy: Deck-space location at which the conductive or reference surface
+                should be probed.
+            tip_length_mm: Length of the probe or attached tip below the nozzle
+                reference, in millimeters.
+            feed: Probe feed rate in controller units.
+            safe_up_microsteps: Raw vertical-axis position used for the safe
+                approach and post-contact retraction.
+            max_descent_microsteps: Maximum raw vertical-axis descent target. When
+                omitted, the configured endstop limit of the selected vertical
+                axis is used.
+            commit: Whether to store the calculated ``z_zero`` in this calibration
+                object.
+
+        Returns:
+            ZContact: Contact position and derived Z-zero calibration result.
+
+        Raises:
+            ProbeError: If the probe move completes without detecting contact.
         """
         from ..protocol.commands import ProbeMode
         from ..protocol.errors import ProbeError
@@ -147,40 +308,48 @@ class DeckCalibration:
         ctrl = robot.controller
         vertical = self.vertical_axis(side)
         max_descent = max_descent_microsteps or robot.axes[vertical].config.endstop_limit
-
-        # 1. Lift to a safe height, then position over the target in XY.
         ctrl.rapid_move({vertical: safe_up_microsteps})
         mx, my = self._reference_xy(xy, side)
         ctrl.rapid_move({AxisId.X: round(mx), AxisId.Y: round(my)})
-
-        # 2. Probe down (error if it never touches).
         result = ctrl.probe(vertical, max_descent, feed=feed, mode=ProbeMode.TOWARD_OR_FAIL)
         if not result.contacted:
             raise ProbeError(f"no surface found probing {side.value} at " f"({xy.x}, {xy.y})")
-
-        # 3. Read the exact contact microsteps and derive the nozzle z_zero.
         contact = ctrl.report_position()[vertical]
         z_zero = self.z_zero_from_contact(contact, tip_length_mm)
         if commit:
             self.z_zero[side] = z_zero
-
-        # 4. Retract to safe height.
         ctrl.rapid_move({vertical: safe_up_microsteps})
         return ZContact(side, contact, z_zero, tip_length_mm, xy)
 
     def touch_off_z_zero(
-        self, robot, side: MountSide, tip_length_mm: float | None = None, commit: bool = True
+        self,
+        robot,
+        side: MountSide,
+        tip_length_mm: float | None = None,
+        commit: bool = True,
     ) -> ZContact:
-        """Derive z_zero for ``side`` from the mount's *current* position --
-        call after manually jogging the tip end down onto a reference
-        surface. An alternative to ``probe_z_zero`` for tips too soft or
-        fragile to drive into a hard stop, or when feel/sight is the only
-        sensor on hand.
+        """Calibrate a mount's Z zero from its manually established contact position.
 
-        Tip-agnostic the same way: it never assumes what's on the nozzle.
-        ``tip_length_mm`` defaults to whatever tip/tool is attached to
-        ``side`` right now (``robot.tip_offset``); pass an explicit value
-        when jogging with a bare calibration pin or an unregistered tip.
+        This method is intended for manual touch-off procedures in which an
+        operator has already jogged the mount's tip or calibration tool onto a
+        reference surface. The current vertical-axis position is read from the
+        controller and converted into the nozzle-reference ``z_zero``.
+
+        When ``tip_length_mm`` is omitted, the length reported by the robot for
+        the currently attached tool is used. Supplying an explicit length allows
+        calibration with an unregistered tool or bare calibration fixture.
+
+        Args:
+            robot: Robot instance providing the controller and tool-length
+                information.
+            side: Mount whose vertical axis is being calibrated.
+            tip_length_mm: Optional tip or probe length in millimeters. When
+                omitted, the robot's current tip offset for the mount is used.
+            commit: Whether to store the calculated ``z_zero`` in this calibration
+                object.
+
+        Returns:
+            ZContact: Contact position and derived Z-zero calibration result.
         """
         vertical = self.vertical_axis(side)
         length = robot.tip_offset(side) if tip_length_mm is None else tip_length_mm
@@ -191,6 +360,29 @@ class DeckCalibration:
         return ZContact(side, contact, z_zero, length)
 
     @classmethod
-    def from_points(cls, deck_pts, motor_xy, z_scale, z_zero=None) -> "DeckCalibration":
+    def from_points(
+        cls,
+        deck_pts,
+        motor_xy,
+        z_scale,
+        z_zero=None,
+    ) -> DeckCalibration:
+        """Construct a deck calibration from corresponding XY calibration points.
+
+        The supplied deck and motor point pairs are used to fit a full affine
+        transformation. The resulting transform is combined with the supplied Z
+        scale and optional per-mount Z-zero references.
+
+        Args:
+            deck_pts: Sequence of deck-space points used for XY calibration.
+            motor_xy: Sequence of corresponding motor-space ``(x, y)`` points.
+            z_scale: Axis scaling used for Z distance conversion.
+            z_zero: Optional mapping of mount sides to calibrated Z-zero
+                microstep positions. Defaults to an empty mapping.
+
+        Returns:
+            DeckCalibration: Calibration object containing the fitted XY
+            transform and supplied Z calibration parameters.
+        """
         xy = AffineTransform2D.from_point_pairs([(p.x, p.y) for p in deck_pts], list(motor_xy))
         return cls(xy=xy, z_scale=z_scale, z_zero=z_zero or {})
