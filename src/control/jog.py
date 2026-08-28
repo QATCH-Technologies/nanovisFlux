@@ -1,3 +1,22 @@
+"""Interactive jogging control for robot axes and mounted tools.
+
+This module provides the configuration, motion-control, and action-dispatch
+layers used by interactive robot jogging.
+
+The :class:`JogController` translates high-level relative jog requests into
+firmware motion commands while applying per-axis speed limits and resonance
+avoidance. It supports both bounded single-step nudges and open-ended
+continuous jogging for held inputs.
+
+The :class:`JogSession` maps device-independent action names to controller
+operations. Input backends such as keyboard, gamepad, or scripted input can
+therefore share the same jogging behavior without depending on a particular
+input device.
+
+The active :class:`~core.MountSide` determines which vertical and plunger
+axes are controlled by the logical Z and plunger actions.
+"""
+
 from __future__ import annotations
 
 import math
@@ -9,27 +28,33 @@ from ..motion.resonance import avoid_resonant_feed
 
 @dataclass
 class JogSettings:
-    """Nudge sizes (microsteps) per axis and a set of selectable step scales.
-    The active mount decides whether Z/B (left) or A/C (right) get driven.
+    """Configuration for discrete and continuous jogging behavior.
 
-    ``step_scales`` and ``jog_speed_scales`` share one selectable index
-    (cycled by step_up/step_down): the former sizes a discrete nudge(), the
-    latter is the feed fraction a held keyboard action drives continuously
-    at -- one "how big/fast" dial for both move styles.
+    Jogging uses a shared scale index to select both the distance of discrete
+    nudges and the speed fraction used for continuous motion. The active mount
+    determines whether the logical Z and plunger controls address the left
+    mount's Z/B axes or the right mount's A/C axes.
 
-    Jog feed is deliberately NOT one flat microsteps/s number shared by
-    every axis (that used to be the case, and it was wrong): Z/A's much
-    finer microstepping (~800 microsteps/mm vs. X/Y's ~146-165) means the
-    same raw microsteps/s feed is a far slower *real* speed on Z/A than on
-    X/Y. Instead, each axis jogs relative to its OWN configured
-    ``travel_speed`` (motion.axis.AxisConfig -- the same vetted ceiling
-    already used for automated routine moves, and already set roughly 2x
-    higher for Z/A than X/Y precisely because of that finer microstepping)
-    -- see JogController._axis_feed. ``jog_speed_fraction`` is a global
-    multiplier on top of that per-axis ceiling (1.0 = jog can reach exactly
-    an axis's own travel_speed at full stick deflection/nudge; lower it for
-    a gentler overall ceiling -- see scripts/gamepad_control.py's D-pad
-    speed control for a live example)."""
+    Continuous jog speed is calculated relative to each axis's configured
+    ``travel_speed`` rather than using one global microsteps-per-second
+    value. This accounts for the substantially different microstep densities
+    of the horizontal and vertical axes. The resulting per-axis speed is then
+    multiplied by ``jog_speed_fraction`` and, where applicable, the selected
+    continuous-jog scale and input-device speed.
+
+    Attributes:
+        step_microsteps: Base relative movement distance in firmware
+            microsteps for each axis. The active ``step_scales`` value is
+            applied to these distances for discrete nudges.
+        step_scales: Multipliers available for discrete nudge distances.
+            The active value is selected by the shared scale index.
+        jog_speed_scales: Feed fractions available for continuous jogging.
+            These share the same selection index as ``step_scales``.
+        jog_speed_fraction: Global multiplier applied to each axis's
+            configured ``travel_speed`` to establish its jog-speed ceiling.
+            A value of ``1.0`` permits jogging up to the configured travel
+            speed before input-specific speed scaling is applied.
+    """
 
     step_microsteps: dict = field(
         default_factory=lambda: {
@@ -41,65 +66,112 @@ class JogSettings:
             AxisId.C: 200,
         }
     )
-    step_scales: tuple = (0.25, 1.0, 4.0)  # nudge() distance multipliers
-    jog_speed_scales: tuple = (0.15, 0.4, 1.0)  # continuous-jog feed fractions
-    jog_speed_fraction: float = 1.0  # multiplier on each axis's own travel_speed
+    step_scales: tuple = (0.25, 1.0, 4.0)
+    jog_speed_scales: tuple = (0.15, 0.4, 1.0)
+    jog_speed_fraction: float = 1.0
 
 
 class JogController:
-    """Turns abstract jog intents into moves. Stays in G91 for the session so
-    each nudge/jog is relative; restores G90 on close.
+    """Translate logical jog requests into robot motion commands.
 
-    Two move styles are supported:
+    The controller operates in relative-coordinate mode while a jog session
+    is active and restores absolute-coordinate mode when the session closes.
+    It supports two types of motion:
 
-    - ``nudge()``: one short, bounded relative move -- fire and forget.
-    - ``begin_jog()`` / ``end_jog()``: a continuous move for held inputs. It
-      commands a relative move far past any real travel range at a feed
-      scaled to the requested speed, and -- unlike every other move this
-      class sends -- does NOT wait for the firmware's 'ok' (see
-      Controller.execute's wait_for_ok). A held jog is open-ended by
-      nature, and the firmware may not send that 'ok' until the move
-      itself completes, not merely once it's queued; waiting for it would
-      block the caller (the GUI thread, for keyboard/on-screen/gamepad
-      input) for the move's entire duration, so a release/quick-stop
-      request could never even be sent until the axis already ran out of
-      travel on its own. ``end_jog`` cuts the move short with a quick stop
-      (M410, also not waited on) wherever it's gotten to, then resets the
-      transport's input buffer (a stray late 'ok' for the move we skipped
-      waiting on is likely still sitting there) before re-querying the
-      real position. Holding multiple axes combines them into one move;
-      any change to the held set re-issues it.
+    * ``nudge()`` performs a bounded relative move and waits for the normal
+      firmware acknowledgement.
+    * ``begin_jog()`` / ``end_jog()`` implement continuous motion for held
+      inputs. Continuous moves are deliberately sent without waiting for the
+      firmware's ``ok`` response because an open-ended move may not produce
+      that response until the commanded move completes. Waiting would prevent
+      the input source from sending a release or quick-stop command.
 
-    Requires homed axes (the firmware refuses motion otherwise); M911 relaxes
-    limit *clamping* but not the homed gate, so home before jogging.
+    Continuous motion is stopped using the firmware quick-stop command before
+    any changed set of held axes is re-issued. This is necessary because a
+    G-code move only affects the axes explicitly named by that command; an
+    axis removed from a combined jog would otherwise continue executing its
+    previous move.
+
+    Feed rates are derived from each axis's configured ``travel_speed`` and
+    adjusted to avoid configured resonance bands. When multiple axes are
+    moving together, the slowest participating axis establishes the common
+    feed ceiling because one firmware G1 command applies the same feed to all
+    named axes.
+
+    Args:
+        robot: Robot instance whose controller, axis configuration, and
+            calibration are used to execute jog operations.
+        settings: Optional jogging configuration. Defaults to
+            :class:`JogSettings`.
+        side: Initial active mount side. Defaults to
+            :attr:`MountSide.LEFT`.
+
+    Notes:
+        Axes must be homed before jogging. Firmware limit-clamping relaxation
+        does not bypass the firmware's requirement that axes be homed before
+        motion is permitted.
     """
 
     def __init__(
         self, robot, settings: JogSettings | None = None, side: MountSide = MountSide.LEFT
     ):
+        """Initialize a jog controller.
+
+        Args:
+            robot: Robot instance to control.
+            settings: Optional jogging configuration.
+            side: Mount side initially selected for logical Z and plunger
+                operations.
+        """
         self.robot = robot
         self.settings = settings or JogSettings()
         self.side = side
         self._scale_idx = 1
         self._entered = False
-        self._active: dict[AxisId, float] = {}  # axis -> signed speed of the in-flight jog
+        self._active: dict[AxisId, float] = {}
 
     @property
     def is_jogging(self) -> bool:
-        """True while a continuous jog's move is in flight -- its 'ok' is
-        deliberately left unread (see class docstring), so anything that
-        polls the controller for a response (e.g. a live position timer)
-        needs to skip its turn until this goes false again, or it'll read
-        that stray leftover reply instead of its own."""
+        """Return whether a continuous jog is currently active.
+
+        Returns:
+            True if at least one axis has an in-flight continuous jog command;
+            otherwise False.
+
+        Notes:
+            Continuous jog commands intentionally do not wait for their firmware
+            acknowledgement. Callers that poll controller responses, such as
+            live-position display code, should avoid consuming responses while
+            this property is True.
+        """
         return bool(self._active)
 
-    # -- session mode --------------------------------------------------
     def __enter__(self):
+        """Enter relative-coordinate jog mode.
+
+        The robot controller is switched to relative coordinates so that all
+        subsequent nudge and continuous-jog commands are interpreted as
+        incremental movements.
+
+        Returns:
+            This controller instance.
+        """
         self.robot.controller.set_relative()
         self._entered = True
         return self
 
     def __exit__(self, *exc):
+        """Stop active jogging and restore absolute-coordinate mode.
+
+        Any active continuous jog is stopped before the controller is returned to
+        absolute-coordinate mode.
+
+        Args:
+            *exc: Exception information supplied by the context-manager protocol.
+
+        Returns:
+            None. Exceptions are not suppressed.
+        """
         self.end_jog()
         if self._entered:
             self.robot.controller.set_absolute()
@@ -107,46 +179,100 @@ class JogController:
 
     @property
     def scale(self) -> float:
+        """Return the currently selected discrete-nudge scale.
+
+        Returns:
+            Multiplicative factor applied to the configured per-axis
+            ``step_microsteps`` values.
+        """
         return self.settings.step_scales[self._scale_idx]
 
     @property
     def jog_speed(self) -> float:
+        """Return the currently selected continuous-jog speed fraction.
+
+        Returns:
+            Speed fraction selected from ``JogSettings.jog_speed_scales``.
+        """
         return self.settings.jog_speed_scales[self._scale_idx]
 
     def cycle_scale(self, direction: int = 1) -> float:
+        """Cycle the shared nudge and continuous-jog scale.
+
+        Args:
+            direction: Direction in which to move through the scale list.
+                Positive values advance toward larger indices; negative values
+                move toward smaller indices.
+
+        Returns:
+            The newly selected discrete-nudge scale.
+        """
         self._scale_idx = (self._scale_idx + direction) % len(self.settings.step_scales)
         return self.scale
 
     def select_mount(self, side: MountSide) -> None:
+        """Select the active mount for mount-dependent jog operations.
+
+        Args:
+            side: Mount side to make active. Logical Z and plunger operations
+                subsequently address that mount's vertical and plunger axes.
+        """
         self.side = side
 
     def toggle_mount(self) -> None:
+        """Switch the active mount between the left and right sides."""
         self.side = MountSide.RIGHT if self.side is MountSide.LEFT else MountSide.LEFT
 
-    # -- feed: per-axis, resonance-avoided --------------------------------
     def _axis_feed(self, axis: AxisId) -> float:
-        """This axis's own jog speed ceiling (microsteps/s): its configured
-        ``travel_speed`` scaled by ``settings.jog_speed_fraction`` -- see
-        JogSettings' own docstring for why this is per-axis rather than one
-        flat number shared by every axis."""
+        """Calculate the jog feed ceiling for an axis.
+
+        The ceiling is derived from the axis's configured ``travel_speed`` and
+        multiplied by ``JogSettings.jog_speed_fraction``.
+
+        Args:
+            axis: Axis whose configured travel speed should be used.
+
+        Returns:
+            Maximum jog feed for the axis, in firmware microsteps per second.
+        """
         return self.robot.axes[axis].config.travel_speed * self.settings.jog_speed_fraction
 
     def _resonance_safe_feed(self, feed: float, axes, *, ceiling: float | None = None) -> float:
-        """``feed`` nudged clear of every axis in ``axes``' configured
-        ``resonance_bands_hz`` (see motion.resonance) -- the union of all
-        of them, since one G1 line's F applies identically to every axis it
-        names (the firmware has no per-axis feed within a single line)."""
+        """Adjust a feed rate to avoid resonance bands for selected axes.
+
+        The resonance bands of all participating axes are combined because a
+        single firmware G1 command applies one feed value to every axis named by
+        that command.
+
+        Args:
+            feed: Requested feed rate in firmware microsteps per second.
+            axes: Iterable of axes participating in the motion.
+            ceiling: Optional maximum feed rate that the adjusted value must not
+                exceed.
+
+        Returns:
+            A feed rate adjusted away from configured resonance bands while
+            respecting the requested ceiling.
+        """
         bands = tuple(b for axis in axes for b in self.robot.axes[axis].config.resonance_bands_hz)
         if not bands:
             return feed
         return avoid_resonant_feed(feed, bands, ceiling=ceiling, floor=1.0)
 
-    # -- discrete nudge -------------------------------------------------
     def nudge(self, axis: AxisId, sign: int) -> None:
-        """Move one bounded step along ``axis`` (+1 away from home, -1 toward
-        home). The firmware applies direction inversion internally, so
-        positive is always 'away from the endstop' from the caller's point
-        of view."""
+        """Perform one bounded relative movement.
+
+        Args:
+            axis: Axis to move.
+            sign: Direction of movement. ``+1`` represents movement away from
+                home and ``-1`` represents movement toward home from the caller's
+                perspective. Firmware-level direction inversion is handled by the
+                axis configuration.
+
+        Raises:
+            KeyError: If no step size is configured for ``axis``.
+            RuntimeError: If the underlying controller rejects the motion.
+        """
         if not self._entered:
             self.robot.controller.set_relative()
         step = int(self.settings.step_microsteps[axis] * self.scale)
@@ -154,24 +280,46 @@ class JogController:
         feed = self._resonance_safe_feed(ceiling, (axis,), ceiling=ceiling)
         self.robot.controller.linear_move({axis: sign * step}, feed=int(feed))
 
-    # -- continuous jog ---------------------------------------------------
     def begin_jog(self, axis: AxisId, sign: int, speed: float = 1.0) -> None:
-        """Start (or retune) a continuous move along ``axis``. ``speed`` is a
-        0..1 fraction of that axis's own jog ceiling (see _axis_feed) -- a
-        gamepad passes stick deflection directly, a keyboard passes the
-        toggleable ``jog_speed``. Call ``end_jog`` to stop it."""
+        """Start or retune continuous motion along an axis.
+
+        A continuous move is commanded sufficiently far that the jog remains
+        active until explicitly stopped. The requested speed is interpreted as a
+        fraction of the axis's configured jog ceiling.
+
+        Args:
+            axis: Axis to move continuously.
+            sign: Direction of movement. Positive values move away from home;
+                negative values move toward home.
+            speed: Requested speed fraction in the range ``0.0`` to ``1.0``.
+                Values outside the range are clamped.
+
+        Notes:
+            Calling this method with a speed effectively equal to the currently
+            active speed does not restart the move. This prevents high-frequency
+            input polling from repeatedly reissuing identical motion commands.
+        """
         signed = (1.0 if sign >= 0 else -1.0) * max(0.0, min(1.0, speed))
         if abs(signed) < 1e-3:
             self.end_jog(axis)
             return
         if math.isclose(self._active.get(axis, 0.0), signed, abs_tol=0.02):
-            return  # no meaningful change -- avoid restarting the move every poll
+            return  # no meaningful change
         self._active[axis] = signed
         self._restart_continuous()
 
     def end_jog(self, axis: AxisId | None = None) -> None:
-        """Stop one axis's continuous jog, or (with no argument) all of them,
-        with an immediate quick stop."""
+        """Stop continuous jogging.
+
+        Args:
+            axis: Specific axis to stop. If omitted, all active continuous jogs
+                are stopped.
+
+        Notes:
+            The firmware quick-stop mechanism is used so that motion stops
+            immediately rather than waiting for an open-ended movement command to
+            complete.
+        """
         if axis is None:
             self._active.clear()
         else:
@@ -179,18 +327,18 @@ class JogController:
         self._restart_continuous()
 
     def _restart_continuous(self) -> None:
-        """Quick-stop (M410, not waited on) whatever's in flight, then --
-        if anything is still held -- issue a fresh move for exactly that
-        set. The quick stop isn't optional even when only *narrowing* the
-        held set (e.g. releasing X while Y stays held): since multiple
-        held axes share one combined G1 line, a new line that only
-        mentions Y doesn't touch X's still-in-flight move at all -- G1
-        only affects the axes it names, so a dropped axis just keeps
-        coasting toward its old target unless something explicitly halts
-        it first. When nothing's left held, this is the real "motion
-        should stop now" case: also clear whatever stray reply the
-        skipped-ack move (see below) left unread, then re-sync the real
-        position now that it's actually settled."""
+        """Stop the current continuous move and issue the current jog state.
+
+        The existing firmware move is first cancelled with a quick stop. If axes
+        remain active, a new combined relative move is issued for exactly those
+        axes using a common feed rate that does not exceed the slowest
+        participating axis's configured ceiling.
+
+        If no axes remain active, the controller input buffer is cleared and the
+        current physical position is queried to resynchronize software state
+        after the intentionally unread acknowledgement from the previous
+        continuous move.
+        """
         self.robot.controller.quick_stop()
         if not self._active:
             self.robot.controller.reset_input_buffer()
@@ -202,162 +350,72 @@ class JogController:
             axis: int(math.copysign(self.robot.axes[axis].config.endstop_limit, s))
             for axis, s in self._active.items()
         }
-        # Safety: when multiple axes are held together, use the SLOWEST of
-        # their own per-axis ceilings (see _axis_feed) rather than a flat
-        # feed applied to every named axis identically -- one G1 line's F
-        # becomes every named axis's MaxSpeed verbatim in firmware, so
-        # anything else could drive a held axis faster than its own
-        # configured travel_speed.
         ceiling = min(self._axis_feed(axis) for axis in self._active)
         speed_fraction = max(abs(s) for s in self._active.values())
-        feed = self._resonance_safe_feed(ceiling * speed_fraction, tuple(self._active), ceiling=ceiling)
+        feed = self._resonance_safe_feed(
+            ceiling * speed_fraction, tuple(self._active), ceiling=ceiling
+        )
         feed = int(feed)
-        # Not waited on: a continuous jog is open-ended, and the firmware
-        # may not send this G1's 'ok' until the move itself completes, not
-        # merely once it's queued -- see class docstring. Waiting would
-        # block the caller (the GUI thread, for any input source) for the
-        # move's entire duration, so a release could never even be sent
-        # until the axis ran out of travel on its own.
         self.robot.controller.linear_move(targets, feed=feed, wait_for_ok=False)
 
-    # -- convenience for the active mount -----------------------------
     def jog_z(self, sign: int) -> None:
+        """Perform one bounded Z-axis nudge on the active mount.
+
+        Args:
+            sign: Direction of movement relative to the active mount.
+        """
         self.nudge(AxisId.Z if self.side is MountSide.LEFT else AxisId.A, sign)
 
     def jog_plunger(self, sign: int) -> None:
+        """Perform one bounded plunger-axis nudge on the active mount.
+
+        Args:
+            sign: Direction of plunger movement.
+        """
         self.nudge(AxisId.B if self.side is MountSide.LEFT else AxisId.C, sign)
 
     def begin_jog_z(self, sign: int, speed: float = 1.0) -> None:
+        """Start continuous Z-axis jogging on the active mount.
+
+        Args:
+            sign: Direction of movement.
+            speed: Speed fraction between zero and one.
+        """
         self.begin_jog(AxisId.Z if self.side is MountSide.LEFT else AxisId.A, sign, speed)
 
     def end_jog_z(self) -> None:
+        """Stop continuous Z-axis jogging on the active mount."""
         self.end_jog(AxisId.Z if self.side is MountSide.LEFT else AxisId.A)
 
     def begin_jog_plunger(self, sign: int, speed: float = 1.0) -> None:
+        """Start continuous plunger jogging on the active mount.
+
+        Args:
+            sign: Direction of plunger movement.
+            speed: Speed fraction between zero and one.
+        """
         self.begin_jog(AxisId.B if self.side is MountSide.LEFT else AxisId.C, sign, speed)
 
     def end_jog_plunger(self) -> None:
+        """Stop continuous plunger jogging on the active mount."""
         self.end_jog(AxisId.B if self.side is MountSide.LEFT else AxisId.C)
 
-    # -- z calibration -----------------------------------------------
     def capture_z_zero(self, tip_length_mm: float | None = None, commit: bool = True):
-        """Record the current vertical position as this mount's z_zero --
-        call after manually jogging the tip end down onto a known-flat
-        reference surface (e.g. the deck). Delegates to
-        ``DeckCalibration.touch_off_z_zero``, which is tip-agnostic:
-        ``tip_length_mm`` defaults to whatever tip/tool is on this mount
-        right now, so the derived z_zero is the tip-independent nozzle
-        reference regardless of which tip touched down."""
+        """Capture the current position as the active mount's Z reference.
+
+        This method is intended to be called after manually jogging a tool or tip
+        onto a known-flat reference surface. The calibration layer converts the
+        touched position into a tip-independent nozzle reference.
+
+        Args:
+            tip_length_mm: Optional length of the currently installed tip or tool.
+                If omitted, the calibration layer determines the appropriate
+                current tool length.
+            commit: Whether the newly calculated Z-zero should be persisted to
+                the active calibration.
+
+        Returns:
+            The result returned by
+            :meth:`DeckCalibration.touch_off_z_zero`.
+        """
         return self.robot.calibration.touch_off_z_zero(self.robot, self.side, tip_length_mm, commit)
-
-
-#: Logical action names an input backend can emit. Movement actions are
-#: continuous: an input backend should call JogSession.press() on
-#: press/deflect and .release() on release/return-to-center. Non-movement
-#: actions fire once via .press() (or the equivalent .handle()) and need no
-#: matching release() call.
-ACTIONS = (
-    "x+",
-    "x-",
-    "y+",
-    "y-",
-    "z+",
-    "z-",
-    "plunger+",
-    "plunger-",
-    "step_up",
-    "step_down",
-    "mount_toggle",
-    "zero_z",
-    "home",
-    "quit",
-)
-
-
-class JogSession:
-    """Binds action names to JogController calls and dispatches them. Input
-    backends translate raw keys/buttons into action names and call press()
-    on press/deflect, release() on release/return-to-center."""
-
-    def __init__(self, controller: JogController):
-        self.c = controller
-        self.running = True
-        self._begin = {
-            "x+": lambda speed: self.c.begin_jog(AxisId.X, +1, speed),
-            "x-": lambda speed: self.c.begin_jog(AxisId.X, -1, speed),
-            "y+": lambda speed: self.c.begin_jog(AxisId.Y, +1, speed),
-            "y-": lambda speed: self.c.begin_jog(AxisId.Y, -1, speed),
-            "z+": lambda speed: self.c.begin_jog_z(+1, speed),
-            "z-": lambda speed: self.c.begin_jog_z(-1, speed),
-            "plunger+": lambda speed: self.c.begin_jog_plunger(+1, speed),
-            "plunger-": lambda speed: self.c.begin_jog_plunger(-1, speed),
-        }
-        self._end = {
-            "x+": lambda: self.c.end_jog(AxisId.X),
-            "x-": lambda: self.c.end_jog(AxisId.X),
-            "y+": lambda: self.c.end_jog(AxisId.Y),
-            "y-": lambda: self.c.end_jog(AxisId.Y),
-            "z+": lambda: self.c.end_jog_z(),
-            "z-": lambda: self.c.end_jog_z(),
-            "plunger+": lambda: self.c.end_jog_plunger(),
-            "plunger-": lambda: self.c.end_jog_plunger(),
-        }
-        self._bindings = {
-            # discrete one-shot equivalents -- used by handle() (scripted
-            # input, tests, single-button taps); press()/release() bypass
-            # these in favor of the continuous jog above.
-            "x+": lambda: self.c.nudge(AxisId.X, +1),
-            "x-": lambda: self.c.nudge(AxisId.X, -1),
-            "y+": lambda: self.c.nudge(AxisId.Y, +1),
-            "y-": lambda: self.c.nudge(AxisId.Y, -1),
-            "z+": lambda: self.c.jog_z(+1),
-            "z-": lambda: self.c.jog_z(-1),
-            "plunger+": lambda: self.c.jog_plunger(+1),
-            "plunger-": lambda: self.c.jog_plunger(-1),
-            "step_up": lambda: self.c.cycle_scale(+1),
-            "step_down": lambda: self.c.cycle_scale(-1),
-            "mount_toggle": lambda: self.c.toggle_mount(),
-            "zero_z": lambda: self.c.capture_z_zero(),
-            "home": self._home,
-            "quit": self._quit,
-        }
-
-    def _home(self):
-        # A continuous jog's move is sent without waiting for its 'ok' (see
-        # JogController) and only gets cleaned up on end_jog -- home() must
-        # not send G28 while one might still be in flight, or its response
-        # read risks consuming that stale unread reply instead of G28's
-        # own. No-op if nothing was jogging.
-        self.c.end_jog()
-        self.c.robot.home()
-
-    def _quit(self):
-        self.c.end_jog()
-        self.running = False
-
-    def press(self, action: str, speed: float | None = None) -> None:
-        """Begin ``action``. Movement actions move continuously until
-        release() stops them; momentary actions (step_up, home, ...) just
-        fire once, same as handle()."""
-        fn = self._begin.get(action)
-        if fn:
-            fn(self.c.jog_speed if speed is None else speed)
-        else:
-            self.handle(action)
-
-    def release(self, action: str) -> None:
-        """End a continuous move started by press(). No-op for momentary
-        actions -- there's nothing held to release."""
-        fn = self._end.get(action)
-        if fn:
-            fn()
-
-    def handle(self, action: str) -> None:
-        """Fire a momentary action once -- for one-shot inputs (buttons,
-        scripted tests) rather than a held key/stick."""
-        fn = self._bindings.get(action)
-        if fn:
-            fn()
-
-    def bind(self, action: str, fn) -> None:
-        self._bindings[action] = fn

@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import time
 
+from loguru import logger
+
 from .core import AxisId, MountSide
 from .geometry.calibration import DeckCalibration
 from .geometry.coordinates import DeckPoint
@@ -355,6 +357,11 @@ class Robot:
                 if now - stalled_since >= stall_timeout:
                     if resend is not None and resends_left > 0:
                         resends_left -= 1
+                        tried = max_resends - resends_left
+                        logger.warning(
+                            f"axes stalled at {current} (wanted {targets}) after "
+                            f"{stall_timeout}s -- resending, retry {tried}/{max_resends}"
+                        )
                         resend()
                         stalled_since = None
                         last_pos = None

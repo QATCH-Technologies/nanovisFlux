@@ -1,15 +1,41 @@
-"""Standard labware type definitions.
+"""Reusable physical definitions for standard laboratory labware.
 
-A definition is the reusable physical spec of a piece of labware -- the
-things a vendor datasheet gives you: footprint, height, well/tip grid,
-volume, shape, spacing, and the fixed offset from the labware's own corner
-to well A1. Declare one per labware type, then ``place`` it on any slot --
-the well/tip offsets are computed from the definition, never hand-picked.
+This module defines immutable specifications for common grid-addressed
+labware types, including well plates, reservoirs, and disposable-tip racks.
+A definition describes the physical properties that are intrinsic to a
+labware type—such as footprint, height, grid dimensions, spacing, well or
+tip geometry, capacity, and the fixed offset of A1 from the labware origin.
+
+Definitions are intentionally separate from placement. A definition can be
+used to instantiate and place the same labware type on different deck slots,
+with well and tip locations derived consistently from the definition rather
+than encoded as individual coordinates.
+
+The primary types are:
+
+    GridLabwareDefinition:
+        Common base definition for rectangular, row/column-addressed
+        labware.
+
+    WellPlateDefinition:
+        Definition for liquid-handling well plates.
+
+    ReservoirDefinition:
+        Specialized well-plate definition for troughs and reservoirs.
+
+    TipRackDefinition:
+        Definition for disposable-tip racks, including tip geometry and
+        capacity.
+
+Definitions do not represent a particular physical placement on the deck.
+Calling ``place`` on a concrete definition creates a :class:`Labware`
+instance whose geometry is derived from the definition and associates it
+with a specific deck slot.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..geometry.coordinates import DeckPoint
 from ..tools.tips import TipGeometry
@@ -18,21 +44,34 @@ from .labware import BottomShape, Labware, WellGeometry, WellShape
 
 @dataclass(frozen=True)
 class GridLabwareDefinition:
-    """Shared shape for grid-addressed labware (well plates, reservoirs,
-    tip racks): a rectangular footprint holding a rows x cols grid, named
-    the conventional way (A1, A2, ..., B1, ...).
+    """Reusable physical definition for rectangular, grid-addressed labware.
 
-    ``grid_offset`` is well/tip A1's centre (z at its top), relative to the
-    labware's own TOP-LEFT corner (see ``Labware.grid``) -- a fixed property
-    of the labware type, independent of which slot it ends up in.
+    Defines the common geometry and addressing scheme shared by well plates,
+    reservoirs, and tip racks. The grid is addressed conventionally by row
+    and column (for example, ``A1``, ``A2``, ..., ``B1``), with spacing and
+    the A1 reference position defined relative to the labware's own origin.
 
-    ``stacking_offset`` is only added when this labware sits on an adapter,
-    module, or another piece of labware instead of directly on a bare deck
-    slot (``place(..., stacked=True)``); it is the zero vector for the
-    common case.
+    ``grid_offset`` specifies the centre of A1 relative to the labware's
+    top-left corner. ``stacking_offset`` provides an additional fixed offset
+    used when the labware is mounted on an adapter, module, or other
+    supporting labware rather than directly on a deck slot.
 
-    Not meant to be instantiated directly -- use WellPlateDefinition,
-    ReservoirDefinition, or TipRackDefinition.
+    Definitions describe a labware *type*, not a particular placement.
+    Concrete subclasses use the definition to construct a :class:`Labware`
+    instance when placed on a deck slot.
+
+    Args:
+        identifier: Unique identifier for the labware type.
+        footprint_mm: Labware footprint as ``(length_x_mm, width_y_mm)``.
+        height_mm: Overall physical height of the labware in millimetres.
+        rows: Number of rows in the labware grid.
+        cols: Number of columns in the labware grid.
+        row_spacing_mm: Centre-to-centre spacing between adjacent rows.
+        col_spacing_mm: Centre-to-centre spacing between adjacent columns.
+        grid_offset: A1 centre position relative to the labware's top-left
+            corner.
+        stacking_offset: Additional grid offset applied when the labware is
+            placed in a stacked configuration.
     """
 
     identifier: str
@@ -42,10 +81,20 @@ class GridLabwareDefinition:
     cols: int
     row_spacing_mm: float
     col_spacing_mm: float
-    grid_offset: DeckPoint = DeckPoint(0, 0, 0)
-    stacking_offset: DeckPoint = DeckPoint(0, 0, 0)
+    grid_offset: DeckPoint = field(default_factory=lambda: DeckPoint(0, 0, 0))
+    stacking_offset: DeckPoint = field(default_factory=lambda: DeckPoint(0, 0, 0))
 
     def _grid_origin(self, stacked: bool) -> DeckPoint:
+        """Return the grid origin appropriate for the placement mode.
+
+        Args:
+            stacked: Whether the labware is mounted on an adapter, module,
+                or another supporting surface.
+
+        Returns:
+            The deck-space offset of the grid origin relative to the
+            labware's own origin.
+        """
         return self.grid_offset + self.stacking_offset if stacked else self.grid_offset
 
     def _check_fits(self, slot) -> None:
@@ -60,7 +109,11 @@ class GridLabwareDefinition:
 
 @dataclass(frozen=True)
 class WellPlateDefinition(GridLabwareDefinition):
-    """A standard well plate (e.g. a 96-well flat-bottom plate)."""
+    """Physical definition for a grid-addressed liquid-handling well plate.
+
+    Extends the common grid geometry with the dimensions, capacity, shape,
+    and bottom characteristics required to describe individual wells.
+    """
 
     well_volume_ul: float = 0.0
     well_shape: WellShape = WellShape.CIRCULAR
@@ -72,6 +125,13 @@ class WellPlateDefinition(GridLabwareDefinition):
     bottom_clearance_mm: float = 1.0
 
     def well_geometry(self) -> WellGeometry:
+        """Construct the well geometry represented by this definition.
+
+        Returns:
+            A :class:`WellGeometry` containing the configured well shape,
+            dimensions, depth, bottom geometry, clearance, and maximum
+            volume.
+        """
         return WellGeometry(
             shape=self.well_shape,
             diameter_mm=self.well_diameter_mm,
@@ -84,6 +144,19 @@ class WellPlateDefinition(GridLabwareDefinition):
         )
 
     def place(self, slot, *, stacked: bool = False) -> Labware:
+        """Instantiate and place the defined well plate on a deck slot.
+
+        Args:
+            slot: Deck slot on which the well plate will be placed.
+            stacked: Whether to apply the definition's stacking offset.
+
+        Returns:
+            The newly created and placed :class:`Labware` instance.
+
+        Raises:
+            ValueError: If the well plate footprint exceeds the slot's
+                defined footprint.
+        """
         self._check_fits(slot)
         labware = Labware.grid(
             self.identifier,
@@ -100,27 +173,54 @@ class WellPlateDefinition(GridLabwareDefinition):
 
 @dataclass(frozen=True)
 class ReservoirDefinition(WellPlateDefinition):
-    """A trough/reservoir. Physically the same shape as a well plate --
-    commonly a 1 x N grid of long wells sharing one liquid pool -- kept as
-    its own type since routines may want to branch on it (e.g. treat every
-    "well" as drawing from the same pool rather than N independent ones)."""
+    """Physical definition for a trough or multi-channel reservoir.
+
+    A reservoir uses the same geometric model as a well plate but is kept as
+    a distinct definition type so higher-level routines can distinguish
+    shared-pool reservoir behavior from independently addressable wells.
+    """
 
 
 @dataclass(frozen=True)
 class TipRackDefinition(GridLabwareDefinition):
-    """A standard tip rack."""
+    """Physical definition for a grid-addressed disposable-tip rack.
+
+    Defines the tip capacity and physical tip length in addition to the
+    common grid and footprint geometry. Tip racks use the grid solely to
+    describe tip positions; they do not model liquid-well shape or bottom
+    geometry.
+    """
 
     tip_volume_ul: float = 0.0
     tip_length_mm: float = 0.0  # nozzle-reference to tip end; feeds a TipGeometry
 
     def tip_geometry(self) -> TipGeometry:
+        """Construct the tip geometry represented by this definition.
+
+        Returns:
+            A :class:`TipGeometry` containing the tip type identifier,
+            physical length, and maximum supported liquid volume.
+        """
         return TipGeometry(
             name=self.identifier, length_mm=self.tip_length_mm, max_volume_ul=self.tip_volume_ul
         )
 
     def place(self, slot, *, stacked: bool = False) -> Labware:
+        """Instantiate and place the defined tip rack on a deck slot.
+
+        Args:
+            slot: Deck slot on which the tip rack will be placed.
+            stacked: Whether to apply the definition's stacking offset.
+
+        Returns:
+            The newly created and placed :class:`Labware` instance.
+
+        Raises:
+            ValueError: If the tip rack footprint exceeds the slot's defined
+                footprint.
+        """
         self._check_fits(slot)
-        # Tip wells aren't liquid-handling wells -- no shape/bottom to model,
+        # Tip wells aren't liquid-handling wells i.e., no shape/bottom to model,
         # just the top (first-contact) height carried by the grid itself.
         labware = Labware.grid(
             self.identifier,

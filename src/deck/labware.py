@@ -7,13 +7,19 @@ from ..geometry.coordinates import DeckPoint
 
 
 class WellShape(Enum):
+    """Cross-sectional shape of a well."""
+
     CIRCULAR = "circular"
     RECTANGULAR = "rectangular"
 
 
 class BottomShape(Enum):
-    """Profile of the well's deepest point -- affects how much dead volume
-    sits below the safe aspirate clearance, not the motion math itself."""
+    """Profile of the well's deepest point.
+
+    The bottom profile affects the usable liquid volume and the amount of
+    dead volume below the safe aspirate clearance, but does not directly
+    affect motion planning.
+    """
 
     FLAT = "flat"
     ROUND = "round"
@@ -22,14 +28,25 @@ class BottomShape(Enum):
 
 @dataclass(frozen=True)
 class WellGeometry:
-    """Physical shape of a well, shared by every well of a labware unless a
-    specific well overrides it (e.g. an odd calibration well in a reservoir).
+    """Describe the physical geometry shared by one or more wells.
 
-    ``depth_mm`` is measured from the well's opening (top) to its deepest
-    point. ``bottom_clearance_mm`` is the default standoff kept above that
-    deepest point when a routine resolves a well "at clearance" -- the usual
-    reference for aspirating without dragging the tip through solids or
-    crashing into a conical/round bottom.
+    Defines the well shape, dimensions, depth, bottom profile, aspirate
+    clearance, and nominal capacity. The geometry is normally shared by all
+    wells in a labware, but individual wells may override it when required.
+
+    ``depth_mm`` is measured from the well opening to its deepest point.
+    ``bottom_clearance_mm`` defines the default vertical standoff maintained
+    above the deepest point when resolving a well at ``"clearance"``.
+
+    Args:
+        shape: Cross-sectional shape of the well.
+        diameter_mm: Diameter of a circular well in millimetres.
+        width_mm: Width of a rectangular well in millimetres.
+        length_mm: Length of a rectangular well in millimetres.
+        depth_mm: Distance from the well opening to its deepest point.
+        bottom: Profile of the well bottom.
+        bottom_clearance_mm: Default clearance above the deepest point.
+        max_volume_ul: Maximum nominal well volume in microlitres.
     """
 
     shape: WellShape = WellShape.CIRCULAR
@@ -42,7 +59,20 @@ class WellGeometry:
     max_volume_ul: float = 0.0
 
     def z_delta(self, ref: str, clearance_mm: float | None = None) -> float:
-        """Deck-z offset from the well's top for a named reference point."""
+        """Return the vertical offset from the well opening.
+
+        Args:
+            ref: Named vertical reference. Supported values are ``"top"``,
+                ``"bottom"``, and ``"clearance"``.
+            clearance_mm: Optional override for the configured bottom
+                clearance when ``ref`` is ``"clearance"``.
+
+        Returns:
+            The deck-Z offset from the well opening in millimetres.
+
+        Raises:
+            ValueError: If ``ref`` is not a supported well reference.
+        """
         if ref == "top":
             return 0.0
         if ref == "bottom":
@@ -55,12 +85,17 @@ class WellGeometry:
 
 @dataclass
 class Well:
-    """A named location in a labware.
+    """Represent a named, addressable well within labware.
 
-    ``offset`` is the well's centre, relative to the labware origin, with z
-    at the well's TOP (opening/rim) -- the one unambiguous, directly
-    measurable datum. Bottom and clearance heights are derived from
-    ``geometry.depth_mm`` on resolve, never baked into the offset itself.
+    The well offset identifies its centre relative to the labware origin,
+    with Z referenced to the well opening. Bottom and clearance positions
+    are derived from the associated :class:`WellGeometry` rather than being
+    encoded directly in the well offset.
+
+    Args:
+        name: Address of the well, such as ``"A1"``.
+        offset: Well-centre position relative to the labware origin.
+        geometry: Physical geometry of the well.
     """
 
     name: str
@@ -68,6 +103,17 @@ class Well:
     geometry: WellGeometry = field(default_factory=WellGeometry)
 
     def at(self, ref: str = "top", clearance_mm: float | None = None) -> DeckPoint:
+        """Return the well position at a specified vertical reference.
+
+        Args:
+            ref: Vertical reference within the well. Supported values are
+                ``"top"``, ``"bottom"``, and ``"clearance"``.
+            clearance_mm: Optional override for the configured bottom
+                clearance.
+
+        Returns:
+            A deck-space point at the requested well reference.
+        """
         return self.offset + DeckPoint(0, 0, self.geometry.z_delta(ref, clearance_mm))
 
 
@@ -76,26 +122,40 @@ _ROW_LETTERS = "ABCDEFGHIJKLMNOP"
 
 @dataclass
 class Labware:
-    """Generic, data-driven labware: a named set of addressable wells.
+    """Represent a placed or placeable collection of addressable wells.
 
-    Build a uniform plate with ``Labware.grid`` (regular row/col pitch), or
-    hand-list ``wells`` for irregular spacing -- mixed pitches, a reservoir
-    with one big well, per-well geometry overrides, etc.
+    Labware can be constructed from a regular rectangular grid using
+    :meth:`grid` or from explicit well definitions using :meth:`from_dict`.
+    Wells may share a common geometry or provide individual geometry
+    overrides.
+
+    Once placed on a deck slot, :meth:`well` resolves a named well into an
+    absolute deck-space coordinate. Grid row offsets are adjusted during
+    placement to account for the slot's coordinate convention.
+
+    Args:
+        name: Name or identifier of the labware.
+        brand: Optional vendor or manufacturer name.
+        wells: Mapping of well names to :class:`Well` objects.
+        slot: Deck slot on which the labware is placed, if any.
     """
 
     name: str
-    brand: str = ""  # vendor/manufacturer, e.g. "Opentrons" -- "" when unknown/custom
+    brand: str = ""
     wells: dict = field(default_factory=dict)
-    slot: object = None  # a deck.Slot once placed
+    slot: object = None
     _pending_row_flip: bool = field(default=False, repr=False, compare=False)
 
     def place(self, slot) -> None:
-        """Record the slot and, for a ``Labware.grid``-built plate, mirror
-        its row offsets across the slot's own height -- ``grid`` lays rows
-        out downward from A1 at the labware's TOP-LEFT corner, while the
-        slot's own coordinate frame runs the other way (+y = back/away).
-        Deferred to here (rather than done in ``grid``) because the slot,
-        and therefore its height, isn't known until placement."""
+        """Place the labware on a deck slot.
+
+        Records the slot association and, for grid-generated labware, applies
+        the deferred row-coordinate transformation required by the slot's
+        coordinate frame.
+
+        Args:
+            slot: Deck slot on which the labware is placed.
+        """
         self.slot = slot
         if self._pending_row_flip and slot.size and slot.size[1]:
             height = slot.size[1]
@@ -103,14 +163,31 @@ class Labware:
                 well.offset = DeckPoint(well.offset.x, height - well.offset.y, well.offset.z)
             self._pending_row_flip = False
 
-    def well(self, name: str, ref: str = "top", clearance_mm: float | None = None) -> DeckPoint:
-        """Absolute deck point for a well at the given reference height:
-        "top" (opening/rim, the default here), "bottom" (deepest point), or
-        "clearance" (a safe standoff above the bottom -- what routines use
-        for aspirate/dispense by default)."""
+    def well(
+        self,
+        name: str,
+        ref: str = "top",
+        clearance_mm: float | None = None,
+    ) -> DeckPoint:
+        """Resolve a named well to an absolute deck-space position.
+
+        Args:
+            name: Well address, such as ``"A1"``.
+            ref: Vertical reference within the well. Supported values are
+                ``"top"``, ``"bottom"``, and ``"clearance"``.
+            clearance_mm: Optional override for the well's configured
+                bottom clearance.
+
+        Returns:
+            Absolute deck-space coordinate of the requested well position.
+
+        Raises:
+            RuntimeError: If the labware has not been placed on a deck slot.
+            KeyError: If ``name`` is not an addressable well.
+        """
         if self.slot is None:
             raise RuntimeError(f"labware {self.name!r} is not placed on the deck")
-        return self.slot.origin + self.wells[name].at(ref, clearance_mm)
+        return self.slot.origin + self.wells[name].at(ref, clearance_mm)  # type: ignore
 
     @classmethod
     def grid(
@@ -124,17 +201,26 @@ class Labware:
         col_spacing_mm: float,
         geometry: WellGeometry | None = None,
         brand: str = "",
-    ) -> "Labware":
-        """Uniform rows x cols grid, named the conventional way (A1, A2, ...,
-        B1, ...). ``origin`` is well A1's centre (z at the well top), given
-        as an offset from the labware's own TOP-LEFT corner: x to the right
-        of the left edge, y DOWN from the top edge -- matching how real
-        labware is labelled (row A nearest the back/top looking down at the
-        deck, row B/C/... further toward the front). Every well shares
-        ``geometry``.
+    ) -> Labware:
+        """Construct a uniformly spaced, conventionally named well grid.
 
-        These offsets are provisional until ``place()`` mirrors them across
-        the slot's height into the slot's own bottom-anchored frame."""
+        Wells are named row-major using alphabetic row identifiers and
+        numeric column identifiers, such as ``A1``, ``A2``, and ``B1``.
+        ``origin`` identifies the centre of A1 at the well opening.
+
+        Args:
+            name: Name or identifier for the resulting labware.
+            rows: Number of well rows.
+            cols: Number of well columns.
+            origin: A1 centre relative to the labware origin.
+            row_spacing_mm: Centre-to-centre spacing between rows.
+            col_spacing_mm: Centre-to-centre spacing between columns.
+            geometry: Geometry shared by all generated wells.
+            brand: Optional vendor or manufacturer name.
+
+        Returns:
+            A new :class:`Labware` containing the generated well grid.
+        """
         geometry = geometry or WellGeometry()
         wells = {}
         for r in range(rows):
@@ -149,7 +235,20 @@ class Labware:
         return labware
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Labware":
+    def from_dict(cls, data: dict) -> Labware:
+        """Construct labware from a dictionary representation.
+
+        The dictionary may describe either a regular ``grid`` or an explicit
+        collection of wells. A default well geometry may be supplied at the
+        labware level, with individual wells optionally overriding it.
+
+        Args:
+            data: Dictionary containing the labware name and optional brand,
+                geometry, grid, or explicit well configuration.
+
+        Returns:
+            A new :class:`Labware` populated from ``data``.
+        """
         default_geometry = _geometry_from_dict(data.get("well_geometry", {}))
         brand = data.get("brand", "")
         if "grid" in data:
@@ -173,6 +272,16 @@ class Labware:
 
 
 def _geometry_from_dict(d: dict) -> WellGeometry:
+    """Construct well geometry from serialized configuration data.
+
+    Missing fields use the defaults defined by :class:`WellGeometry`.
+
+    Args:
+        d: Dictionary containing serialized well geometry fields.
+
+    Returns:
+        A configured :class:`WellGeometry` instance.
+    """
     if not d:
         return WellGeometry()
     return WellGeometry(

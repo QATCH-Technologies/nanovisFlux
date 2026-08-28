@@ -1,8 +1,17 @@
-from .jog import JogController, JogSettings, JogSession, ACTIONS
-from .inputs import InputSource, ScriptedInput
-from .keyboard import KeyboardInput, DEFAULT_KEYMAP
-from .gamepad import GamepadInput, DEFAULT_PAD_MAP
+"""User-input interfaces and jog-control utilities.
 
-__all__ = ["JogController", "JogSettings", "JogSession", "ACTIONS",
-           "InputSource", "ScriptedInput", "KeyboardInput", "DEFAULT_KEYMAP",
-           "GamepadInput", "DEFAULT_PAD_MAP"]
+This package provides the input abstractions and concrete input sources used
+to control robot jogging. It includes keyboard and gamepad input mappings,
+scripted input for automated or test-driven operation, and the controllers
+and session settings used to translate input events into jog actions.
+"""
+
+from .inputs import InputSource, ScriptedInput
+from .jog import JogController, JogSettings
+
+__all__ = [
+    "InputSource",
+    "JogController",
+    "JogSettings",
+    "ScriptedInput",
+]

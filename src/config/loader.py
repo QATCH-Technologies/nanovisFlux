@@ -39,32 +39,52 @@ _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.RE
 
 
 def load_config(path: str) -> dict:
-    import yaml  # lazy dependency
+    """Load a YAML configuration file.
+
+    Args:
+        path: Path to the YAML configuration file.
+
+    Returns:
+        The parsed YAML document as a dictionary.
+    """
+    import yaml
 
     with open(path, "r") as fh:
         return yaml.safe_load(fh)
 
 
 def calibration_sidecar_path(config_path) -> Path:
-    """Where a calibration persisted from the GUI's "Save calibration..."
-    button (see gui/calibration_dialog.py) lives for ``config_path`` --
-    e.g. "robot.yaml" -> "robot.calibration.yaml", sitting right next to
-    it. Deliberately a separate file rather than writing back into the
-    config itself: config files like configs/robot.yaml are hand-authored
-    and heavily commented, and round-tripping one through yaml.safe_load /
-    safe_dump to patch in a new calibration would silently strip every
-    comment. Connecting with the same config_path picks this sidecar up
-    automatically (see load_calibration_override) if one exists, so a
-    recalibration persists across reconnects without ever touching the
-    original file."""
+    """Return the path to the persisted calibration sidecar for a config.
+
+    The sidecar uses the same directory and base filename as the source
+    configuration, with ``.calibration`` inserted before the original
+    suffix. For example, ``robot.yaml`` maps to
+    ``robot.calibration.yaml``.
+
+    Args:
+        config_path: Path to the primary robot configuration file.
+
+    Returns:
+        Path where the corresponding calibration sidecar is stored.
+    """
     p = Path(config_path)
     return p.with_suffix(f".calibration{p.suffix}")
 
 
 def load_calibration_override(config_path) -> dict | None:
-    """The ``calibration:`` section from config_path's sidecar file (see
-    calibration_sidecar_path), or None if there isn't one yet -- the normal
-    case before the deck has ever been calibrated from the GUI."""
+    """Load a persisted calibration override for a robot configuration.
+
+    The override is read from the calibration sidecar associated with
+    ``config_path``. If the sidecar contains a top-level ``calibration``
+    section, that section is returned; otherwise the entire file contents
+    are treated as the calibration configuration.
+
+    Args:
+        config_path: Path to the primary robot configuration file.
+
+    Returns:
+        The calibration configuration, or ``None`` if no sidecar exists.
+    """
     sidecar = calibration_sidecar_path(config_path)
     if not sidecar.exists():
         return None
@@ -72,35 +92,22 @@ def load_calibration_override(config_path) -> dict | None:
     return cfg.get("calibration", cfg)
 
 
-# -- split-file config resolution --------------------------------------------
-#
-# A robot config's axes/calibration/deck/tips/labware/mounts sections can
-# each be given two ways:
-#   - inline (a dict, or for tips/labware a list of dicts) -- the original,
-#     single-file convention; an existing single-file config keeps working
-#     with zero edits (see test_split_config_loader.py's
-#     test_resolve_robot_config_leaves_inline_sections_untouched).
-#   - as a path (string, resolved relative to the referencing file's own
-#     directory -- NOT the process cwd) to that section's own YAML file, so
-#     one axes/calibration/deck/tool/tip/labware profile can be measured
-#     once and reused by name across multiple robot configs instead of
-#     copy-pasted. See configs/robot.yaml for the split-file convention
-#     this enables.
-#
-# resolve_robot_config() is the only entry point that needs to know about
-# this: it turns any mix of inline/referenced sections into the fully-inline
-# dict shape build_transport/build_axes/build_calibration/build_deck/
-# build_labware/build_tips/load_robot's mounts loop have always consumed, so
-# nothing downstream (including the GUI's build_robot) needs to change.
-
-
 def _load_section_ref(base_dir: Path, value, wrapper_key: str):
-    """``value`` is either an inline section (returned as-is) or a path to a
-    standalone YAML file for it, resolved against ``base_dir``. A standalone
-    file may itself wrap the section under ``wrapper_key:`` (self-documenting,
-    and consistent with how a calibration sidecar file reads) or just BE the
-    section at the top level -- same fallback convention as
-    load_calibration_override/load_calibration already use."""
+    """Resolve an inline configuration section or a YAML file reference.
+
+    Non-string values are returned unchanged. String values are interpreted
+    as paths relative to ``base_dir`` and loaded as YAML. Referenced files
+    may either contain the section directly or wrap it under ``wrapper_key``.
+
+    Args:
+        base_dir: Directory relative to which referenced paths are resolved.
+        value: Inline section data or a relative YAML file path.
+        wrapper_key: Optional top-level key under which the referenced
+            section may be stored.
+
+    Returns:
+        The resolved configuration section.
+    """
     if not isinstance(value, str):
         return value
     loaded = load_config(str(base_dir / value))
@@ -108,12 +115,18 @@ def _load_section_ref(base_dir: Path, value, wrapper_key: str):
 
 
 def _check_name_matches(declared_name, loaded: dict, file_path: Path, kind: str) -> None:
-    """A reference entry (in robot.yaml's tips:/labware:/mounts:) may declare
-    the ``name:`` it expects to find -- enforced here so the object (the
-    referenced file's own ``name:``), the config (this declared name), and
-    the file name stay in sync by construction rather than by convention:
-    a rename on one side without the other fails loudly instead of quietly
-    drifting."""
+    """Validate that a referenced object's declared and loaded names agree.
+
+    Args:
+        declared_name: Name declared by the referencing configuration.
+        loaded: Configuration loaded from the referenced file.
+        file_path: Path to the referenced configuration file.
+        kind: Human-readable configuration category used in the error
+            message.
+
+    Raises:
+        ValueError: If both names are present and do not match.
+    """
     actual_name = loaded.get("name")
     if declared_name is not None and actual_name is not None and declared_name != actual_name:
         raise ValueError(
@@ -123,12 +136,20 @@ def _check_name_matches(declared_name, loaded: dict, file_path: Path, kind: str)
 
 
 def _resolve_tips_refs(base_dir: Path, cfg_list: list) -> list:
-    """Each entry is an inline tip dict (has its own ``name``/``length_mm``,
-    no ``config``), a bare path string, or ``{name, config}`` -- the latter
-    two load the tip's own file (resolved against ``base_dir``); ``{name,
-    config}`` additionally checks that declared ``name`` against the file's
-    own, so the tip's identity can't silently drift out of sync between
-    robot.yaml and the file it points at."""
+    """Resolve inline and file-referenced tip configurations.
+
+    Tip entries may be inline dictionaries, bare YAML paths, or dictionaries
+    containing ``name`` and ``config`` fields. Referenced configurations are
+    resolved relative to ``base_dir`` and may optionally be wrapped under a
+    ``tip`` key.
+
+    Args:
+        base_dir: Directory containing the robot configuration.
+        cfg_list: Tip configuration entries from the robot configuration.
+
+    Returns:
+        A list of fully resolved inline tip configuration dictionaries.
+    """
     resolved = []
     for item in cfg_list or []:
         if isinstance(item, str):
@@ -146,20 +167,20 @@ def _resolve_tips_refs(base_dir: Path, cfg_list: list) -> list:
 
 
 def _resolve_labware_refs(base_dir: Path, cfg_list: list) -> list:
-    """Each entry is either an old-style inline labware dict (already
-    carrying its own ``slot:``), or ``{slot, config, name?, instance?}``
-    naming a reusable labware definition file -- the file itself holds no
-    slot (matching Labware.from_dict, which never reads one), so the same
-    tiprack/plate definition can sit in a different slot on a different
-    robot, or in more than one slot on the same robot.
+    """Resolve reusable labware definition references.
 
-    ``instance`` (when given) carries through as the key Robot.load_labware
-    registers this placement under -- needed only when the same reusable
-    definition is placed more than once (each placement's ``.name`` would
-    otherwise collide in ``robot.labware``); a single placement can omit it
-    and fall back to the labware's own ``name``, as before. ``name`` (when
-    given) is checked against the definition file's own -- see
-    _check_name_matches."""
+    Referenced labware definitions are loaded relative to ``base_dir`` and
+    merged with the placement-specific ``slot``. Optional instance names
+    are preserved so the same labware definition can be placed multiple
+    times.
+
+    Args:
+        base_dir: Directory containing the robot configuration.
+        cfg_list: Labware configuration entries.
+
+    Returns:
+        A list of fully resolved labware configuration dictionaries.
+    """
     resolved = []
     for item in cfg_list or []:
         if isinstance(item, dict) and "config" in item:
@@ -177,19 +198,20 @@ def _resolve_labware_refs(base_dir: Path, cfg_list: list) -> list:
 
 
 def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> tuple:
-    """Each mount's value is an inline tool dict (has its own ``type``, no
-    ``config``), a bare path string, or ``{name, config}`` -- the latter two
-    load the tool's own file; ``{name, config}`` additionally checks the
-    declared ``name`` against the file's own (see _check_name_matches).
+    """Resolve inline and file-referenced mounted tool configurations.
 
-    Returns ``(resolved, tip_calibrations)``: ``resolved`` is the same
-    plain inline-tool-dict shape an inline mount would already produce
-    (mounts: itself never carries calibration data, so a resolved split
-    config and an inline one still compare equal -- see
-    resolve_robot_config's own docstring/tests). ``tip_calibrations`` is a
-    side dict-of-dicts, populated only for pipette mounts loaded from a
-    file reference (see build_pipette_tip_calibrations) -- kept as a
-    separate return value rather than smuggled into ``resolved`` itself."""
+    Referenced tool definitions are loaded relative to ``base_dir``.
+    Pipette references additionally cause any associated per-tip plunger
+    calibrations to be discovered.
+
+    Args:
+        base_dir: Directory containing the robot configuration.
+        cfg_dict: Mapping of mount side names to tool configurations.
+
+    Returns:
+        A tuple containing the resolved mount configuration mapping and a
+        mapping of mount sides to discovered pipette tip calibrations.
+    """
     resolved = {}
     tip_calibrations = {}
     for side, value in (cfg_dict or {}).items():
@@ -214,11 +236,19 @@ def _resolve_mounts_refs(base_dir: Path, cfg_dict: dict) -> tuple:
 
 
 def resolve_robot_config(path: str) -> dict:
-    """Load ``path`` and follow any file-reference sections, returning the
-    same fully-inline dict shape a single monolithic config has always
-    produced. Both load_robot and the GUI's connect flow go through this so
-    a split-file config and an inline, single-file one behave identically
-    from here down."""
+    """Load and fully resolve a robot configuration.
+
+    Inline sections and sections referenced by separate YAML files are
+    normalized into the same fully inline structure consumed by the object
+    builders. Referenced paths are resolved relative to the robot
+    configuration file rather than the process working directory.
+
+    Args:
+        path: Path to the primary robot YAML configuration.
+
+    Returns:
+        A fully resolved robot configuration dictionary.
+    """
     cfg = load_config(path)
     base_dir = Path(path).resolve().parent
     resolved = dict(cfg)
@@ -239,8 +269,20 @@ def resolve_robot_config(path: str) -> dict:
     return resolved
 
 
-# -- individual sections ----------------------------------------------------
 def build_transport(cfg: dict):
+    """Construct a transport from its configuration.
+
+    Args:
+        cfg: Transport configuration containing the transport ``type`` and
+            any type-specific connection parameters.
+
+    Returns:
+        A configured transport instance.
+
+    Raises:
+        NotImplementedError: If ``type`` is ``"tcp"``.
+        ValueError: If the transport type is unknown.
+    """
     kind = cfg.get("type", "simulated")
     if kind == "serial":
         return SerialTransport(cfg["port"], cfg.get("baudrate", 115200), cfg.get("timeout", 30.0))
@@ -252,26 +294,40 @@ def build_transport(cfg: dict):
 
 
 def _axis_resonance_warnings(cfg: AxisConfig) -> list:
-    """Human-readable warnings for any of ``cfg``'s own steady-state speeds
-    (travel_speed, homing_speed) that sit inside its own configured
-    resonance_bands_hz -- i.e. this axis's normal operating speed IS the
-    bad-sounding frequency, not just something a jog might transiently pass
-    through. A pure function (no logging here) so it's testable without
-    intercepting loguru; build_axes logs whatever this returns."""
+    """Generate warnings for configured speeds inside resonance bands.
+
+    The check considers the axis's steady-state travel and homing speeds,
+    rather than transient speeds encountered during acceleration or
+    deceleration.
+
+    Args:
+        cfg: Axis configuration to inspect.
+
+    Returns:
+        Human-readable warning messages for speeds that fall within one of
+        the axis's configured resonance bands.
+    """
     warnings = []
     for label, value in (("travel_speed", cfg.travel_speed), ("homing_speed", cfg.homing_speed)):
         band = feed_in_resonance_band(value, cfg.resonance_bands_hz)
         if band is not None:
             warnings.append(
                 f"axis {cfg.axis.letter}: {label} ({value:g} microsteps/s) falls inside its "
-                f"own configured resonance_bands_hz {band} Hz -- every move at this speed "
-                "will ring; reconfigure travel_speed/homing_speed or the band"
+                f"own configured resonance_bands_hz {band} Hz"
             )
     return warnings
 
 
 def build_axes(cfg: dict) -> dict:
-    """Start from firmware defaults and apply per-axis overrides."""
+    """Build axis configurations from firmware defaults and YAML overrides.
+
+    Args:
+        cfg: Mapping of axis letters to per-axis configuration overrides.
+
+    Returns:
+        A mapping from :class:`AxisId` to fully populated
+        :class:`AxisConfig` objects.
+    """
     axes = default_axis_configs()
     for letter, over in (cfg or {}).items():
         a = AxisId(letter.upper())
@@ -297,14 +353,36 @@ def build_axes(cfg: dict) -> dict:
 
 
 def load_calibration(path: str) -> DeckCalibration:
-    """Load a calibration section either from a full robot config (under
-    the ``calibration:`` key) or a standalone calibration-only file (as
-    written by scripts/calibrate_deck.py)."""
+    """Load a deck calibration from a YAML file.
+
+    The file may contain a complete robot configuration with a
+    ``calibration`` section or may consist solely of the calibration
+    section.
+
+    Args:
+        path: Path to the calibration or robot configuration file.
+
+    Returns:
+        The constructed :class:`DeckCalibration`.
+    """
     cfg = load_config(path)
     return build_calibration(cfg.get("calibration", cfg))
 
 
 def build_calibration(cfg: dict) -> DeckCalibration:
+    """Build a deck calibration from configuration data.
+
+    An explicit affine transform is used when ``affine`` is provided.
+    Otherwise, the XY transform is fitted from deck and motor calibration
+    point pairs. The vertical scale and per-mount Z-zero values are then
+    constructed from the corresponding configuration entries.
+
+    Args:
+        cfg: Deck calibration configuration.
+
+    Returns:
+        A configured :class:`DeckCalibration`.
+    """
     if "affine" in cfg:
         xy = AffineTransform2D(*cfg["affine"])
     else:
@@ -318,13 +396,31 @@ def build_calibration(cfg: dict) -> DeckCalibration:
 
 
 def load_pipette_calibration(path: str) -> PlungerCalibration:
-    """Load a pipette_calibration: section either from a full robot config
-    or a standalone file -- as written by scripts/calibrate_pipette.py."""
+    """Load a pipette plunger calibration from a YAML file.
+
+    The file may contain a complete configuration with a
+    ``pipette_calibration`` section or may consist solely of that section.
+
+    Args:
+        path: Path to the pipette calibration file.
+
+    Returns:
+        The constructed :class:`PlungerCalibration`.
+    """
     cfg = load_config(path)
     return build_pipette_calibration(cfg.get("pipette_calibration", cfg))
 
 
 def build_pipette_calibration(cfg: dict) -> PlungerCalibration:
+    """Build a pipette plunger calibration from measured volume pairs.
+
+    Args:
+        cfg: Configuration containing separate ``aspirate`` and ``dispense``
+            microstep-to-volume calibration pairs.
+
+    Returns:
+        The constructed :class:`PlungerCalibration`.
+    """
     return PlungerCalibration.from_pairs(
         aspirate=[(p["microsteps"], p["volume_ul"]) for p in cfg["aspirate"]],
         dispense=[(p["microsteps"], p["volume_ul"]) for p in cfg["dispense"]],
@@ -332,34 +428,25 @@ def build_pipette_calibration(cfg: dict) -> PlungerCalibration:
 
 
 def build_pipette_tip_calibrations(pipette_dir: Path, pipette_name: str) -> dict:
-    """Every measured calibration for ``pipette_name``, one per
-    characterized tip -- see configs/tools/pipettes/<pipette_name>/
-    calibrations/*.yaml (written by scripts/calibrate_pipette.py or
-    scripts/calibration_recovery.py), one file per tip, each holding a
-    ``pipette_calibration:`` section in the same shape
-    build_pipette_calibration reads.
+    """Load all measured tip-specific calibrations for a pipette.
 
-    ``pipette_name`` is its own top-level directory (a sibling of that
-    pipette's own <pipette_name>.yaml, both directly under
-    configs/tools/pipettes/) rather than being nested inside one shared
-    calibrations/ folder -- there are enough distinct pipettes in practice
-    (gen1 vs. gen2, single- vs. multi-channel, ...) that each needs to be
-    unambiguously its own top-level grouping, not one more entry filed
-    under a generic bucket.
+    Calibration files are discovered from the pipette's
+    ``calibrations`` directory. Each file may identify its pipette name;
+    when present, that declaration must match ``pipette_name``.
 
-    Mount side doesn't affect a plunger's steps<->volume mapping (see
-    PlungerCalibration) -- a pipette's calibrations are the same wherever
-    it's mounted, so unlike ``mounts:`` these are never split by side.
+    Args:
+        pipette_dir: Directory containing the pipette's definition
+            directory.
+        pipette_name: Name of the pipette whose calibrations are loaded.
 
-    ``pipette_dir`` is the directory the pipette's OWN tool file lives in
-    (e.g. configs/tools/pipettes/), not the robot config's -- calibrations
-    stay colocated with the pipette definition they belong to, so they're
-    found the same way regardless of which robot config references it.
+    Returns:
+        A mapping from tip name to :class:`PlungerCalibration`. Returns an
+        empty dictionary when no calibration directory exists.
 
-    Returns {} if this pipette has no calibrations directory yet (the
-    normal case before it's ever been characterized -- Pipette then falls
-    back to its linear PlungerModel; see
-    Pipette._calibration_for_current_tip)."""
+    Raises:
+        ValueError: If a calibration file declares a different pipette
+            name from the directory in which it resides.
+    """
     calib_dir = pipette_dir / pipette_name / "calibrations"
     if not calib_dir.is_dir():
         return {}
@@ -378,6 +465,15 @@ def build_pipette_tip_calibrations(pipette_dir: Path, pipette_name: str) -> dict
 
 
 def _build_slot_obstacles(cfg: list) -> list:
+    """Build slot obstacles from configuration data.
+
+    Args:
+        cfg: Sequence of obstacle dictionaries containing offsets, sizes,
+            and heights.
+
+    Returns:
+        A list of :class:`SlotObstacle` instances.
+    """
     return [
         SlotObstacle(offset=tuple(o["offset"]), size=tuple(o["size"]), height_mm=o["height_mm"])
         for o in (cfg or [])
@@ -385,10 +481,20 @@ def _build_slot_obstacles(cfg: list) -> list:
 
 
 def _build_calibration_marks(cfg: dict | None, slots: dict) -> dict:
-    """Named fixed reference points for the deck<->motor calibration wizard
-    (see gui/calibration_dialog.py) -- each is a slot corner inset by a
-    shared mm offset (see deck.inset_corner_point), so only the slot +
-    corner need naming in YAML rather than hand-computed absolute mm."""
+    """Build named deck calibration marks from slot-relative definitions.
+
+    Each mark is resolved from a named slot, corner, and configured inset,
+    allowing calibration points to remain tied to the deck geometry rather
+    than storing absolute coordinates.
+
+    Args:
+        cfg: Calibration-mark configuration, or ``None`` when marks are
+            not configured.
+        slots: Mapping of deck slot names to :class:`Slot` instances.
+
+    Returns:
+        A mapping from calibration-mark name to :class:`CalibrationMark`.
+    """
     if not cfg:
         return {}
     inset = cfg.get("inset_mm", {})
@@ -405,6 +511,18 @@ def _build_calibration_marks(cfg: dict | None, slots: dict) -> dict:
 
 
 def build_deck(cfg: dict) -> Deck:
+    """Build a deck and its slots from configuration data.
+
+    The configuration may describe either a regular slot grid or an
+    explicit collection of slots. Optional margins, enclosure dimensions,
+    obstacles, and calibration marks are also applied.
+
+    Args:
+        cfg: Deck configuration dictionary.
+
+    Returns:
+        A fully constructed :class:`Deck`.
+    """
     if "grid" in cfg:
         g = cfg["grid"]
         deck = Deck.grid(
@@ -436,10 +554,28 @@ def build_deck(cfg: dict) -> Deck:
 
 
 def build_labware(cfg: dict) -> Labware:
+    """Build labware from its configuration dictionary.
+
+    Args:
+        cfg: Labware definition containing either a regular grid
+            specification or explicit well definitions.
+
+    Returns:
+        The constructed :class:`Labware`.
+    """
     return Labware.from_dict(cfg)
 
 
 def build_tips(cfg: list) -> dict:
+    """Build tip geometries from configuration data.
+
+    Args:
+        cfg: Sequence of tip definitions containing names, lengths, and
+            optional volume, diameter, and brand information.
+
+    Returns:
+        A mapping from tip name to :class:`TipGeometry`.
+    """
     tips = {}
     for t in cfg or []:
         tips[t["name"]] = TipGeometry(
@@ -453,6 +589,17 @@ def build_tips(cfg: list) -> dict:
 
 
 def _build_pipette(cfg: dict, tip_calibrations: dict | None = None) -> Pipette:
+    """Build a pipette from its configuration.
+
+    Args:
+        cfg: Pipette configuration containing plunger characteristics,
+            capacity, and optional metadata.
+        tip_calibrations: Optional mapping of tip names to measured
+            plunger calibrations.
+
+    Returns:
+        A configured :class:`Pipette`.
+    """
     return Pipette(
         name=cfg["name"],
         plunger=PlungerModel(
@@ -467,6 +614,14 @@ def _build_pipette(cfg: dict, tip_calibrations: dict | None = None) -> Pipette:
 
 
 def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
+    """Build an ultrasonic sensor from configuration data.
+
+    Args:
+        cfg: Ultrasonic sensor configuration.
+
+    Returns:
+        A configured :class:`UltrasonicSensor`.
+    """
     return UltrasonicSensor(
         max_range_mm=cfg.get("max_range_mm", 4000.0),
         name=cfg.get("name", "ultrasonic"),
@@ -475,6 +630,14 @@ def _build_ultrasonic(cfg: dict) -> UltrasonicSensor:
 
 
 def _build_touch_probe(cfg: dict) -> TouchProbe:
+    """Build a touch probe from configuration data.
+
+    Args:
+        cfg: Touch-probe configuration.
+
+    Returns:
+        A configured :class:`TouchProbe`.
+    """
     return TouchProbe(
         name=cfg.get("name", "touch-probe"),
         length_mm=cfg.get("length_mm", 0.0),
@@ -482,13 +645,28 @@ def _build_touch_probe(cfg: dict) -> TouchProbe:
     )
 
 
-# -- top level --------------------------------------------------------------
 def load_robot(path: str) -> Robot:
+    """Load a complete robot configuration and construct a ready Robot.
+
+    The configuration is first resolved into a fully inline representation.
+    Any persisted calibration sidecar then overrides the calibration
+    contained in the primary configuration. Transports, calibration,
+    deck, axes, tips, labware, and mounted tools are subsequently
+    constructed and attached to the robot.
+
+    Args:
+        path: Path to the primary robot YAML configuration.
+
+    Returns:
+        A fully configured :class:`Robot` ready for use.
+
+    Raises:
+        ValueError: If any configuration section contains an invalid or
+            unsupported value.
+        NotImplementedError: If the configuration requests an unsupported
+            transport type.
+    """
     cfg = resolve_robot_config(path)
-    # A calibration persisted from the GUI (see calibration_sidecar_path)
-    # always wins over whatever the config file itself says -- the whole
-    # point is that recalibrating from the dialog, then reconnecting with
-    # this same config, never needs the operator to redo it.
     override = load_calibration_override(path)
     if override is not None:
         cfg = {**cfg, "calibration": override}

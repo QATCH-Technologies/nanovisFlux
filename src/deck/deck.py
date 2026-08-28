@@ -1,3 +1,21 @@
+"""Deck layout, slot geometry, and physical calibration-reference models.
+
+This module defines the geometric representation of a robot deck and the
+regions, fixtures, and reference points associated with it. Deck contents are
+addressed semantically by slot name rather than by a fixed numbering scheme,
+allowing the same abstractions to represent labware locations, trash areas,
+tool docks, and other physical regions.
+
+Slot geometry includes optional footprints, walls, and interior obstacles.
+These properties are currently descriptive and are primarily consumed by
+visualization and layout code rather than motion planning.
+
+The module also provides helpers for resolving slot corners and inset
+positions in deck coordinates, as well as named calibration marks that can be
+used to establish the relationship between deck-space and motor-space
+coordinates.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,12 +26,19 @@ from ..geometry.coordinates import DeckPoint
 
 @dataclass
 class SlotObstacle:
-    """A solid interior fixture inside a slot -- e.g. a raised pedestal cast
-    into a trash bin's floor. ``offset`` is (x, y) mm from the slot's own
-    origin (its front-left corner, same convention as ``Slot.origin``);
-    everything inside the slot's walls that isn't an obstacle is empty.
-    Purely descriptive/visual -- nothing in motion planning consults this
-    yet, so it doesn't guard against a tip being driven into one."""
+    """Describe a solid fixture occupying part of a deck slot.
+
+    An obstacle is defined relative to the slot's origin and represents a
+    rectangular solid extending upward from the slot floor. The geometry is
+    currently descriptive and visualization-oriented; motion planning does not
+    yet use these obstacles for collision avoidance.
+
+    Attributes:
+        offset: ``(x, y)`` position of the obstacle relative to the slot
+            origin, in millimeters.
+        size: ``(width, height)`` footprint of the obstacle, in millimeters.
+        height_mm: Height of the obstacle above the slot floor, in millimeters.
+    """
 
     offset: tuple  # (x, y) mm from the slot origin
     size: tuple  # (w, h) mm footprint
@@ -22,15 +47,27 @@ class SlotObstacle:
 
 @dataclass
 class Slot:
-    """A generic named region on the deck. Not tied to any numbering scheme:
-    a slot can hold labware, a trash, a tool dock -- whatever you need.
+    """Represent a named physical region of the robot deck.
 
-    ``wall_height_mm``/``wall_thickness_mm`` describe a physical bin built
-    into the slot (e.g. the trash slot's raised walls) -- 0 for a flat open
-    slot, which is most of them. Walls are drawn flush with the slot's own
-    footprint (``origin``/``size``), running around its full perimeter.
-    ``obstacles`` lists any solid interior fixtures (see ``SlotObstacle``).
-    Like ``wall_height_mm``, purely descriptive/visual today.
+    A slot is a generic deck region that may contain labware, a trash
+    container, a tool dock, or another physical fixture. It is not tied to a
+    particular numbering convention.
+
+    Optional wall and obstacle geometry can describe physically bounded or
+    obstructed regions such as an integrated trash bin. This geometry is
+    currently descriptive and may be used by visualization without imposing
+    motion-planning constraints.
+
+    Attributes:
+        name: Unique name used to address the slot.
+        origin: Deck-space reference point corresponding to the slot's
+            front-left corner.
+        size: ``(width, height)`` footprint of the slot in millimeters.
+        wall_height_mm: Height of any perimeter walls above the slot floor.
+            Defaults to ``0.0`` for an open, flat slot.
+        wall_thickness_mm: Thickness of the slot's perimeter walls in
+            millimeters.
+        obstacles: Interior solid fixtures associated with the slot.
     """
 
     name: str
@@ -42,10 +79,18 @@ class Slot:
 
 
 class Corner(Enum):
-    """One corner of a slot's footprint, named the same way as
-    ``Deck.margins``'/``Deck.frame_margins``' front/rear/left/right keys:
-    front = min-y edge, rear = max-y edge, left = min-x edge, right = max-x
-    edge (see ``DeckCanvas._project``'s docstring for the y convention)."""
+    """Identify a geometric corner of a slot footprint.
+
+    Corner names follow the deck coordinate convention in which the front
+    edge corresponds to minimum Y and the rear edge to maximum Y. Left and
+    right correspond to minimum and maximum X respectively.
+
+    Members:
+        FRONT_LEFT: Minimum-X, minimum-Y corner.
+        FRONT_RIGHT: Maximum-X, minimum-Y corner.
+        REAR_LEFT: Minimum-X, maximum-Y corner.
+        REAR_RIGHT: Maximum-X, maximum-Y corner.
+    """
 
     FRONT_LEFT = "front_left"
     FRONT_RIGHT = "front_right"
@@ -54,10 +99,22 @@ class Corner(Enum):
 
 
 def corner_point(slot: Slot, corner: Corner) -> DeckPoint:
-    """``slot``'s actual geometric corner in deck mm -- ``slot.origin``
-    itself for the left/front corners, offset by the slot's own footprint
-    for the right/rear ones. Requires ``slot.size`` (a corner is meaningless
-    for a dimensionless slot)."""
+    """Return the requested geometric corner of a slot.
+
+    The returned point is computed from the slot's origin and footprint. The
+    origin itself represents the front-left corner, while the slot dimensions
+    determine the offsets required for the right and rear corners.
+
+    Args:
+        slot: Slot whose footprint should be queried.
+        corner: Corner of the slot to resolve.
+
+    Returns:
+        DeckPoint: Deck-space coordinates of the requested slot corner.
+
+    Raises:
+        ValueError: If the slot has no non-zero footprint dimensions.
+    """
     if not slot.size or not slot.size[0] or not slot.size[1]:
         raise ValueError(f"slot {slot.name!r} has no footprint size; " "corners need slot.size")
     w, h = slot.size
@@ -67,13 +124,29 @@ def corner_point(slot: Slot, corner: Corner) -> DeckPoint:
 
 
 def inset_corner_point(
-    slot: Slot, corner: Corner, inset_x_mm: float, inset_y_mm: float
+    slot: Slot,
+    corner: Corner,
+    inset_x_mm: float,
+    inset_y_mm: float,
 ) -> DeckPoint:
-    """``corner_point`` nudged inward (into the slot) by a fixed mm inset on
-    each axis -- e.g. a physical reference mark etched inset from a slot's
-    corner rather than sitting right on the divider. The inset direction
-    flips with which side of the slot the corner is on, so it always moves
-    toward the slot's interior."""
+    """Return a point inset from a slot corner toward the slot interior.
+
+    The signs of the X and Y offsets are selected automatically from the
+    requested corner so that positive inset distances always move toward the
+    interior of the slot.
+
+    Args:
+        slot: Slot whose corner should be used as the reference.
+        corner: Corner from which the inset should be measured.
+        inset_x_mm: Inset distance along X, in millimeters.
+        inset_y_mm: Inset distance along Y, in millimeters.
+
+    Returns:
+        DeckPoint: Deck-space position of the inset point.
+
+    Raises:
+        ValueError: If the slot has no non-zero footprint dimensions.
+    """
     pt = corner_point(slot, corner)
     dx = inset_x_mm if corner in (Corner.FRONT_LEFT, Corner.REAR_LEFT) else -inset_x_mm
     dy = inset_y_mm if corner in (Corner.FRONT_LEFT, Corner.FRONT_RIGHT) else -inset_y_mm
@@ -82,12 +155,19 @@ def inset_corner_point(
 
 @dataclass(frozen=True)
 class CalibrationMark:
-    """A named, fixed deck-mm reference point used to build the deck<->motor
-    calibration (see ``geometry.calibration.DeckCalibration.from_points``) --
-    e.g. a mark etched into a slot at a known inset from its corner. Purely
-    descriptive of *where* the mark is; capturing the motor position found
-    there is left to whatever runs the calibration (the GUI dialog, a
-    script, ...)."""
+    """Describe a fixed physical reference used for deck calibration.
+
+    A calibration mark identifies a known deck-space location associated with
+    a named slot and slot corner. The mark describes the expected physical
+    location; measuring the corresponding motor position is the responsibility
+    of the calibration procedure that uses the mark.
+
+    Attributes:
+        name: Human-readable identifier for the calibration mark.
+        slot: Name of the slot containing the mark.
+        corner: Slot corner used to define the mark's location.
+        point: Exact deck-space coordinates of the physical reference.
+    """
 
     name: str
     slot: str
@@ -97,23 +177,26 @@ class CalibrationMark:
 
 @dataclass
 class Deck:
-    """A generic collection of slots addressed by name.
+    """Represent the configured collection of named deck slots.
 
-    ``margins`` is purely descriptive (never consulted for motion/placement):
-    the clearance from the plate's outer edge to the slot grid, keyed
-    "front"/"left"/"right"/"rear"/"oversized" in mm -- "oversized" applies to
-    any slot whose footprint differs from the deck's most common slot size
-    (e.g. a bigger trash slot sitting close to the plate edge). Only used to
-    draw the plate boundary; a deck built without it renders none.
+    ``Deck`` provides semantic access to physical regions of the robot's
+    workspace. Slots are stored by name and may represent standard labware
+    positions, trash containers, tool docks, or other deck fixtures.
 
-    ``frame_margins`` is the next layer out: the clearance from the deck
-    *plate*'s edge to the robot's outer frame/chassis, keyed
-    "front"/"left"/"right"/"rear" in mm. Also purely descriptive.
+    Optional margin and enclosure metadata describe the physical deck and
+    robot frame for visualization and layout purposes. They do not currently
+    impose motion or placement constraints.
 
-    ``enclosure_height_mm`` is the physical machine enclosure's own height
-    (floor to the top of its frame/housing) -- also purely descriptive,
-    used only to draw the frame with a real height in the 3D deck view
-    instead of a flat outline.
+    Attributes:
+        slots: Mapping from slot names to :class:`Slot` objects.
+        margins: Optional clearances between the deck plate boundary and the
+            slot layout, in millimeters.
+        frame_margins: Optional clearances between the deck plate and the
+            robot's outer frame or chassis, in millimeters.
+        enclosure_height_mm: Physical height of the robot enclosure or frame,
+            in millimeters.
+        calibration_marks: Mapping from calibration-mark names to
+            :class:`CalibrationMark` objects.
     """
 
     slots: dict = field(default_factory=dict)
@@ -123,16 +206,64 @@ class Deck:
     calibration_marks: dict = field(default_factory=dict)  # name -> CalibrationMark
 
     def add(self, slot: Slot) -> Slot:
+        """Add a slot to the deck by its name.
+
+        An existing slot with the same name is replaced.
+
+        Args:
+            slot: Slot to add to the deck.
+
+        Returns:
+            Slot: The same slot instance that was added.
+        """
         self.slots[slot.name] = slot
         return slot
 
     def __getitem__(self, name: str) -> Slot:
+        """Return a deck slot by name.
+
+        Args:
+            name: Name of the slot to retrieve.
+
+        Returns:
+            Slot: The corresponding slot.
+
+        Raises:
+            KeyError: If no slot with ``name`` exists.
+        """
         return self.slots[name]
 
     @classmethod
-    def grid(cls, *, rows: int, cols: int, origin: DeckPoint, pitch: tuple, names=None) -> "Deck":
-        """Build a regular grid of slots. `pitch` is (dx, dy) in mm between
-        slot origins. Names default to 1..rows*cols, row-major from origin."""
+    def grid(
+        cls,
+        *,
+        rows: int,
+        cols: int,
+        origin: DeckPoint,
+        pitch: tuple,
+        names=None,
+    ) -> Deck:
+        """Construct a regular rectangular grid of deck slots.
+
+        Slots are generated in row-major order from the supplied origin. Each
+        successive column advances by ``pitch[0]`` along X, and each successive
+        row advances by ``pitch[1]`` along Y.
+
+        When explicit names are not supplied, slots are named sequentially
+        starting at ``"1"``.
+
+        Args:
+            rows: Number of slot rows to create.
+            cols: Number of slot columns to create.
+            origin: Deck-space position of the first slot.
+            pitch: ``(dx, dy)`` spacing between adjacent slot origins, in
+                millimeters.
+            names: Optional sequence of slot names in row-major order. When
+                omitted, numeric names are generated automatically.
+
+        Returns:
+            Deck: A newly constructed deck containing the requested slot grid.
+        """
         deck = cls()
         i = 1
         for r in range(rows):
