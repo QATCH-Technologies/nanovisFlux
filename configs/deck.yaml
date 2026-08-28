@@ -1,50 +1,23 @@
-# Deck plate: an OT-2-style 3-column x 4-row slot grid, numbered "1".."12"
-# row-major from the front-left. Slots "1"-"11" are uniform (127.85 x
-# 85.9 mm usable cavity -- caliper-measured; supersedes an earlier rough
-# 123 x 81 mm estimate that was off by ~5-6%). Each slot carries its own
-# 4.5 mm separator wall on every side; two adjacent slots' walls abut, so
-# the gap between cavities is ~9.15 mm (x) / 9.1 mm (y) -- i.e. pitch
-# (137 x 95 mm, origin-to-origin) minus slot size. Slot "12" (the trash)
-# is oversized and extends further toward the back-right plate edge,
-# sharing its front-left inner corner with where a regular slot would
-# sit. The gantry homes to the back-right, beyond slot "12"'s outer
-# corner -- "oversized" below (slot "12"'s own clearance to the plate
-# edge) is what puts home exactly there: 5 mm past its outer corner.
-#
-# Labware placement (which piece of labware sits in which slot) is NOT
-# part of this file -- it lives in robot.yaml's own labware: list, which
-# references reusable definitions under configs/labware/. This file only
-# describes the deck plate itself: slot geometry and the fixed physical
-# calibration marks etched into it.
+# Deck Layout Overview
+# - Grid: OT-2-style 3x4 grid, numbered 1-12 (row-major, front-left origin).
+# - Slots 1-11: Standard 127.85 x 85.9 mm usable cavity. 
+# - Pitch: 137 mm (X) by 95 mm (Y) origin-to-origin, leaving a ~9.1 mm gap between cavities.
+# - Slot 12 (Trash): Oversized, extending to the back-right. The gantry homes 5 mm past its outer corner.
+# 
+# Note: Labware assignments are handled in `robot.yaml`. This file defines physical deck geometry only.
 deck:
+  # Deck plate inner margins. The 'oversized' 5 mm margin dictates the home position past slot 12.
   margins: { front: 60, left: 40, right: 40, rear: 40, oversized: 5 }
-  # Next layer out: clearance from the deck *plate*'s own edge to the
-  # robot's outer frame -- the plate is mounted with 67.5 mm of frame to
-  # spare on the left and right, 87.5 mm behind it (rear), and none in
-  # front (the plate's front edge is flush with the frame's).
+  
+  # Outer frame clearances (deck edge to machine housing). Front is flush (0 mm).
   frame_margins: { front: 0, left: 67.5, right: 67.5, rear: 87.5 }
-  # Whole-machine enclosure height, floor to the top of the frame/housing --
-  # descriptive only (drawn as the 3D deck view's frame uprights).
+  
+  # Total enclosure height from floor to top of frame (used for 3D rendering).
   enclosure_height_mm: 560
-  # Fixed physical reference marks etched into the deck, used by the
-  # calibration wizard (gui/calibration_dialog.py) to fit the deck<->motor
-  # transform: jog a mount's tip onto each mark, capture, repeat for at
-  # least 3 (up to all 8), then fit. Replaces the old convention of typing
-  # in free-hand deck-mm coordinates near the unreachable plate edge/home
-  # corner -- these marks sit inward on the deck itself, where the gantry
-  # can actually reach. Rendered in the deck view as a 5x5mm "+" etched
-  # 0.1mm into the deck surface (DeckCanvas), hidden automatically wherever
-  # labware currently covers that slot.
-  #
-  # Each mark is named after its slot and sits `inset_mm` in from that
-  # slot's corner nearest the deck's outer edge (see deck.corner_point /
-  # deck.inset_corner_point) -- NOT the slot's on-center, and measured from
-  # the inside edge of the 4.5mm slot separator, i.e. already inside the
-  # slot's own footprint (the x/y/size below). Only the corner-adjacent
-  # slots of the 1-11 grid carry a mark (2, 5, 8 -- the interior column --
-  # have none): slot "1"'s front-left mark is at deck (12, 9), i.e.
-  # 12mm/9mm in from the virtual origin (0, 0) at slot 1's own front-left
-  # corner.
+
+  # Fixed physical reference marks etched into the deck for the calibration wizard.
+  # Placed on the outer perimeter slots, inset from the slot's true corner.
+  # Rendered in the UI as 5x5mm crosses and hidden when covered by labware.
   calibration_marks:
     inset_mm: { x: 12.0, y: 9.0 }
     points:
@@ -56,6 +29,7 @@ deck:
       - { name: "9",  slot: "9",  corner: rear_right }
       - { name: "10", slot: "10", corner: rear_left }
       - { name: "11", slot: "11", corner: rear_right }
+
   slots:
     - { name: "1",  x: 0,     y: 0,     size: [127.85, 85.9] }
     - { name: "2",  x: 137.0, y: 0,     size: [127.85, 85.9] }
@@ -68,23 +42,15 @@ deck:
     - { name: "9",  x: 274.0, y: 190.0, size: [127.85, 85.9] }
     - { name: "10", x: 0,     y: 285.0, size: [127.85, 85.9] }
     - { name: "11", x: 137.0, y: 285.0, size: [127.85, 85.9] }
-    - name: "12"   # trash -- oversized, back-right
-      x: 274.0     # aligned with column 2 (slots 3/6/9) on the corrected 137mm pitch
-      y: 285.0     # aligned with row 3 (slots 10/11) on the corrected 95mm pitch
+    
+    - name: "12"   # Trash bin (oversized, back-right)
+      x: 274.0     # Aligned with column 2 on the 137mm pitch
+      y: 285.0     # Aligned with row 3 on the 95mm pitch
       size: [170, 164]
-      # Physical trash-bin walls: 8.5 cm tall, 0.25 cm thick, standing on
-      # this slot's own footprint perimeter (x/y/size above, unchanged --
-      # those also anchor the calibration.yaml comment). NOTE: the real
-      # measured gap from this bin to the slot 11/9 separators is 1 cm --
-      # now a close match to the corrected ~9.15mm/9.1mm regular inter-slot
-      # gap (see the deck plate comment above), unlike the old nominal 5mm
-      # assumption this used to be compared against. Still not re-measured
-      # directly against the corrected geometry -- confirm before relying
-      # on it, since real calibration points were measured against the
-      # previous origin.
+      
+      # Outer walls of the physical trash bin.
       walls: { height_mm: 85, thickness_mm: 2.5 }
-      # Solid square excursion in the bin's bottom-left (min x, min y,
-      # i.e. front-left) corner; height assumed == wall height since none
-      # was separately given -- confirm/adjust once known.
+      
+      # Solid square excursion in the bin's front-left (min-x, min-y) corner.
       obstacles:
         - { offset: [0, 0], size: [37.5, 37.0], height_mm: 85 }

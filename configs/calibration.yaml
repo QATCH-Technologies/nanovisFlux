@@ -1,32 +1,12 @@
-# Deck <-> motor calibration.
+# Deck <-> Motor Calibration
 #
-# The three example points below predate the deck.calibration_marks
-# rework (see configs/deck.yaml) and were measured near the back-right home
-# corner -- close to slot "12", which the gantry cannot always reach in
-# practice. Prefer recapturing via the "Calibrate Deck..." dialog against
-# 3+ of deck.yaml's calibration_marks points instead (all reachable, on-deck)
-# rather than hand-editing these numbers; they're left as a worked example
-# of the points/motor YAML shape (still valid with any count >= 3, not just
-# 3).
+# NOTE: The three points below are legacy fallback examples. It is highly 
+# recommended to regenerate this transform using the "Calibrate Deck..." GUI 
+# dialog, which utilizes the reachable calibration marks defined in `deck.yaml`.
 #
-# Deck-mm values below are re-derived from the corrected slot geometry (see
-# configs/deck.yaml -- caliper-measured 4.5mm separators / 127.85x85.9mm
-# slots / 137x95mm pitch, replacing earlier rough estimates that were off
-# by ~5-6%). The gantry homes to motor (0, 0) at the back-right, near slot
-# "12" and the robot's outer frame (see configs/deck.yaml) -- measured
-# directly rather than assumed: when homed, the LEFT mount sits 117.5 mm
-# in from the frame's right edge and 139 mm in from its rear edge, i.e.
-# deck (516.5 - 117.5, 541.5 - 139) = (399.0, 402.5) (frame bounds computed
-# from the deck/frame margins in deck.yaml, which now depend on the
-# corrected slot pitch). The left/right mounts straddle the gantry's
-# shared X/Y reference by 32.5 mm (see MainWindow's _LR_HALF_SPACING_MM),
-# so that reference -- what this calibration actually maps motor (0, 0)
-# to -- is 16.25 mm to the right of the left mount: (415.25, 402.5). Deck
-# x/y decrease as motor steps increase (home is the far corner; moving
-# into the deck heads toward slot "1"). Same steps-per-mm scale as a
-# straightforward reading either way (213.2 X, 144.78 Y) -- unchanged by
-# the geometry correction, since it only shifts *where* the 100mm-apart
-# example points sit, not the motor microsteps found for them.
+# Coordinate System:
+# - Motor (0, 0) is homed at the back-right (beyond slot 12).
+# - Deck X/Y coordinates decrease as motor steps increase (moving toward slot 1).
 calibration:
   points:
     deck:
@@ -43,23 +23,14 @@ calibration:
       - 14043
     - - 1401
       - 14326
+
   z_scale:
     steps_per_mm: 25.0
-  # z_zero must be the TIP-INDEPENDENT nozzle reference (see
-  # DeckCalibration.deck_to_motor's own docstring: "z_zero is the nozzle-
-  # reference position... one calibration serves every tip length"), not
-  # the raw contact reading itself. On this machine the bare nozzle can't
-  # physically reach the deck -- calibration is necessarily done with a
-  # tip attached (a 300uL tip, 59mm long) -- so the raw microstep count at
-  # contact (156706) is where the TIP END touched z=0, not the nozzle.
-  # Feeding that raw value straight in as z_zero double-counts the tip
-  # length in deck_to_motor (which separately subtracts the currently-
-  # attached tip's own length), landing every Z target ~59mm too high --
-  # this was the "tip is ~7cm from the well" bug. Correct via
-  # DeckCalibration.z_zero_from_contact(156706, tip_length_mm=59.0) =
-  # 156706 + round(59.0 * 25.0 * 32) = 203906. The GUI's Manual Control
-  # "Zero Z" button (JogController.capture_z_zero -> touch_off_z_zero)
-  # already applies this conversion automatically -- prefer recapturing
-  # that way over hand-editing this number, same as the XY points above.
+
+  # Tip-independent nozzle reference height. 
+  # This value represents the motor microstep count where the BARE nozzle would 
+  # touch the deck (z=0). Do not manually input raw contact readings here if 
+  # measured with a tip attached. Prefer using the GUI's "Zero Z" button, which 
+  # automatically offsets the raw reading by the attached tip's length.
   z_zero:
     left: 203906

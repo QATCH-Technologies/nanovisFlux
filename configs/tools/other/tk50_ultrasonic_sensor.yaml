@@ -1,15 +1,3 @@
-# TODO: name/rename this to the sensor's actual model or part number, and
-# rename this file to match (keep robot.yaml's mounts: reference in sync --
-# see config/loader.py's _check_name_matches, which enforces it).
-#
-# Fixed ultrasonic distance sensor, rear-mounted behind the Z/A mounts. No
-# vertical axis of its own -- it rides along with X/Y only, so it has no
-# mount_axis. This device carries no positioning of its own: where it sits
-# relative to the gantry's X/Y reference point is fixed by which MOUNT it's
-# on (see motion.mounts.MOUNT_OFFSET_MM -- REAR is centered between the
-# left/right mounts and 50 mm behind them), not by the sensor itself, so
-# there's no offset_mm here. See src/tools/ultrasonic.py and M412 in
-# firmware/docs/protocol.md -- the wire format is provisional.
 type: ultrasonic
 name: tk50_ultrasonic_sensor
 brand: Lonely Binary

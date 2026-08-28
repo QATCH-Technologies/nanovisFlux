@@ -1,8 +1,3 @@
-# p300 single-channel pipette -- mounted on left or right (see robot.yaml's
-# mounts: section for which side, and configs/pipette_tips/ for the tip
-# geometries it can pick up). `name:` is this pipette's own identity --
-# kept in sync with this file's name and with robot.yaml's mounts:
-# reference (see config/loader.py's _check_name_matches).
 type: pipette
 name: opentrons_single_channel_gen1_p300
 brand: Opentrons

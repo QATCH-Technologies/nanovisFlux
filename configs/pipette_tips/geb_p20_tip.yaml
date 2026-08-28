@@ -1,6 +1,3 @@
-# TODO: name/rename this to the tip's actual product name, and rename this
-# file to match (keep robot.yaml's tips: reference in sync -- see
-# config/loader.py's _check_name_matches, which enforces it).
 name: geb_p20_tip
 brand: GEB
 length_mm: 46.6

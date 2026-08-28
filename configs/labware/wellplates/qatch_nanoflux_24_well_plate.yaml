@@ -1,28 +1,9 @@
-# TODO: confirm the display name -- the source export calls this
-# "QATCHNanoisFlux24_Auto" (looks like a typo for "QATCHNanovisFlux24",
-# matching this project's own name); normalized to nanoflux_24 here. Rename
-# this file to match if corrected (keep robot.yaml's labware: reference in
-# sync -- see config/loader.py's _check_name_matches, which enforces it).
-#
-# Custom 24-well microplate (rows A-D x cols 1-6), irregular well spacing --
-# converted from an Opentrons custom-labware JSON export
-# (qatch-flux-24-generated.json, schemaVersion 2), which already places its
-# origin at the labware's front-left corner with +y toward the back and
-# per-well z measured from the labware's base to the well's top -- the same
-# convention this file's wells: (unlike grid:) takes literally, with no
-# flip needed. Outer footprint per that export: 126.58 x 83.48 x 87.49 mm
-# (x/y/z) -- not itself consumed here (Labware has no footprint field),
-# kept here for reference only.
-#
-# Every well shares identical geometry: circular, 0.75mm diameter, 19.9mm
-# deep, 6uL capacity, flat bottom -- a narrow, deep microwell design (not a
-# typo -- the source export's totalLiquidVolume is 6 for every well).
 name: qatch_nanoflux_24_well_plate
 brand: QATCH Technologies
 well_geometry:
   shape: circular
   diameter_mm: 0.75
-  depth_mm: 19.9           # opening to the well's deepest point
+  depth_mm: 19.9
   bottom: flat
   max_volume_ul: 6
 wells:

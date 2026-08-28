@@ -1,30 +1,15 @@
-# TODO: name/rename this to the well plate's actual product name, and
-# rename this file to match (keep robot.yaml's labware: reference in sync
-# -- see config/loader.py's _check_name_matches, which enforces it).
-#
-# One physical well-plate definition, placed twice on this robot's deck
-# (see robot.yaml's labware: list -- slot "1" as the "source" instance,
-# slot "6" as the "dest" instance): identical footprint/geometry, so it's
-# measured once here and reused rather than duplicated per role. See this
-# file's header/offset/z convention note in TODO_tiprack.yaml -- same idea,
-# no slot of its own.
-#
-# TODO brand: unlike the tip rack, this looks like a measured/custom
-# fixture rather than a catalog part (no vendor part number anywhere in
-# its own measurements below) -- confirm whether it's actually a vendor
-# product before filling this in, vs. e.g. "custom"/"in-house".
 name: biorad_96_microplate
 brand: Bio-Rad
 well_geometry:
   shape: circular
   diameter_mm: 6.9
-  depth_mm: 10.9           # opening to the well's deepest point
+  depth_mm: 10.9
   bottom: round
-  bottom_clearance_mm: 1.5 # standoff kept above the bottom at "clearance"
+  bottom_clearance_mm: 1.5
   max_volume_ul: 360
 grid:
   rows: 8
   cols: 12
-  origin: { x: 14.0, y: 11.4, z: 15.6 }  # A1 center; z = plate top surface
+  origin: { x: 14.0, y: 11.4, z: 15.6 }
   row_spacing_mm: 9
   col_spacing_mm: 9

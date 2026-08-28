@@ -1,70 +1,38 @@
-# OpenFlux robot configuration -- split-file layout. This top-level file
-# holds only what's specific to THIS robot (transport, timeout,
-# travel_z_mm) plus references to the reusable, independently-measured
-# pieces below it: an axes profile, a deck<->motor calibration, a deck
-# layout, named tip geometries, labware placements, and the tools mounted
-# on each side. Each reference is a path, resolved relative to this file's
-# own directory, to that piece's own YAML -- so e.g. a labware definition
-# or a tool profile can be reused by another robot config without
-# retyping its measurements. See config/loader.py's resolve_robot_config
-# for exactly how these are followed.
-#
-# Every section can also be given inline instead of by reference (the
-# original, single-file convention) -- see config/loader.py's own
-# resolve_robot_config docstring for exactly how inline and referenced
-# sections can be freely mixed.
-#
-# tools/labware naming: each referenced tool/tip/labware file declares its
-# own physical identity under `name:`. That same name is repeated here in
-# the reference entry (checked against the file by resolve_robot_config --
-# a mismatch is a load-time error, not a silent drift) and in the file's
-# own name -- three places, kept in sync by construction. Where a name
-# isn't yet known, the file/name/reference all carry a shared TODO_
-# placeholder to fill in together later.
-#
-# `name:` (identity, e.g. "which physical product is this") is distinct
-# from a labware entry's `instance:` (addressing, e.g. "which occupant of
-# this robot's deck is this, for routines/scripts to reference by name") --
-# see labware: below, where the same reusable definition is placed twice.
-#
-# Load with:  robot = openflux.config.load_robot("configs/robot.yaml")
+# OpenFlux Main Robot Configuration
+# 
+# This top-level file defines settings specific to this robot instance and references
+# reusable hardware profiles (axes, deck, labware, tools) via relative paths.
+# 
+# Usage: robot = openflux.config.load_robot("configs/robot.yaml")
 
 transport:
-  type: serial              # simulated | serial | tcp
-  port: "COM6"    # required when type: serial
+  type: serial      # simulated | serial | tcp
+  port: "COM6"      # Required when type: serial
   baudrate: 115200
 
-travel_z_mm: 120           # safe clearance height used by safe_move_to
-timeout: 30
+travel_z_mm: 120    # Safe clearance Z-height used by safe_move_to
+timeout: 30         # Default operation timeout in seconds
 
+# Core hardware definitions resolved relative to this file's directory.
+# (These can also be replaced with inline dictionaries).
 axes: axes.yaml
 calibration: calibration.yaml
 deck: deck.yaml
 
-# Named pipette tip geometries -- one file per tip (see
-# configs/pipette_tips/). Lives outside tools/: a tip is consumable,
-# picked-up/dropped labware for a pipette, not a mounted tool in its own
-# right (unlike the calibration probe below, which is fixed to its own
-# mount -- see mounts.right).
+# Consumable pipette tip geometries.
+# Note: Tips are picked up/dropped items, not permanently mounted tools.
 tips:
   - name: opentrons_p300_ot2_tip
     config: pipette_tips/opentrons_p300_ot2_tip.yaml
   - name: geb_p20_tip
     config: pipette_tips/geb_p20_tip.yaml
 
-# Labware placed on named deck slots, grouped by kind under configs/labware/
-# (tipracks/, wellplates/, reservoirs/). Each entry assigns a reusable
-# labware definition (no slot of its own -- see those files) to a slot; the
-# same definition file could be assigned to a different slot, or reused by
-# a different robot, without editing it.
-#
-# biorad_96_microplate and opentrons_ot2_tip_rack_lid are each placed on two slots --
-# physically identical labware playing two different roles in a transfer
-# (source/dest, aspirate/dispense). `instance:` gives each placement its
-# own addressable name (what routines/scripts/the GUI labware list use --
-# robot.labware[instance]); `name:` stays the shared physical identity.
-# Drop `instance:` for a labware with only one placement (like the tip
-# rack below) and it defaults to the definition's own `name:`.
+# Labware assigned to specific deck slots.
+# - `slot`: The deck slot number ("1".."12").
+# - `instance`: Addressable alias used in routines (e.g., robot.labware["source"]). 
+#               Defaults to `name` if omitted.
+# - `name`: The physical hardware identifier (must match the loaded config).
+# - `config`: Path to the reusable labware definition.
 labware:
   - slot: "7"
     instance: tiprack1
@@ -87,13 +55,7 @@ labware:
     name: opentrons_ot2_tip_rack_lid
     config: labware/reservoirs/opentrons_ot2_tip_rack_lid.yaml
 
-# Tools on the mounts -- one config file per tool type, under configs/tools/
-# (pipettes/ for pipettes, other/ for everything else -- sensors, probes).
-# The calibration touch probe is a tool like the pipette/sensor, mounted on
-# its own side (right -- the only one free; left holds the pipette, rear
-# the ultrasonic sensor), not a pipette tip: it's permanently on this
-# mount rather than picked up/dropped, so its length_mm lives here instead
-# of alongside the pipette tips.
+# Tools permanently attached to the gantry mounts.
 mounts:
   left:
     name: opentrons_single_channel_gen1_p300
