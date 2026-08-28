@@ -1,3 +1,36 @@
+"""
+High-level robot control facade for deck-space motion and instrument hardware.
+
+This module provides the :class:`Robot` facade that coordinates the major
+components required to operate the instrument, including the transport layer,
+motion controller, deck calibration, motion axes, physical mounts, deck
+geometry, labware, and tip geometry.
+
+The :class:`Robot` class exposes user-facing operations for connecting to and
+disconnecting from the controller, attaching tools, loading labware, homing
+axes, and commanding deck-space motion. Motion commands are converted from
+deck coordinates to calibrated motor coordinates and are tip-aware when a
+mounted tool provides a `tip_offset_mm()` method.
+
+Two classes of motion are provided:
+
+* Direct motion via :meth:`Robot.move_to`, which moves horizontally at the
+  current vertical position before moving to the requested height.
+* Clearance-aware motion via :meth:`Robot.safe_move_to`, which raises the
+  active mount before crossing the deck, moves horizontally, and then lowers
+  to the destination.
+
+Clearance-aware motion accounts for known labware and deck obstacles along
+the horizontal path. Motion completion can optionally be verified using
+controller-reported positions, including detection and retry of stalled
+motion.
+
+Attributes:
+    _PATH_CLEARANCE_MARGIN_MM: Additional vertical clearance maintained above
+        the tallest known labware or obstacle encountered during a safe
+        horizontal crossing.
+"""
+
 from __future__ import annotations
 
 import time
@@ -10,18 +43,34 @@ from .motion.mounts import Mount
 from .protocol.driver import Controller
 from .transport.base import Transport
 
-#: Headroom kept above the tallest labware/obstacle top a safe_move_to
-#: crossing passes over (see Robot._path_clearance_mm) -- clearing exactly
-#: to that top would graze it, not clear it.
+# Headroom kept above the tallest labware/obstacle top a safe_move_to
 _PATH_CLEARANCE_MARGIN_MM = 5.0
 
 
 class Robot:
-    """Top-level facade tying transport, controller, calibration, deck, axes,
-    mounts and loaded labware together. The object most user code touches.
+    """Provide the high-level interface for operating the instrument.
 
-    All deck-space motion is tip-aware: if the tool on a mount reports a
-    ``tip_offset_mm()``, Z targets place the tip end, not the bare nozzle.
+    `Robot` is the primary facade intended for application-level code. It
+    combines the controller, transport, calibration, deck, motion axes,
+    physical mounts, labware, and tip geometry into a single object through
+    which instrument operations can be performed.
+
+    Deck-space motion is converted to motor coordinates using
+    :class:`DeckCalibration`. When a mounted tool provides a
+    `tip_offset_mm()` method, the offset is incorporated into the coordinate
+    conversion so that requested Z positions describe the tool tip rather
+    than the bare nozzle.
+
+    Attributes:
+        controller: Motion controller responsible for communicating with the
+            firmware.
+        calibration: Deck calibration used for coordinate transformations.
+        deck: Configured deck containing slots and deck geometry.
+        travel_z_mm: Default safe travel height in deck-space millimeters.
+        axes: Mapping from :class:`AxisId` values to configured motion axes.
+        mounts: Mapping from :class:`MountSide` values to physical mounts.
+        labware: Mapping of registration keys to loaded labware instances.
+        tips: Mapping of labware names to known tip geometry definitions.
     """
 
     def __init__(
@@ -33,6 +82,17 @@ class Robot:
         travel_z_mm: float = 60.0,
         timeout: float = 30.0,
     ):
+        """Initialize a robot and its motion-control components.
+
+        Args:
+            transport: Transport implementation used by the controller for
+                communication with the instrument.
+            calibration: Optional calibration describing the transformation
+                between deck-space and motor-space coordinates.
+            deck: Optional deck definition containing slots and deck geometry.
+            travel_z_mm: Default deck-space height used for clearance-aware travel.
+            timeout: Controller communication timeout in seconds.
+        """
         self.controller = Controller(transport, timeout=timeout)
         self.calibration = calibration
         self.deck = deck
@@ -43,47 +103,97 @@ class Robot:
             MountSide.RIGHT: Mount(MountSide.RIGHT),
             MountSide.REAR: Mount(MountSide.REAR),
         }
-        self.labware: dict = {}  # name -> Labware, placed on a slot
-        self.tips: dict = {}  # name -> TipGeometry (known tip types)
+        self.labware: dict = {}
+        self.tips: dict = {}
 
-    # -- lifecycle ----------------------------------------------------
-    def connect(self) -> "Robot":
+    def connect(self) -> Robot:
+        """Open the controller connection and return this robot.
+
+        Returns:
+            The connected :class:`Robot` instance.
+        """
         self.controller.open()
         return self
 
     def disconnect(self) -> None:
+        """Close the controller connection."""
         self.controller.close()
 
-    def __enter__(self) -> "Robot":
+    def __enter__(self) -> Robot:  # noqa
+        """Connect the robot when entering a context manager.
+
+        Returns:
+            The connected :class:`Robot` instance.
+        """
         return self.connect()
 
     def __exit__(self, *exc) -> None:
+        """Disconnect the robot when leaving a context manager.
+
+        Args:
+            *exc: Exception information supplied by the context-manager protocol.
+        """
         self.disconnect()
 
-    # -- tools & labware ---------------------------------------------
     def attach(self, side: MountSide, tool) -> None:
+        """Attach a tool to a specified mount.
+
+        The mount is updated before the tool's `on_attach` callback is invoked.
+
+        Args:
+            side: Mount position to which the tool should be attached.
+            tool: Tool instance to attach to the mount.
+        """
         mount = self.mounts[side]
         mount.attach(tool)
         tool.on_attach(mount, self)
 
     def left(self):
+        """Return the tool attached to the left mount.
+
+        Returns:
+            The tool attached to :attr:`MountSide.LEFT`, or `None` if no tool
+            is attached.
+        """
         return self.mounts[MountSide.LEFT].tool
 
     def right(self):
+        """Return the tool attached to the right mount.
+
+        Returns:
+            The tool attached to :attr:`MountSide.RIGHT`, or `None` if no tool
+            is attached.
+        """
         return self.mounts[MountSide.RIGHT].tool
 
     def rear(self):
+        """Return the tool attached to the rear mount.
+
+        Returns:
+            The tool attached to :attr:`MountSide.REAR`, or `None` if no tool
+            is attached.
+        """
         return self.mounts[MountSide.REAR].tool
 
     def load_labware(self, labware, slot_name: str, *, key: str | None = None):
-        """Place ``labware`` on ``slot_name`` and register it in
-        ``self.labware`` under ``key`` (default: the labware's own
-        ``.name``). Pass an explicit ``key`` when two placements share one
-        reusable labware definition (same ``.name``, different slots) --
-        e.g. the same well-plate spec used as both a source and a
-        destination -- so the second placement doesn't overwrite the
-        first's dict entry; ``.name`` still reflects the shared physical
-        identity either way, only the addressing key differs."""
+        """Place and register an instantiated labware object.
+
+        An explicit `key` allows multiple placements of the same reusable
+        labware definition to coexist without overwriting one another in the
+        labware registry.
+
+        Args:
+            labware: Labware instance to place on the deck.
+            slot_name: Name of the deck slot on which the labware is placed.
+            key: Optional registry key. Defaults to `labware.name`.
+
+        Returns:
+            The placed labware instance.
+
+        Raises:
+            RuntimeError: If no deck is configured.
+            KeyError: If `slot_name` is not a valid deck slot.
+        """
         if self.deck is None:
             raise RuntimeError("no deck configured")
         labware.place(self.deck[slot_name])
@@ -91,10 +201,24 @@ class Robot:
         return labware
 
     def load(self, definition, slot_name: str, *, stacked: bool = False):
-        """Place a labware *definition* (WellPlateDefinition,
-        ReservoirDefinition, TipRackDefinition, ...) on a named slot -- the
-        well/tip offsets are computed from the definition, never hand-picked.
-        Tip rack definitions also register their TipGeometry in ``self.tips``.
+        """Instantiate, place, and register labware from a definition.
+
+        Labware geometry is derived from the supplied definition rather than
+        manually specifying well or tip offsets. Definitions that provide a
+        callable `tip_geometry` are also registered in the robot's tip geometry
+        registry.
+
+        Args:
+            definition: Labware definition used to construct the labware.
+            slot_name: Name of the deck slot on which the labware is placed.
+            stacked: Whether the labware should use stacked placement geometry.
+
+        Returns:
+            The instantiated and placed labware object.
+
+        Raises:
+            RuntimeError: If no deck is configured.
+            KeyError: If `slot_name` is not a valid deck slot.
         """
         if self.deck is None:
             raise RuntimeError("no deck configured")
@@ -106,17 +230,41 @@ class Robot:
         return labware
 
     def tip_offset(self, side: MountSide) -> float:
+        """Return the vertical tip offset for a mounted tool.
+
+        Args:
+            side: Mount whose attached tool should be queried.
+
+        Returns:
+            Tip offset in millimeters, or `0.0` when the attached tool does not
+            provide a `tip_offset_mm()` method.
+        """
         tool = self.mounts[side].tool
         getter = getattr(tool, "tip_offset_mm", None)
-        return getter() if callable(getter) else 0.0
+        return float(getter()) if callable(getter) else 0.0  # type: ignore
 
-    # -- motion (deck-space, tip-aware) ------------------------------
     def _require_cal(self) -> DeckCalibration:
+        """Return the configured deck calibration.
+
+        Returns:
+            The active :class:`DeckCalibration`.
+
+        Raises:
+            RuntimeError: If no deck calibration is configured.
+        """
         if self.calibration is None:
             raise RuntimeError("deck is not calibrated; set robot.calibration first")
         return self.calibration
 
     def home(self, *axes: AxisId) -> None:
+        """Home the specified motion axes.
+
+        Absolute positioning mode is enabled before the homing command is sent.
+        Requested axes are marked as homed after the command is issued.
+
+        Args:
+            *axes: Axes to home. If omitted, all known axes are marked as homed.
+        """
         self.controller.set_absolute()
         self.controller.home(*axes)
         for a in axes or tuple(AxisId):
@@ -134,46 +282,31 @@ class Robot:
         resend=None,
         max_resends: int = 2,
     ) -> None:
-        """Polls the controller's OWN reported position (M114) until every
-        axis in `targets` is within `tolerance` microsteps of its commanded
-        value, or raises TimeoutError. A move's 'ok' means the firmware
-        considers it done, but that hasn't reliably meant "physically
-        arrived" on every real firmware/hardware combination this has been
-        run against (see scripts/calibrate_pipette.py's verify=True,
-        added after commands issued back-to-back with no delay were
-        observed getting cut short in practice, confirmed by the same
-        sequence working correctly when stepped through with a debugger --
-        i.e. when real wall-clock time was inadvertently inserted between
-        them). This is an independent, position-based confirmation that
-        doesn't depend on trusting the handshake alone.
+        """Wait until controller-reported positions reach commanded targets.
 
-        An axis reporting a negative position (the firmware's own "not
-        homed yet" convention -- see raise_z's identical `pos >= 0` check)
-        is treated as settled rather than waited on: it will never report a
-        comparable value no matter how long this polls, so there's nothing
-        trustworthy to verify against for that axis (same reasoning as
-        raise_z's own "nothing trustworthy to compare against" fallback,
-        which is what calls a verify=True move here in that situation to
-        begin with).
+        Motion completion is verified independently of the controller's command
+        completion response by repeatedly querying its reported position.
 
-        `stall_timeout`: if every target axis's reported position stops
-        changing at all for this long while still short of its target,
-        treat it as stalled rather than waiting out the full `timeout` --
-        e.g. a real move confirmed cut short on real hardware, its 'ok'
-        already received despite stopping well short of target (see
-        move_to's own docstring for that report). Waiting the full timeout
-        for a position that has visibly stopped changing only delays a
-        genuine problem from surfacing, it doesn't avoid one.
+        Negative reported positions are treated as settled because they indicate
+        that the controller cannot provide a trustworthy comparable position.
+        Stalled motion can optionally be retried by invoking `resend` before
+        ultimately raising an error.
 
-        `resend`: called (no arguments) to re-issue the exact same move
-        when a stall is detected, instead of failing immediately -- up to
-        `max_resends` times, riding out an occasional firmware/comms
-        hiccup that cuts a move short rather than aborting the whole
-        routine on the first one. Still raises TimeoutError once resends
-        are exhausted and the axis genuinely won't reach target. None (the
-        default) fails on the first stall, same as before this existed --
-        every Robot.move_* wrapper passes its own resend automatically;
-        this only stays None for callers with no natural "resend" action."""
+        Args:
+            targets: Mapping of axis identifiers to target motor positions.
+            tolerance: Maximum permitted position error in microsteps.
+            timeout: Maximum total wait time in seconds.
+            poll_interval: Delay between position queries in seconds.
+            stall_timeout: Time that positions may remain unchanged before the
+                move is considered stalled.
+            resend: Optional zero-argument callable used to reissue the move after
+                a stall.
+            max_resends: Maximum number of stalled-move retries.
+
+        Raises:
+            TimeoutError: If the targets are not reached within `timeout` or
+                motion remains stalled after all retries.
+        """
         deadline = time.monotonic() + timeout
         last_pos: dict | None = None
         stalled_since: float | None = None
@@ -181,7 +314,8 @@ class Robot:
         while True:
             pos = self.controller.report_position()
             if all(
-                pos.get(axis) is not None and (pos[axis] < 0 or abs(pos[axis] - target) <= tolerance)
+                pos.get(axis) is not None
+                and (pos[axis] < 0 or abs(pos[axis] - target) <= tolerance)
                 for axis, target in targets.items()
             ):
                 return
@@ -197,11 +331,12 @@ class Robot:
                         last_pos = None
                         continue
                     tried = max_resends - resends_left
-                    retry_note = f" after {tried} retr{'y' if tried == 1 else 'ies'}" if tried else ""
+                    retry_note = (
+                        f" after {tried} retr{'y' if tried == 1 else 'ies'}" if tried else ""
+                    )
                     raise TimeoutError(
-                        f"axes stopped moving without reaching target{retry_note} (likely "
-                        f"clamped at a hard limit, an unreachable calibrated target, or a "
-                        f"persistent motion fault): wanted {targets}, stalled at {current}"
+                        f"axes stopped moving without reaching target{retry_note}:"
+                        f" wanted {targets}, stalled at {current}"
                     )
             else:
                 stalled_since = None
@@ -220,36 +355,35 @@ class Robot:
         *,
         verify: bool = True,
     ) -> None:
-        """Cross to the target X/Y at the current Z, then move to the target
-        Z -- no clearance-height detour (see safe_move_to for that arc).
-        X/Y always goes first, as two separate blocking commands rather than
-        one bundled multi-axis move: firmware happens to prioritize X/Y
-        stepping over Z today, but a mounted tip dragging across labware if
-        that ever isn't true (different firmware revision, etc.) is exactly
-        the failure this guards against without relying on it.
+        """Move a mounted tool to a deck-space point without a clearance arc.
 
-        verify: also poll-confirm each leg actually reached its target (see
-        _await_settled) before moving on -- on by default: a G-code move's
-        'ok' means the firmware considers it done, not that it's physically
-        arrived (see _await_settled's own docstring), so back-to-back
-        commands with no verification between them can get cut short or
-        reordered in effect -- confirmed against real hardware (a routine
-        skipped straight to its last few targets, nearly clipping the
-        trash bin, with every intermediate move's 'ok' having already come
-        back). Pass verify=False to opt back out for a specific call that
-        doesn't need it (e.g. a tight interactive-jog loop, where the
-        latency cost outweighs the benefit). On a stall, the same move is
-        re-issued a couple of times before giving up (see _await_settled's
-        own `resend`/`max_resends`) -- an occasional firmware/comms hiccup
-        cutting one move short shouldn't necessarily abort a whole routine."""
+        X/Y motion is performed before the vertical move. The target is converted
+        to motor coordinates using deck calibration and the selected tool's tip
+        offset.
+
+        This method does not raise the tool to a clearance height before
+        horizontal travel. Use :meth:`safe_move_to` when the path must clear
+        labware or other deck obstacles.
+
+        Args:
+            point: Target deck-space position.
+            side: Mount whose tool should be moved.
+            feed: Optional feed rate. Rapid motion is used when omitted.
+            verify: Whether to verify each motion leg using reported positions.
+
+        Raises:
+            RuntimeError: If deck calibration is not configured.
+            TimeoutError: If verification is enabled and motion fails to settle.
+        """
         cal = self._require_cal()
         xy = cal.deck_to_motor(point, side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
 
         def _send():
-            (self.controller.linear_move if feed else self.controller.rapid_move)(
-                xy_targets, **({"feed": feed} if feed else {})
-            )
+            if feed is not None:
+                self.controller.linear_move(xy_targets, feed=feed)
+            else:
+                self.controller.rapid_move(xy_targets)
 
         _send()
         if verify:
@@ -264,17 +398,33 @@ class Robot:
         *,
         verify: bool = True,
     ) -> None:
-        """Command only the mount's vertical axis to a deck-Z height. See
-        move_to's own docstring for what `verify` (on by default, with
-        stall retries) buys."""
+        """Move only a mount's vertical axis to a deck-space height.
+
+        The target is converted to motor coordinates using deck calibration and
+        the mounted tool's tip offset. Horizontal position is unchanged.
+
+        Args:
+            deck_z_mm: Target vertical position in deck-space millimeters.
+            side: Mount whose vertical axis should be moved.
+            feed: Optional feed rate. Rapid motion is used when omitted.
+            verify: Whether to verify that the axis reaches its target.
+
+        Raises:
+            RuntimeError: If deck calibration is not configured.
+            TimeoutError: If verification is enabled and the axis fails to settle.
+        """
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
         mz = cal.deck_to_motor(DeckPoint(0, 0, deck_z_mm), side, self.tip_offset(side))[axis]
 
         def _send():
-            (self.controller.linear_move if feed else self.controller.rapid_move)(
-                {axis: mz}, **({"feed": feed} if feed else {})
-            )
+            if axis is None:
+                return
+
+            if feed is not None:
+                self.controller.linear_move({axis: mz}, feed=feed)
+            else:
+                self.controller.rapid_move({axis: mz})
 
         _send()
         if verify:
@@ -289,21 +439,31 @@ class Robot:
         *,
         verify: bool = True,
     ) -> None:
-        """Command only X/Y to a deck-mm position, leaving Z/A untouched --
-        the horizontal counterpart to move_vertical_to. No clearance arc
-        (see safe_move_to for that): for a caller already at a safe/working
-        height that just needs to nudge sideways without a detour up and
-        back down (e.g. TipPickup's well-wall touch pattern, moving inside
-        a tip rack well). See move_to's own docstring for what `verify`
-        (on by default, with stall retries) buys."""
+        """Move only the horizontal X/Y axes to a deck-space position.
+
+        The vertical axis associated with the selected mount is left unchanged.
+        No clearance-height movement is performed.
+
+        Args:
+            x_mm: Target deck X coordinate in millimeters.
+            y_mm: Target deck Y coordinate in millimeters.
+            side: Mount whose horizontal position is being commanded.
+            feed: Optional feed rate. Rapid motion is used when omitted.
+            verify: Whether to verify that the horizontal axes reach their targets.
+
+        Raises:
+            RuntimeError: If deck calibration is not configured.
+            TimeoutError: If verification is enabled and the axes fail to settle.
+        """
         cal = self._require_cal()
         xy = cal.deck_to_motor(DeckPoint(x_mm, y_mm, 0.0), side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
 
         def _send():
-            (self.controller.linear_move if feed else self.controller.rapid_move)(
-                xy_targets, **({"feed": feed} if feed else {})
-            )
+            if feed is not None:
+                self.controller.linear_move(xy_targets, feed=feed)
+            else:
+                self.controller.rapid_move(xy_targets)
 
         _send()
         if verify:
@@ -312,25 +472,23 @@ class Robot:
     def raise_z(
         self, side: MountSide, clearance_mm: float | None = None, *, verify: bool = True
     ) -> None:
-        """Ensure this mount's Z/A is at or above clearance height --
-        raising if it's currently below, but issuing no move at all if
-        it's already there or higher.
+        """Raise a mount to at least the requested clearance height.
 
-        Deliberately NOT "move to exactly clearance unconditionally":
-        safe_move_to's whole X/Y-safe arc relies on this step being a pure
-        raise, completed before any X/Y crossing, so a mounted tip never
-        drags through something on the way up. A mount that happens to
-        already be above clearance (fresh off homing, or simply left
-        higher by whatever ran before this) would otherwise get pulled
-        DOWN to exactly clearance right where it currently sits -- BEFORE
-        crossing X/Y -- which is exactly the unplanned descent this arc
-        exists to prevent, not cause. If the current height can't be
-        determined (axis not yet homed, or no calibration/z_zero to
-        invert against), falls back to the original unconditional move --
-        the safest option when there's nothing trustworthy to compare
-        against.
+        If the current vertical position can be determined and is already at or
+        above the requested clearance, no motion is issued. If the current
+        position cannot be determined, the requested clearance is commanded
+        unconditionally.
 
-        verify: see move_to's own docstring -- on by default."""
+        Args:
+            side: Mount whose vertical axis should be raised.
+            clearance_mm: Minimum clearance height in deck-space millimeters.
+                Defaults to :attr:`travel_z_mm`.
+            verify: Whether to verify that the resulting motion reaches its target.
+
+        Raises:
+            RuntimeError: If deck calibration is not configured.
+            TimeoutError: If verification is enabled and the move fails to settle.
+        """
         target = clearance_mm if clearance_mm is not None else self.travel_z_mm
         cal = self._require_cal()
         axis = cal.vertical_axis(side)
@@ -343,12 +501,18 @@ class Robot:
         self.move_vertical_to(target, side, verify=verify)
 
     def _current_deck_xy(self, side: MountSide) -> tuple | None:
-        """This mount's current (x, y) in deck mm, or None if it can't be
-        determined (axes not yet homed -- report_position reports -1 for
-        those, mirroring raise_z's own check -- or no calibration). Used
-        by _path_clearance_mm; falling back to the plain clearance_mm/
-        travel_z_mm default when unknown is always at least as safe as
-        before this existed, never less."""
+        """Determine the current deck-space X/Y position of a mount.
+
+        The controller's motor-space position is converted back to deck-space
+        coordinates using the active calibration.
+
+        Args:
+            side: Mount whose current position should be determined.
+
+        Returns:
+            A `(x, y)` tuple in deck-space millimeters, or `None` if the
+            current position cannot be determined reliably.
+        """
         if self.calibration is None:
             return None
         pos = self.controller.report_position()
@@ -358,12 +522,20 @@ class Robot:
         return self.calibration.motor_to_deck_xy(mx, my, side)
 
     def _slots_crossed(self, start_xy: tuple, end_xy: tuple) -> list:
-        """Every deck slot whose footprint overlaps the axis-aligned
-        bounding box spanning start_xy to end_xy -- a conservative stand-in
-        for "what does a working-height crossing between these two points
-        pass over" (the actual XY move need not be perfectly straight, and
-        this also always includes the start/end slots themselves, which
-        need clearing too, not just whatever's strictly between them)."""
+        """Find deck slots intersecting the path bounding box.
+
+        The calculation conservatively includes every dimensioned slot whose
+        footprint overlaps the axis-aligned bounding box between the start and
+        destination positions.
+
+        Args:
+            start_xy: Starting deck-space `(x, y)` position.
+            end_xy: Destination deck-space `(x, y)` position.
+
+        Returns:
+            A list of deck slots whose footprints overlap the path bounding box.
+            Returns an empty list when no deck is configured.
+        """
         if self.deck is None:
             return []
         lo_x, hi_x = sorted((start_xy[0], end_xy[0]))
@@ -379,13 +551,18 @@ class Robot:
         return crossed
 
     def _slot_top_height_mm(self, slot) -> float:
-        """The tallest surface known to occupy `slot`, deck-mm from the
-        deck plane: whatever labware is placed there (its wells' own top
-        height -- the same datum Well.offset.z already uses) and any
-        SlotObstacle/bin walls built into the slot itself (see
-        deck.Slot/SlotObstacle -- previously "purely descriptive, nothing
-        in motion planning consults this", which is exactly the gap
-        _path_clearance_mm closes)."""
+        """Determine the tallest known surface occupying a deck slot.
+
+        Labware, slot obstacles, and slot walls are considered when determining
+        the maximum occupied height.
+
+        Args:
+            slot: Deck slot whose occupied height should be evaluated.
+
+        Returns:
+            The greatest known occupied height above the deck plane in
+            deck-space millimeters.
+        """
         tallest = max((o.height_mm for o in slot.obstacles), default=0.0)
         tallest = max(tallest, slot.wall_height_mm)
         for lw in self.labware.values():
@@ -394,15 +571,20 @@ class Robot:
         return tallest
 
     def _path_clearance_mm(self, side: MountSide, target_xy: tuple, requested_mm: float) -> float:
-        """`requested_mm` (the caller's own clearance_mm/travel_z_mm
-        default), raised if needed to clear the tallest labware/obstacle
-        top in any slot between this mount's current position and
-        `target_xy` (see _slots_crossed/_slot_top_height_mm) -- e.g. a tall
-        object loaded in a slot between source and destination, which one
-        fixed travel_z_mm can't account for if it's taller than whatever
-        travel_z_mm happened to be set for. Never returns less than
-        `requested_mm` -- only ever raises it, and falls back to it
-        unchanged whenever the current position can't be determined."""
+        """Calculate the clearance required for a horizontal crossing.
+
+        The requested clearance is increased when necessary to clear the tallest
+        known labware or obstacle in any slot intersected by the path.
+
+        Args:
+            side: Mount whose current position defines the path origin.
+            target_xy: Destination deck-space `(x, y)` position.
+            requested_mm: Minimum clearance requested by the caller.
+
+        Returns:
+            A clearance height in deck-space millimeters. The result is never
+            lower than `requested_mm`.
+        """
         start_xy = self._current_deck_xy(side)
         if start_xy is None:
             return requested_mm
@@ -421,34 +603,53 @@ class Robot:
         *,
         verify: bool = True,
     ) -> None:
-        """Move in the order X/Y-safe arc: (1) raise this mount's Z/A to
-        clearance height, (2) cross to the target's X/Y, (3) descend Z/A to
-        the target -- so a mounted tip never drags across labware. The
-        clearance height itself is `clearance_mm`/travel_z_mm, boosted if
-        needed to clear whatever's tallest between here and there (see
-        _path_clearance_mm) -- covers both crossing between slots (a tall
-        object loaded in a slot the direct route passes over) and moving
-        within one labware's own wells (a source/destination pair whose
-        shared plate has taller neighboring wells or a lid in between).
+        """Move a mounted tool to a deck-space point using a clearance arc.
 
-        verify: see move_to's own docstring -- on by default, with stall
-        retries."""
+        Motion is performed in three stages:
+
+        1. Raise the selected mount to the required clearance height.
+        2. Move horizontally to the destination X/Y position.
+        3. Lower the mount to the requested Z height.
+
+        The clearance is based on `clearance_mm` or :attr:`travel_z_mm` and is
+        automatically increased when known labware or deck obstacles along the
+        path require additional height.
+
+        Args:
+            point: Target deck-space position.
+            side: Mount whose tool should be moved.
+            clearance_mm: Requested minimum travel height. Defaults to
+                :attr:`travel_z_mm`.
+            feed: Optional feed rate for the final vertical move.
+            verify: Whether to verify each motion leg using reported positions.
+
+        Raises:
+            RuntimeError: If deck calibration is not configured.
+            TimeoutError: If verification is enabled and a motion leg fails to
+                settle.
+        """
         cal = self._require_cal()
         base_clr = clearance_mm if clearance_mm is not None else self.travel_z_mm
         clr = self._path_clearance_mm(side, (point.x, point.y), base_clr)
-        self.raise_z(side, clr, verify=verify)  # 1. up
+        self.raise_z(side, clr, verify=verify)
         xy = cal.deck_to_motor(DeckPoint(point.x, point.y, clr), side, self.tip_offset(side))
         xy_targets = {AxisId.X: xy[AxisId.X], AxisId.Y: xy[AxisId.Y]}
 
         def _send():
             self.controller.rapid_move(xy_targets)
 
-        _send()  # 2. across
+        _send()
         if verify:
             self._await_settled(xy_targets, resend=_send)
-        self.move_vertical_to(point.z, side, feed=feed, verify=verify)  # 3. down
+        self.move_vertical_to(point.z, side, feed=feed, verify=verify)
 
     def emergency_stop(self) -> None:
+        """Immediately stop controller motion and invalidate homing state.
+
+        After an emergency stop, all tracked axes are marked as not homed because
+        the controller's assumed coordinates may no longer correspond reliably
+        to the physical position of the instrument.
+        """
         self.controller.emergency_stop()
         for ax in self.axes.values():
             ax.homed = False
