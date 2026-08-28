@@ -1,22 +1,27 @@
-"""Visual routine builder: a palette of step "blocks" that can be
-double-clicked or dragged into a reorderable step list, with a param form
-for whichever step is selected.
-
-The QListWidget of steps is treated as a *view* of ``routine.steps``, never
-the source of truth -- every structural change (add/remove/drop) mutates
-the Routine's step list first and then rebuilds the widget from it. A pure
-drag-reorder is the one exception: Qt's own internal move already updates
-the visual rows, so that path just reads the resulting order back (by each
-item's stored ``id(step)``) into ``routine.steps`` rather than rebuilding.
-"""
 from __future__ import annotations
+
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QMimeData, QSize, pyqtSignal
+from PyQt5.QtCore import QMimeData, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
-                             QPushButton, QListWidget, QListWidgetItem, QAbstractItemView,
-                             QCheckBox, QComboBox, QDoubleSpinBox, QSpinBox, QFileDialog, QFrame)
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import icon_utils
 from .routine_model import REGISTRY, Routine
@@ -30,8 +35,6 @@ _HOME_AXES = ("X", "Y", "Z", "A", "B", "C")
 
 
 class BlockPalette(QListWidget):
-    """Available step kinds -- double-click to append, or drag onto the
-    step list to insert at a specific position."""
     MIME_TYPE = "application/x-nanovisflux-step"
     add_requested = pyqtSignal(str)
 
@@ -53,8 +56,6 @@ class BlockPalette(QListWidget):
 
 
 class StepRow(QWidget):
-    """One card in the step list: a color stripe for the step kind, its
-    label + live summary, and a delete button."""
 
     def __init__(self, step, parent=None):
         super().__init__(parent)
@@ -88,8 +89,8 @@ class StepRow(QWidget):
 
 
 class StepListWidget(QListWidget):
-    block_dropped = pyqtSignal(str, int)   # kind, insertion row (from the palette)
-    steps_changed = pyqtSignal()           # structure changed (add/remove/reorder)
+    block_dropped = pyqtSignal(str, int)
+    steps_changed = pyqtSignal()
 
     def __init__(self, routine: Routine, parent=None):
         super().__init__(parent)
@@ -119,7 +120,6 @@ class StepListWidget(QListWidget):
             self._rows[row].refresh_summary(self.routine.steps[row])
             self.item(row).setSizeHint(self._rows[row].sizeHint())
 
-    # -- drag/drop ----------------------------------------------------------
     def dragEnterEvent(self, event) -> None:
         if event.source() is self or event.mimeData().hasFormat(BlockPalette.MIME_TYPE):
             event.acceptProposedAction()
@@ -144,21 +144,19 @@ class StepListWidget(QListWidget):
 
     def _sync_order_from_items(self) -> None:
         by_id = {id(s): s for s in self.routine.steps}
-        new_order = [by_id[self.item(i).data(Qt.UserRole)] for i in range(self.count())
-                    if self.item(i).data(Qt.UserRole) in by_id]
+        new_order = [
+            by_id[self.item(i).data(Qt.UserRole)]
+            for i in range(self.count())
+            if self.item(i).data(Qt.UserRole) in by_id
+        ]
         if len(new_order) != len(self.routine.steps):
-            return   # something didn't line up -- leave the model untouched
+            return
         self.routine.steps[:] = new_order
         self._rows = [self.itemWidget(self.item(i)) for i in range(self.count())]
         self.steps_changed.emit()
 
 
 class HomeAxesWidget(QWidget):
-    """Checkboxes for which axes a Home step homes, plus an ALL box that's
-    just a synced shortcut -- checked when every individual axis already
-    is, and checking/unchecking it checks/unchecks all six at once. The
-    underlying value stays the same space-separated-letters string Home
-    always used (empty = home everything, matching a bare G28)."""
     changed = pyqtSignal()
 
     def __init__(self, value: str, parent=None):
@@ -171,7 +169,7 @@ class HomeAxesWidget(QWidget):
         layout.addWidget(self.all_box)
 
         selected = set(value.split())
-        all_by_default = not selected   # HomeStep's "" already means "home everything"
+        all_by_default = not selected
         self.axis_boxes: dict = {}
         for letter in _HOME_AXES:
             box = QCheckBox(letter)
@@ -207,11 +205,6 @@ class HomeAxesWidget(QWidget):
 
 
 class ParamEditor(QWidget):
-    """Dynamic param form for whichever step is currently selected, driven
-    by that step class's ``param_fields``. "labware"/"well" fields are
-    editable combo boxes: populated from whatever's currently loaded on the
-    deck (see ``set_robot``) when a robot is connected, but still accept
-    freely-typed text so a routine can be authored offline."""
     changed = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -229,10 +222,6 @@ class ParamEditor(QWidget):
         outer.addStretch(1)
 
     def set_robot(self, robot) -> None:
-        """Called whenever the connected robot (or its loaded labware)
-        changes, so labware/well combo boxes offer what's actually on the
-        deck. Rebuilds the current form in place to pick up the new
-        choices."""
         self._robot = robot
         if self.step is not None:
             self.set_step(self.step)
@@ -344,9 +333,6 @@ class ParamEditor(QWidget):
         self.changed.emit()
 
     def _on_labware_changed(self) -> None:
-        """A step's ``labware`` choice changed -- commit it, then refresh
-        the sibling ``well`` combo's items in place (without rebuilding the
-        whole form) so it lists that labware's actual wells."""
         self._commit()
         entry = self._widgets.get("well")
         if entry is None:
@@ -425,7 +411,6 @@ class RoutineBuilderWidget(QWidget):
 
         self.refresh()
 
-    # -- structural edits ---------------------------------------------------
     def _append_step(self, kind: str) -> None:
         self.routine.steps.append(REGISTRY[kind]())
         self.refresh()
@@ -449,16 +434,12 @@ class RoutineBuilderWidget(QWidget):
         self.step_list.rebuild(self._delete_step)
         self.routine_changed.emit()
 
-    # -- selection / param edits --------------------------------------------
     def _on_selection_changed(self, row: int) -> None:
         step = self.routine.steps[row] if 0 <= row < len(self.routine.steps) else None
         self.param_editor.set_step(step)
         self._set_nested_step(step)
 
     def _set_nested_step(self, step) -> None:
-        """Show a recursive builder for a Repeat step's inner ``body`` --
-        a Repeat is itself just a Routine, so editing its body reuses this
-        exact widget rather than inventing separate nested-list machinery."""
         while self.nested_host.count():
             item = self.nested_host.takeAt(0)
             w = item.widget()
@@ -479,12 +460,7 @@ class RoutineBuilderWidget(QWidget):
             self.step_list.refresh_row_summary(row)
         self.routine_changed.emit()
 
-    # -- deck context ---------------------------------------------------------
     def set_robot(self, robot) -> None:
-        """Wire in (or clear, on disconnect) the connected robot so the
-        labware/well combo boxes offer what's actually loaded on the deck.
-        Propagates into whichever Repeat body is currently being edited,
-        since that's a whole separate recursive instance of this widget."""
         self._robot = robot
         self.param_editor.set_robot(robot)
         nested = self.nested_host.itemAt(0)
@@ -497,7 +473,6 @@ class RoutineBuilderWidget(QWidget):
             self.step_list.refresh_row_summary(row)
         self.routine_changed.emit()
 
-    # -- name / file ---------------------------------------------------------
     def _on_name_changed(self) -> None:
         self.routine.name = self.name_edit.text().strip() or "untitled routine"
         self.routine_changed.emit()
@@ -509,8 +484,9 @@ class RoutineBuilderWidget(QWidget):
         self.refresh()
 
     def _save_routine(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save routine", f"{self.routine.name}.json",
-                                              "Routine (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save routine", f"{self.routine.name}.json", "Routine (*.json)"
+        )
         if path:
             Path(path).write_text(self.routine.to_json(), encoding="utf-8")
 

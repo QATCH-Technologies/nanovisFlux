@@ -1,6 +1,3 @@
-"""Lets an operator attach/detach tools on each mount without editing a YAML
-config -- useful when connecting bare (no config loaded) or swapping a tool
-mid-session."""
 
 from __future__ import annotations
 
@@ -36,7 +33,7 @@ class _MountEditor(QWidget):
 
         self.stack = QStackedWidget()
         layout.addWidget(self.stack)
-        self.stack.addWidget(QWidget())  # "none"
+        self.stack.addWidget(QWidget())
 
         self.pipette_page = QWidget()
         pf = QFormLayout(self.pipette_page)

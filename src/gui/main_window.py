@@ -359,15 +359,6 @@ class MainWindow(QMainWindow):
     _SPATIAL_AXES = (AxisId.X, AxisId.Y, AxisId.Z, AxisId.A)
 
     def _routine_leg_duration(self, before: dict, after: dict, feed) -> float:
-        """How long this one G0/G1 would really take, from the distance it
-        actually covers and its feed rate: the command's own explicit feed
-        if it had one (a G1 with F given), else the relevant axis's
-        configured travel speed (a bare G0 rapid move, or a feed-less G1,
-        both leave the firmware to use its own default). Distance and rate
-        are both already in microsteps/<time>, so the ratio comes out in
-        real seconds without a separate mm/s conversion -- steps_per_mm
-        only matters if you want to *display* the rate, not time the sweep.
-        """
         durations = []
         for axis in self._SPATIAL_AXES:
             start, end = before.get(axis), after.get(axis)
@@ -426,7 +417,7 @@ class MainWindow(QMainWindow):
                 self._advance_routine_animation()
                 return
             self._routine_anim_leg = ("move", before, after, duration, time.monotonic())
-        else:  # "home"
+        else:
             _, schedule = leg
             if schedule[-1][3] <= 0:
                 display = {**self._routine_display_pos, **{axis: 0 for axis, *_ in schedule}}
@@ -450,7 +441,7 @@ class MainWindow(QMainWindow):
                 end = after.get(axis, start)
                 display[axis] = int(round(start + (end - start) * frac))
             finished = frac >= 1.0
-        else:  # "home"
+        else:
             _, schedule, t0 = self._routine_anim_leg
             elapsed = time.monotonic() - t0
             total = schedule[-1][3]
@@ -530,7 +521,7 @@ class MainWindow(QMainWindow):
         for name, lw in self.robot.labware.items():
             slot = lw.slot.name if lw.slot else "?"
             self.labware_list.addItem(f"S{slot} · {name} ({len(lw.wells)} wells)")
-        self.routine_builder.set_robot(self.robot)  # refresh labware/well choices
+        self.routine_builder.set_robot(self.robot)
 
     def _refresh_mounts_list(self) -> None:
         self.mounts_list.clear()

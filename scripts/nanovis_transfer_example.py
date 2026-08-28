@@ -1,27 +1,16 @@
-"""Example: pick up a fresh tip, aspirate 5uL from the 96-well plate (slot
-1), dispense 5uL onto the QATCH nanovis 24-well plate (slot 3) with a pause
-to let the last drop fall, then drop the spent tip in the trash (slot 12) --
-repeat for each well pair, up to the smaller plate's 24 wells.
+"""Example routine for transferring 5uL from a 96-well plate to a 24-well plate.
 
-Python-script twin of configs/routines/nanovis_transfer_example.json (the
-GUI-loadable version, built from src/gui/routine_model.py's step model) --
-this one is built from src/routines/ instead (Location/Step objects), for
-running headless or importing as a library. Both walk the exact same
-physical sequence against the exact same configs/robot.yaml labware; the
-trash drop point/height match between the two for the same reason (see
-_TRASH_OFFSET/_TRASH_EJECT_Z_MM below).
+This script is the headless, Python-based equivalent of the GUI-loadable
+`nanovis_transfer_example.json` routine. It iterates through up to 24 well pairs,
+sequencing tip pickup, aspiration (slot 1), dispensing with a pause (slot 3),
+and tip disposal (slot 12).
 
-Not written "for" a specific mount: --side picks it at run time, and the
-routine itself only ever learns which mount to use via an explicit
-SwitchMountStep (see src/routines/steps.py) rather than a side baked into
-the Routine object -- the same mechanism a routine would use mid-run to
-address a second mount, e.g. aspirating on the left pipette and dispensing
-on the right one, which this one doesn't need but could.
-
-Runs against the in-memory SimulatedTransport by default, so it can be exercised
-without hardware attached; pass --port to drive real hardware over serial
-(overriding whatever configs/robot.yaml's own transport: says, same as the
-GUI connection bar -- see gui/robot_factory.py).
+Key Configuration Details:
+    * Mount-Agnostic: The active mount is chosen at runtime via `--side`. The
+      routine directs the mount dynamically using `SwitchMountStep`.
+    * Hardware Simulation: Defaults to an in-memory `SimulatedTransport` for safe,
+      hardware-free testing. Pass the `--port` argument to override the config
+      and drive real hardware over serial.
 """
 
 from __future__ import annotations
@@ -51,53 +40,56 @@ from src.routines import (
 from src.tools import TipPickup
 from src.transport import SerialTransport, SimulatedTransport
 
-#: Anchored to this script's own location, matching calibrate_pipette.py's
-#: _DEFAULT_CONFIG -- a bare relative string would resolve against wherever
-#: the process happened to be invoked from instead.
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "robot.yaml"
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT}
 
-_TIP_RACK = "tiprack1"  # robot.yaml labware: instance, slot "10"
-_TIP_NAME = "opentrons_p300_ot2_tip"  # robot.yaml tips: entry matching that rack
-_SOURCE = "source"  # robot.yaml labware: instance, slot "1" (96-well)
-_DEST = "dest"  # robot.yaml labware: instance, slot "3" (nanovis 24-well)
-_PRESS_Z_MM = 64.6  # tiprack1's own measured first-contact height (its grid.origin.z)
+_TIP_RACK = "tiprack1"
+_TIP_NAME = "opentrons_p300_ot2_tip"
+_SOURCE = "source"
+_DEST = "dest"
+_PRESS_Z_MM = 64.6
 _VOLUME_UL = 5.0
-_PAUSE_S = 1.0  # "with pause" -- let the last drop fall before lifting away
-
-#: Trash drop point: slot 12's origin (see configs/deck.yaml) plus an offset
-#: comfortably inside its 170x164mm footprint and clear of its front-left
-#: 37.5x37mm obstacle block. eject_z_mm matches configs/robot.yaml's own
-#: travel_z_mm -- the safest available choice (guaranteed clear of every
-#: known obstacle, including the bin's 85mm walls) for an as-yet-unverified
-#: exact drop height. Both match configs/routines/nanovis_transfer_example.json.
-#:
-#: (100.0, 100.0) was the original theoretical choice but proved
-#: unreachable on real hardware: slot 12 has no deck.yaml calibration mark
-#: of its own (deliberately -- "the gantry cannot always reach it in
-#: practice", see deck.yaml), so its position is always extrapolated from
-#: the nearest marks ("9"/"11"), and 100mm deep on Y extrapolated past the
-#: gantry's actual Y travel limit (raised ValueError from
-#: Robot._validate_targets: computed Y target went negative). (60.0, 60.0)
-#: was verified reachable against the recalibrated deck via
-#: scripts/check_trash_reach.py -- comfortable margin from both the axis
-#: limits and the obstacle block (~22mm clearance on each side), unlike
-#: shallower alternatives that clip the obstacle corner.
+_PAUSE_S = 1.0
 _TRASH_OFFSET = DeckPoint(60.0, 60.0, 0.0)
 _TRASH_EJECT_Z_MM = 120.0
 
 
 def build_routine(robot, n_wells: int, side: MountSide) -> Routine:
-    """See module docstring. `n_wells` is clamped to the smaller of
-    source/dest's own well counts -- the destination (24 wells) in
-    practice, since the source (96 wells) has far more.
+    """Build the pick-tip/aspirate/dispense/drop-tip routine described in
+    the module docstring, addressed by well name against `robot`'s own
+    loaded labware.
 
-    `side` is applied via a SwitchMountStep, not the Routine constructor
-    (whose own `side` is only a fallback for a routine that never
-    switches at all -- see Routine.run) -- so which mount runs this is
-    always visible as an explicit step in the routine itself, the same
-    way it would be if this needed to switch mid-run."""
+    `n_wells` is clamped to the smaller of the source and destination
+    plate's own well counts -- the destination (24 wells) in practice,
+    since the source (96 wells) has far more. This means an
+    operator-supplied `n_wells` that exceeds what's actually on the deck
+    doesn't fail outright; it just runs the largest well-paired sequence
+    that's actually possible, with a warning logged so the shortfall
+    isn't silent.
+
+    `side` is applied via a :class:`SwitchMountStep` at the front of the
+    routine, not through the :class:`Routine` constructor's own `side`
+    (which is only a fallback used by :meth:`Routine.run` for a routine
+    that never switches mounts at all). This keeps which mount runs this
+    routine visible as an explicit step in the routine's own step list --
+    the same way it would need to be if this routine ever had to switch
+    mounts mid-run, e.g. aspirating on one pipette and dispensing on
+    another.
+
+    Args:
+        robot: :class:`Robot` instance whose `labware` supplies the well
+            names for `_SOURCE` and `_DEST`.
+        n_wells: Requested number of source/destination well pairs to
+            run; clamped to whichever of the two plates has fewer wells.
+        side: Mount that the routine's `SwitchMountStep` switches to
+            before the first tip pickup.
+
+    Returns:
+        Routine: Ordered pick-up/aspirate/dispense/pause/drop-tip steps
+        for each well pair, ready to be dry-run or executed against
+        `robot`.
+    """
     source_names = list(robot.labware[_SOURCE].wells)
     dest_names = list(robot.labware[_DEST].wells)
     n = min(n_wells, len(source_names), len(dest_names))
@@ -117,21 +109,25 @@ def build_routine(robot, n_wells: int, side: MountSide) -> Routine:
                 AspirateStep(_VOLUME_UL, WellLocation(_SOURCE, src_name)),
                 DispenseStep(_VOLUME_UL, WellLocation(_DEST, dest_name)),
                 DelayStep(_PAUSE_S),
-                DropTipStep(
-                    SlotLocation("12", offset=_TRASH_OFFSET), _TRASH_EJECT_Z_MM
-                ),
+                DropTipStep(SlotLocation("12", offset=_TRASH_OFFSET), _TRASH_EJECT_Z_MM),
             ]
         )
     return routine
 
 
 def main() -> None:
+    """Run this script as a CLI.
+
+    Parses arguments, resolves the robot config, builds a :class:`Robot`
+    via :func:`src.gui.robot_factory.build_robot`, builds the routine
+    (see :func:`build_routine`), and logs its dry-run plan. Unless
+    `--dry-run` is passed, also connects to the robot and executes the
+    routine, logging each step as it completes.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "--config", default=str(_DEFAULT_CONFIG), help="robot config YAML"
-    )
+    parser.add_argument("--config", default=str(_DEFAULT_CONFIG), help="robot config YAML")
     parser.add_argument(
         "--port",
         default="COM6",
@@ -166,9 +162,7 @@ def main() -> None:
     with robot:
         routine.run(
             robot,
-            on_step=lambda i, s: logger.info(
-                f"[{i + 1}/{len(routine.steps)}] {s.describe()}"
-            ),
+            on_step=lambda i, s: logger.info(f"[{i + 1}/{len(routine.steps)}] {s.describe()}"),
         )
     logger.info("Done.")
 

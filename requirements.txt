@@ -6,9 +6,11 @@ aiohttp==3.9.1
 pygame==2.6.1
 PyQt5==5.15.11
 python-dotenv==1.0.0
-loguru==0.7.2 
+loguru==0.7.2
 pytest==7.4.3
 pytest-asyncio==0.23.2
+pytest-cov==4.1.0
+matplotlib>=3.8,<4.0
 ultralytics==8.3.252
 pydantic>=2.7.0
 numpy>=1.26.0,<2.0

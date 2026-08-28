@@ -157,9 +157,9 @@ class GamepadInput(QObject):
         self._emit_trigger("LT", lt_speed)
         self._emit_trigger("RT", rt_speed)
         if lt_speed > 0 and rt_speed == 0:
-            self._emit_speed("plunger", +lt_speed)  # aspirate
+            self._emit_speed("plunger", +lt_speed)
         elif rt_speed > 0 and lt_speed == 0:
-            self._emit_speed("plunger", -rt_speed)  # dispense
+            self._emit_speed("plunger", -rt_speed)
         else:
             self._emit_speed("plunger", 0.0)
 
@@ -209,21 +209,21 @@ class GamepadInput(QObject):
         self.button_highlight_changed.emit(name, pressed)
 
     def _handle_button(self, button: int) -> None:
-        if button == 7:  # Start/Menu
+        if button == 7:
             self.estop_requested.emit()
-        elif button == 0:  # A
+        elif button == 0:
             self.quick_stop_requested.emit()
-        elif button == 1:  # B
+        elif button == 1:
             self.read_sensor_requested.emit()
-        elif button == 2:  # X
+        elif button == 2:
             self.zero_z_requested.emit()
-        elif button == 3:  # Y
+        elif button == 3:
             self.mount_toggle_requested.emit()
-        elif button == 4:  # LB
+        elif button == 4:
             self.tip_action_requested.emit("pickup")
-        elif button == 5:  # RB
+        elif button == 5:
             self.tip_action_requested.emit("eject")
-        elif button == 6:  # Back/View
+        elif button == 6:
             self.home_requested.emit()
 
     def _handle_hat(self, value: tuple) -> None:

@@ -36,7 +36,7 @@ _STATUS_COLORS = {
 
 
 class ConnectionBar(QWidget):
-    connect_requested = pyqtSignal(dict)  # {mode, port, baud, config_path|None}
+    connect_requested = pyqtSignal(dict)
     disconnect_requested = pyqtSignal()
     home_requested = pyqtSignal()
     estop_requested = pyqtSignal()

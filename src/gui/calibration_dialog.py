@@ -300,7 +300,7 @@ class CalibrationDialog(QDialog):
             }
         }
         try:
-            import yaml  # lazy dependency, matches config/loader.py's own convention
+            import yaml
 
             with open(path, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(data, fh, sort_keys=False)

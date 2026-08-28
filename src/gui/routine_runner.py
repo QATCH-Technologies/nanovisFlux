@@ -1,27 +1,25 @@
-"""Executes a Routine off the UI thread, so a slow (or real, physically
-blocking) serial round-trip never freezes the window, and exposes both
-single-step and continuous execution -- "simulating" a routine means
-stepping through it one block at a time and watching each command/response
-via the shared console; "running" means the same executor in continuous
-mode with live per-step status.
-
-Each run operates on a **deep copy** of whatever routine the builder holds
-at the moment Run/Step is first pressed, so editing the routine afterward
-can never race with the worker thread reading it mid-run.
-"""
 from __future__ import annotations
+
 import copy
 import threading
 from pathlib import Path
 
 from loguru import logger
-from PyQt5.QtCore import QThread, QSize, pyqtSignal
+from PyQt5.QtCore import QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                             QListWidget, QListWidgetItem, QFileDialog)
+from PyQt5.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..core import AxisId
-from ..protocol.commands import RapidMove, LinearMove, Home
+from ..protocol.commands import Home, LinearMove, RapidMove
 from . import icon_utils
 from .routine_model import Routine
 from .tokens import TOKENS
@@ -35,40 +33,20 @@ _STATUS_ICON = {"pending": "○", "running": "▶", "ok": "✓", "error": "✕"}
 class RoutineRunner(QThread):
     step_started = pyqtSignal(int)
     step_finished = pyqtSignal(int, bool, str)
-    #: emitted after every step with the list of (targets, feed) moves it
-    #: actually issued -- targets is an {AxisId: microsteps} absolute
-    #: target, feed the microsteps/sec it was commanded at (None for a G0
-    #: rapid move). Captured straight off the dispatched Command objects
-    #: (see _run_step) rather than by polling position before/after: in
-    #: simulation a G1's target isn't reached until real wall-clock time
-    #: passes (see SimulatedTransport), so an immediate re-poll would just see
-    #: "no change yet", not the move's real extent. Empty list means the
-    #: step issued no G0/G1 (e.g. Wait, Home, a raw line) -- the GUI treats
-    #: that as "nothing to sweep, but resync the display" (see MainWindow).
     step_motion = pyqtSignal(list)
-    #: emitted once per G28 a step issued, with which axes it homed (a bare
-    #: G28 expands to every AxisId, matching Robot.home()'s own default).
-    #: No position here -- like step_motion, an immediate re-poll would
-    #: just race SimulatedTransport's (or the wire's) own timing; the GUI times
-    #: the sweep from its own tracked display position instead (the same
-    #: one step_motion's legs advance), not a live poll. Kept separate from
-    #: step_motion since a home sweep is a different animation model
-    #: (sequential per-axis, like the manual Home button) than one
-    #: coordinated move.
     step_home = pyqtSignal(tuple)
     log = pyqtSignal(str)
-    finished_run = pyqtSignal(bool)   # True iff every step completed ok
+    finished_run = pyqtSignal(bool)
 
     def __init__(self, robot, routine: Routine, parent=None):
         super().__init__(parent)
         self.robot = robot
         self.routine = routine
-        self._mode = threading.Event()   # set = allowed to execute the step at _cursor
+        self._mode = threading.Event()
         self._continuous = False
         self._stop = threading.Event()
         self._cursor = 0
 
-    # -- control, called from the GUI thread ---------------------------------
     def step_once(self) -> None:
         self._continuous = False
         self._mode.set()
@@ -78,22 +56,13 @@ class RoutineRunner(QThread):
         self._mode.set()
 
     def pause(self) -> None:
-        self._continuous = False   # takes effect at the next step boundary
+        self._continuous = False
 
     def stop(self) -> None:
         self._stop.set()
         self._mode.set()
 
     def _run_step(self, step) -> tuple:
-        """Run one step, capturing every G0/G1/G28 it issues as it's
-        dispatched rather than inferring motion from a before/after
-        position poll -- see step_motion's docstring for why (G28 is
-        instant in SimulatedTransport, but a live poll right after would still
-        race a *preceding* step's still-settling G1, which is exactly the
-        bug this avoids for legs too). Temporarily borrows Controller.on_send
-        (unused elsewhere today), restoring whatever was there -- this runs
-        synchronously on this thread only, so there's no concurrent user to
-        clobber. Returns (legs, homes)."""
         legs: list = []
         homes: list = []
 
@@ -112,13 +81,8 @@ class RoutineRunner(QThread):
             controller.on_send = prev_on_send
         return legs, homes
 
-    # -- worker thread ----------------------------------------------------------
     def run(self) -> None:
         ok_all = True
-        # Routine motion assumes absolute targets throughout; ambient mode
-        # is otherwise left in G91 for the whole connection (see
-        # JogController), so bracket the run and restore it after -- same
-        # idea as robot.home() leaving G90 and MainWindow restoring G91.
         self.robot.controller.set_absolute()
         try:
             while self._cursor < len(self.routine.steps):
@@ -137,19 +101,16 @@ class RoutineRunner(QThread):
                     ok_all = False
                     break
                 if homes:
-                    # A Home step's own handler tracks the display position
-                    # itself (see MainWindow._on_routine_step_home) -- skip
-                    # step_motion's generic "no legs -> resync from a live
-                    # poll" path so it can't clobber that with the
-                    # already-homed real position before the sweep even
-                    # starts.
                     for axes in homes:
                         self.step_home.emit(axes)
                 else:
                     self.step_motion.emit(legs)
                 self._cursor += 1
-                if (self._continuous and not self._stop.is_set()
-                        and self._cursor < len(self.routine.steps)):
+                if (
+                    self._continuous
+                    and not self._stop.is_set()
+                    and self._cursor < len(self.routine.steps)
+                ):
                     self._mode.set()
         finally:
             self.robot.controller.set_relative()
@@ -157,11 +118,9 @@ class RoutineRunner(QThread):
 
 
 class RoutineRunnerWidget(QWidget):
-    """One-way status mirror of whichever routine is loaded, plus
-    step/run/pause/stop/reset transport controls."""
-    run_state_changed = pyqtSignal(bool)   # True while a run/step session is active
-    step_motion = pyqtSignal(list)   # re-broadcasts RoutineRunner.step_motion
-    step_home = pyqtSignal(tuple)   # re-broadcasts RoutineRunner.step_home
+    run_state_changed = pyqtSignal(bool)
+    step_motion = pyqtSignal(list)
+    step_home = pyqtSignal(tuple)
 
     def __init__(self, get_source_routine, parent=None):
         super().__init__(parent)
@@ -210,17 +169,14 @@ class RoutineRunnerWidget(QWidget):
         self._use_builder_routine()
         self._refresh_buttons()
 
-    # -- context --------------------------------------------------------------
     def set_context(self, robot) -> None:
-        self._on_stop()   # any in-flight run belongs to the outgoing robot
+        self._on_stop()
         self.robot = robot
         self._refresh_buttons()
 
     def stop_run(self) -> None:
-        """Public alias for MainWindow's e-stop path."""
         self._on_stop()
 
-    # -- routine source -----------------------------------------------------------
     def _use_builder_routine(self) -> None:
         self._load_from(copy.deepcopy(self._get_source_routine()))
 
@@ -241,7 +197,9 @@ class RoutineRunnerWidget(QWidget):
         if not self._routine:
             return
         for i, step in enumerate(self._routine.steps):
-            self.list.addItem(QListWidgetItem(f"{_STATUS_ICON['pending']}  {i + 1}. {step.summary()}"))
+            self.list.addItem(
+                QListWidgetItem(f"{_STATUS_ICON['pending']}  {i + 1}. {step.summary()}")
+            )
 
     def _set_row_status(self, row: int, status: str, message: str = "") -> None:
         if not (0 <= row < self.list.count()):
@@ -253,7 +211,6 @@ class RoutineRunnerWidget(QWidget):
         if status == "running":
             self.list.setCurrentRow(row)
 
-    # -- run control --------------------------------------------------------------
     def _ensure_runner(self) -> bool:
         if self.robot is None or not self._routine or not self._routine.steps:
             return False

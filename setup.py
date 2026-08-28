@@ -13,6 +13,7 @@ setup(
     install_requires=[
         "pyserial==3.5",
         "pyserial-asyncio==0.6",
+        "PyYAML==6.0.3",
         "websockets==12.0",
         "aiohttp==3.9.1",
         "pydantic>=2.7.0",
@@ -30,9 +31,17 @@ setup(
             "torchaudio==2.8.0",
             "torchvision==0.23.0",
         ],
+        "gui": [
+            "PyQt5==5.15.11",
+            "pygame==2.6.1",
+        ],
+        "viz": [
+            "matplotlib>=3.8,<4.0",
+        ],
         "test": [
             "pytest==7.4.3",
             "pytest-asyncio==0.23.2",
+            "pytest-cov==4.1.0",
         ],
     },
     classifiers=[

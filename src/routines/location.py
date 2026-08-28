@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 from ..geometry.coordinates import DeckPoint
 
 if TYPE_CHECKING:
-    from robot import Robot
+    from ..robot import Robot
 
 
 class Location:

@@ -1,78 +1,30 @@
-"""Raster-scans the rear ultrasonic sensor (see src/tools/ultrasonic.py)
-across the gantry's full X/Y motor travel and builds a top-down
-topographical map from the range readings.
+"""Raster-scans the rear ultrasonic sensor to build a top-down topographical map.
 
-Works directly in raw motor microsteps (Controller.rapid_move/linear_move)
-rather than deck millimetres (Robot.move_to/safe_move_to), so it needs no
-DeckCalibration at all -- "the deck" doesn't have to exist yet as a fitted
-coordinate system for this to run against real hardware. Default scan
-bounds are each axis's own configured travel limit (AxisConfig.endstop_limit
--- see motion/axis.py), i.e. the *entire* space the gantry can physically
-reach, not just whatever's already been mapped as "the deck".
+This script operates directly in raw motor microsteps across the gantry's full X/Y
+travel limits, requiring no prior deck calibration. Coordinates are recorded based on
+the raw gantry reference point rather than the exact sensor position, as the rear
+sensor (`MountSide.REAR`) has a fixed 50mm Y offset.
 
-The sensor is fixed to the gantry frame behind the Z/A mounts and has no
-vertical axis of its own (MountSide.REAR -- see src/core.py and
-src/motion/mounts.py): it only ever travels along with raw X/Y, offset a
-constant 50mm in Y from the gantry's own shared X/Y reference point (see
-MOUNT_OFFSET_MM[MountSide.REAR]). Recorded X/Y are that raw gantry
-reference point, not the sensor's exact position -- a deliberate
-simplification that keeps this script calibration-free; the offset is
-fixed and small relative to the scan's own resolution.
+Hardware and Firmware Handling:
+    * Continuous Sweeps: Each row is a single, non-blocking G1 move. X and Y are
+      never sent in the same G1 move to avoid a firmware zero-division bug that
+      stalls axes.
+    * Sensor Polling: The ultrasonic sensor command (M412) is synchronous and pauses
+      motor motion for ~300ms. It is sampled sparingly based on `--samples-per-row`.
+      Position tracking uses the non-blocking M114 command, throttled by `_POLL_INTERVAL_S`.
+    * Move Completion: Rows end with a quick stop (M410), an input buffer flush, and
+      a position resync to handle delayed firmware acknowledgments safely.
 
-Real continuous sweeps, no settling pauses, no stepped moves: each row is
-ONE G1 move covering the whole row (min X to max X or back, depending on
-snake direction) at a steady `--feed` microsteps/sec, fired with
-wait_for_ok=False (see Controller.execute) so it doesn't block.
+Outputs:
+    * CSV: Raw, irregularly spaced `(x_usteps, y_usteps, distance_mm)` readings (`--out`).
+    * ASCII Heatmap: Bucket-rasterized grid printed directly to the terminal.
+    * PNG Heatmap: Generated if `matplotlib` is installed (`--png`).
 
-M412 is NOT asynchronous on this firmware -- confirmed by reading
-firmware/OT2-stepper-controller/OT2-stepper-controller.ino: the M412
-handler runs its 10-sample ultrasonic average (each sample floor-limited
-to >=30ms by AlashUltrasonic::getDistance's own delay(), so ~300ms+ per
-call) entirely synchronously, and the MOTOR_X.run()/MOTOR_Y.run() calls
-that actually advance a stepper sit LATER in the same single-threaded
-loop() -- unreached until the M412 handler's block finishes. So every
-M412 call fully pauses all motor motion for its own duration; there is no
-way to poll the sensor for free. M114 (position) is cheap by comparison
-(no external timing, just a stored-counter readback) and doesn't
-meaningfully interrupt stepping.
-
-Given that, this polls M114 (cheap, doesn't pause motion) at a small
-`_POLL_INTERVAL_S` throttle -- not a settling delay, just avoiding a
-genuinely unthrottled busy-wait loop that would peg the CPU and hammer the
-serial line for no benefit -- and calls M412 sparingly: `--samples-per-row`
-times per row, spaced out via wall-clock time so the gantry gets real,
-uninterrupted stretches of travel between each ~300ms sensor pause instead
-of stalling almost continuously.
-
-This firmware doesn't ack a G1 until the move itself finishes (not merely
-once it's queued -- see control/jog.py's JogController, which uses the same
-wait_for_ok=False + later drain pattern for its own continuous jog). So
-each row ends the same way JogController.end_jog does: Controller.quick_stop
-(M410) to make sure nothing's still creeping, reset_input_buffer to discard
-that G1's now-irrelevant belated "ok" (it may or may not have already
-arrived -- see scan_topography's docstring for the race this avoids), then
-a fresh report_position to resync. Never send X and Y in the same G1 here:
-this firmware slows the *shorter*-travel axis to match the longer one for
-coordinated linear moves, which divides its target speed by zero (a stopped
-axis, not a fast one) when that axis isn't actually moving -- rows only
-ever command X, and the row-to-row Y step is a separate G0.
-
-Output:
-  - a CSV of every (x_usteps, y_usteps, distance_mm) reading (--out),
-    exactly as collected -- irregularly spaced, not a regular grid
-  - an ASCII heatmap printed to the terminal
-  - optionally a PNG heatmap (--png), if matplotlib is installed
-  (the heatmaps rasterize the raw samples onto a `--display-columns`-wide
-  grid per row -- see bucket_grid -- purely for a legible picture; the CSV
-  is never bucketed)
-
-Runs against the in-memory SimulatedTransport by default (no hardware needed):
-without --config it also fabricates a smooth synthetic surface so the
-heatmap/PNG output can be exercised end-to-end. Pass --port for real
-hardware, or --config to load a full robot config (for its own transport/
-axis-limit overrides and a properly configured rear ultrasonic mount --
-see configs/robot.yaml); neither is required for this script's own
-motion, which never consults a calibration.
+Usage & Simulation:
+    * Defaults to an in-memory `SimulatedTransport` with a synthetic surface for
+      safe, hardware-free testing.
+    * Pass `--port` to drive real hardware, or `--config` to load a full robot config
+      for transport/axis-limit overrides.
 """
 
 from __future__ import annotations
@@ -92,34 +44,33 @@ from src.robot import Robot
 from src.tools import UltrasonicSensor
 from src.transport import SerialTransport, SimulatedTransport
 
-#: Anchored to this script's own location, not the process's current
-#: working directory -- see scripts/calibrate_pipette.py's identical fix
-#: for why a bare relative default string is a real risk here.
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "robot.yaml"
 
 _ASCII_RAMP = " .:-=+*#%@"
-#: A real M412 costs at least this long (10 ultrasonic samples, each
-#: floor-limited to >=30ms -- see AlashUltrasonic::getDistance). Sample
-#: intervals shorter than this are pointless: M412 itself won't return any
-#: faster, so the gantry would stall back-to-back regardless of the target
-#: spacing -- see module docstring.
 _M412_MIN_INTERVAL_S = 0.3
-#: M114 (position) doesn't pause motion the way M412 does, but polling it
-#: in a genuinely unthrottled tight loop just busy-waits the CPU (and, on
-#: real hardware, contends the serial line) for no benefit -- position
-#: doesn't need microsecond-fresh updates to detect "have we arrived" or
-#: "is it time for the next M412 yet". This is a poll-loop throttle, not a
-#: settling delay: it's not waiting for anything physical, just spacing out
-#: otherwise-pointless-to-repeat status checks.
 _POLL_INTERVAL_S = 0.02
-_MAX_POLLS_PER_ROW = 6000  # safety net against a stuck/never-arriving row (~2 minutes at _POLL_INTERVAL_S)
+_MAX_POLLS_PER_ROW = 6000
 
 
 def _irange(start: int, stop: int, step: int) -> list:
-    """Evenly spaced integer microstep points from start to stop inclusive
-    -- always hits both endpoints exactly, spaced as close to `step` as an
-    integer point count allows (mirrors a float _frange, but rounded to
-    whole microsteps since motor targets must be integers)."""
+    """Compute evenly spaced integer points from `start` to `stop`.
+
+    Both endpoints are always hit exactly; the interior points are spaced
+    as close to `step` as an integer point count allows. Conceptually
+    mirrors a float `_frange` helper, but rounds every point to a whole
+    microstep since motor targets must be integers.
+
+    Args:
+        start: First point, always included exactly.
+        stop: Last point, included exactly unless `stop <= start`.
+        step: Target spacing between points. The actual spacing is
+            recomputed from the resulting integer point count so both
+            endpoints still land exactly.
+
+    Returns:
+        list: Ascending points from `start` to `stop` inclusive, or
+        `[start]` alone if `stop <= start`.
+    """
     if stop <= start:
         return [start]
     count = max(1, round((stop - start) / step)) + 1
@@ -128,12 +79,24 @@ def _irange(start: int, stop: int, step: int) -> list:
 
 
 def synthetic_height_mm(x_usteps: float, y_usteps: float) -> float:
-    """A smooth rolling surface around a nominal standoff -- stand-in
-    terrain for exercising the scan/heatmap pipeline without real
-    hardware. Rescales raw motor microsteps to mm internally (via the
-    firmware's default per-axis scale, not a real calibration) purely so
-    the synthetic bumps stay visually smooth regardless of how many
-    microsteps this deck's travel happens to span."""
+    """Compute a synthetic standoff height for the no-hardware demo.
+
+    Produces a smooth rolling surface around a nominal standoff -- stand-in
+    terrain for exercising the scan/heatmap pipeline end-to-end without
+    real hardware (see module docstring). Raw motor microsteps are
+    rescaled to mm internally via the firmware's default per-axis scale,
+    not a real calibration, purely so the synthetic bumps stay visually
+    smooth regardless of how many microsteps this deck's travel happens to
+    span.
+
+    Args:
+        x_usteps: X position, raw motor microsteps.
+        y_usteps: Y position, raw motor microsteps.
+
+    Returns:
+        float: Synthetic sensor-to-surface distance in mm at
+        (`x_usteps`, `y_usteps`).
+    """
     x_mm = default_axis_scale(AxisId.X).to_mm(x_usteps)
     y_mm = default_axis_scale(AxisId.Y).to_mm(y_usteps)
     base = 300.0
@@ -142,14 +105,23 @@ def synthetic_height_mm(x_usteps: float, y_usteps: float) -> float:
 
 
 def _read_distance_mm(robot: Robot) -> float | None:
-    """Query M412 for all three slots and return whichever came back
-    valid, preferring Z (the REAR mount's documented, physically-wired
-    slot -- see tools/ultrasonic.py's _MOUNT_RANGE_SLOT and
-    firmware/docs/protocol.md, which says X/Y "will always return -1").
-    The wire reply is a 3-tuple, [RNG:<x_mm>,<y_mm>,<z_mm>] -- querying
-    all three and falling back across them is a defensive read in case a
-    given board actually answers on a different slot than documented,
-    rather than trusting Z alone."""
+    """Query M412 and return the rear ultrasonic sensor's distance reading.
+
+    The wire reply is a 3-tuple, `[RNG:<x_mm>,<y_mm>,<z_mm>]`. Z is the
+    REAR mount's documented, physically-wired slot (see
+    `tools/ultrasonic.py`'s `_MOUNT_RANGE_SLOT` and
+    `firmware/docs/protocol.md`, which states X/Y "will always return -1"),
+    so it's preferred. Querying and falling back across all three slots,
+    rather than trusting Z alone, is a defensive read in case a given
+    board actually answers on a different slot than documented.
+
+    Args:
+        robot: Robot instance whose controller issues the M412 query.
+
+    Returns:
+        float | None: Distance in mm from whichever slot returned a valid
+        reading, preferring Z, or `None` if all three came back invalid.
+    """
     result = robot.controller.measure_distance(AxisId.X, AxisId.Y, AxisId.Z)
     for value in (result.z_mm, result.x_mm, result.y_mm):
         if value is not None:
@@ -157,24 +129,56 @@ def _read_distance_mm(robot: Robot) -> float | None:
     return None
 
 
-def _sweep_row(robot: Robot, x_end: int, y: int, feed: int | None,
-               tolerance: int, sample_interval_s: float,
-               before_sample=None, on_sample=None) -> list:
-    """Continuously sweep X to `x_end` (the gantry is already at the row's
-    start X and at this row's Y). Position (M114) is polled back-to-back
-    the whole way -- cheap, doesn't interrupt stepping -- but the sensor
-    (M412) is only queried once every `sample_interval_s` of real elapsed
-    time, since M412 itself pauses all motion for its own duration (see
-    module docstring): querying it less often means fewer, shorter pauses
-    instead of one almost every poll. Returns this row's (x, y,
-    distance_mm) samples.
+def _sweep_row(
+    robot: Robot,
+    x_end: int,
+    y: int,
+    feed: int | None,
+    tolerance: int,
+    sample_interval_s: float,
+    before_sample=None,
+    on_sample=None,
+) -> list:
+    """Continuously sweep X to `x_end` and sample the sensor along the way.
+
+    The gantry is assumed to already be at the row's start X and at this
+    row's Y. Position (M114) is polled back-to-back for the whole sweep --
+    cheap, and it doesn't interrupt stepping -- but the sensor (M412) is
+    only queried once every `sample_interval_s` of real elapsed time,
+    since M412 itself pauses all motion for its own duration (see module
+    docstring): querying it less often means fewer, shorter pauses instead
+    of one almost every poll.
 
     The un-awaited G1's own "ok" isn't consumed here; a poll that lands
     exactly as that "ok" surfaces reads it instead of its own response, so
-    report_position can come back missing X entirely -- that specific
+    `report_position` can come back missing X entirely -- that specific
     shape (a report with no X in it at all, never a wrong-but-present
     value) is treated as "we just arrived, stop", not an error, since
-    that's exactly when it can happen.
+    that's exactly when it can happen. Once the sweep ends -- arrived,
+    raced against that stray "ok", or cut off by the safety net -- the row
+    is closed out the same way `JogController.end_jog` cleans up a
+    continuous jog: `quick_stop` first (safe even if the move already
+    finished on its own), then the stray reply that leaves behind is
+    discarded, then position is resynced with a fresh `report_position`.
+
+    Args:
+        robot: Robot instance driving the sweep.
+        x_end: Target X, raw motor microsteps, for this row's sweep.
+        y: This row's Y, raw motor microsteps (used only to label
+            samples; the gantry is not moved in Y here).
+        feed: Feed rate in microsteps/sec, or `None` to use the X axis's
+            configured travel speed.
+        tolerance: Maximum absolute microstep distance from `x_end` at
+            which the gantry is considered arrived.
+        sample_interval_s: Minimum wall-clock time between M412 queries.
+        before_sample: Optional callback invoked as `before_sample(x, y)`
+            immediately before each sensor query.
+        on_sample: Optional callback invoked as `on_sample(x, y,
+            distance_mm)` immediately after each sensor query.
+
+    Returns:
+        list: This row's `(x_usteps, y_usteps, distance_mm)` samples, in
+        collection order.
     """
     robot.controller.linear_move({AxisId.X: x_end}, feed=feed, wait_for_ok=False)
     samples = []
@@ -195,12 +199,7 @@ def _sweep_row(robot: Robot, x_end: int, y: int, feed: int | None,
             next_sample_at = time.monotonic() + sample_interval_s
         if arrived:
             break
-        time.sleep(_POLL_INTERVAL_S)  # throttle -- see _POLL_INTERVAL_S's own comment
-    # Whatever's left of this row's G1 (arrived, raced, or -- via the
-    # safety net -- still short) gets cut off and drained the same way
-    # JogController.end_jog cleans up a continuous jog: quick_stop first
-    # (safe even if the move already finished on its own), then discard
-    # whatever stray reply that leaves sitting unread, then resync.
+        time.sleep(_POLL_INTERVAL_S)
     robot.controller.quick_stop()
     robot.controller.reset_input_buffer()
     robot.controller.report_position()
@@ -221,16 +220,52 @@ def scan_topography(
     on_row_start=None,
     on_sample=None,
 ):
-    """Boustrophedon (snake) raster over raw motor [x_min, x_max] x
-    [y_min, y_max] microsteps: each row is one continuous sweep (see
-    _sweep_row), Y stepped by `row_step` between rows, sampling the sensor
-    `samples_per_row` times per row (spaced by wall-clock time, not
-    position -- see _sweep_row for why).
+    """Raster-scan a raw motor microstep region in a boustrophedon pattern.
 
-    Returns a flat list of (x_usteps, y_usteps, distance_mm_or_None)
-    samples in collection order -- irregularly spaced along X (real
-    positions read back mid-sweep, not a predetermined grid). Use
-    bucket_grid to rasterize this onto a regular grid for display.
+    Sweeps `[x_min, x_max]` x `[y_min, y_max]` microsteps in a snake
+    (boustrophedon) pattern: each row is one continuous sweep (see
+    `_sweep_row`), alternating sweep direction so the gantry never has to
+    retrace a row, with Y stepped by `row_step` between rows. The sensor
+    is sampled `samples_per_row` times per row, spaced out by wall-clock
+    time rather than position -- see `_sweep_row` for why M412 can't be
+    polled for free.
+
+    The wall-clock spacing between samples is estimated from `feed` (or
+    the X axis's configured travel speed) and the row's X span, so that
+    `samples_per_row` spreads out over roughly the whole row instead of
+    bunching at one end. The estimate is floored at `_M412_MIN_INTERVAL_S`
+    since M412 can't return any faster than that regardless of the target
+    spacing (see module docstring).
+
+    Args:
+        robot: Robot instance to scan with. Must have an ultrasonic
+            sensor attached to :attr:`MountSide.REAR`.
+        x_min: Minimum X, raw motor microsteps.
+        x_max: Maximum X, raw motor microsteps.
+        y_min: Minimum Y, raw motor microsteps.
+        y_max: Maximum Y, raw motor microsteps.
+        row_step: Y increment between row sweeps, raw motor microsteps.
+        feed: Row sweep feed rate in microsteps/sec, or `None` to use the
+            X axis's configured travel speed.
+        samples_per_row: Number of M412 queries per row.
+        before_sample: Optional callback invoked as `before_sample(x, y)`
+            immediately before each sensor query, for every row.
+        on_row_start: Optional callback invoked as
+            `on_row_start(row_idx, n_rows, y, x_start, x_end)` when each
+            row begins, before its sweep starts.
+        on_sample: Optional callback invoked as `on_sample(row_idx, x, y,
+            distance_mm)` immediately after each sensor query.
+
+    Returns:
+        list: Flat list of `(x_usteps, y_usteps, distance_mm_or_None)`
+        samples in collection order -- irregularly spaced along X, since
+        positions are read back mid-sweep rather than drawn from a
+        predetermined grid. Use `bucket_grid` to rasterize this onto a
+        regular grid for display.
+
+    Raises:
+        RuntimeError: If no ultrasonic sensor is attached to the rear
+            mount.
     """
     sensor = robot.rear()
     if sensor is None:
@@ -239,10 +274,7 @@ def scan_topography(
     ys = _irange(y_min, y_max, row_step)
     tolerance = max(2, (x_max - x_min) // 500)
 
-    # Estimate row travel time from the configured/overridden feed, so
-    # samples_per_row spreads out over roughly the whole row instead of
-    # bunching at one end -- floored at _M412_MIN_INTERVAL_S since M412
-    # can't return any faster than that regardless of the target spacing.
+    # row-duration/sample-interval estimate; see docstring.
     feed_effective = feed or robot.axes[AxisId.X].config.travel_speed
     row_duration_s = (x_max - x_min) / feed_effective if feed_effective else 0.0
     sample_interval_s = max(_M412_MIN_INTERVAL_S, row_duration_s / max(1, samples_per_row))
@@ -266,21 +298,49 @@ def scan_topography(
             if on_sample:
                 on_sample(row_idx, x, y_, distance)
 
-        samples.extend(_sweep_row(robot, x_end, y, feed, tolerance, sample_interval_s,
-                                  before_sample=before, on_sample=sample))
+        samples.extend(
+            _sweep_row(
+                robot,
+                x_end,
+                y,
+                feed,
+                tolerance,
+                sample_interval_s,
+                before_sample=before,
+                on_sample=sample,
+            )
+        )
         forward = not forward
     return samples
 
 
 def bucket_grid(samples: list, x_min: int, x_max: int, ys: list, columns: int):
-    """Rasterize the (irregularly X-spaced) continuous-sweep `samples` onto
-    a regular display grid -- one row per entry in `ys` (already regular,
-    from the row step), `columns` evenly spaced X buckets per row, each the
-    mean of every sample landing closest to that bucket's X. Purely for the
-    ASCII/PNG heatmap; the CSV export uses the raw samples untouched.
+    """Rasterize irregularly X-spaced scan samples onto a regular grid.
 
-    Returns (grid, xs) -- grid[row][col] is a distance_mm or None (bucket
-    got no samples); xs are the bucket centers, aligned with ys' rows.
+    Each entry in `ys` becomes one grid row (already regularly spaced,
+    from the row step used to collect them); `columns` evenly spaced X
+    buckets per row are computed from `x_min`/`x_max`, each bucket taking
+    the mean of every sample whose X lands closest to that bucket's
+    center. This exists purely to produce a legible ASCII/PNG heatmap --
+    the CSV export uses the raw, unbucketed samples untouched (see module
+    docstring).
+
+    Args:
+        samples: Flat `(x_usteps, y_usteps, distance_mm_or_None)`
+            samples, as returned by :func:`scan_topography`.
+        x_min: Minimum X, raw motor microsteps, spanning the bucket
+            range.
+        x_max: Maximum X, raw motor microsteps, spanning the bucket
+            range.
+        ys: Row Y positions, raw motor microsteps, in the order they
+            should appear as grid rows.
+        columns: Number of evenly spaced X buckets per row.
+
+    Returns:
+        tuple[list, list]: `(grid, xs)`. `grid[row][col]` is a mean
+        `distance_mm`, or `None` if that bucket collected no samples.
+        `xs` are the bucket center X positions, aligned with `grid`'s
+        columns.
     """
     xs = _irange(x_min, x_max, max(1, (x_max - x_min) // max(1, columns - 1)))
     row_of_y = {y: i for i, y in enumerate(ys)}
@@ -295,12 +355,30 @@ def bucket_grid(samples: list, x_min: int, x_max: int, ys: list, columns: int):
         col = min(range(len(xs)), key=lambda i: abs(xs[i] - x))
         sums[row][col] += d
         counts[row][col] += 1
-    grid = [[(sums[r][c] / counts[r][c]) if counts[r][c] else None for c in range(len(xs))]
-           for r in range(len(ys))]
+    grid = [
+        [(sums[r][c] / counts[r][c]) if counts[r][c] else None for c in range(len(xs))]
+        for r in range(len(ys))
+    ]
     return grid, xs
 
 
 def write_csv(path: str, samples: list) -> None:
+    """Write raw scan samples to a CSV file, one row per sample.
+
+    Samples are written exactly as collected -- irregularly spaced along
+    X, never bucketed or rasterized (see `bucket_grid`, which is used
+    only for the ASCII/PNG heatmap output) -- so the CSV remains the
+    authoritative, lossless record of a scan.
+
+    Args:
+        path: Destination CSV file path.
+        samples: Flat `(x_usteps, y_usteps, distance_mm_or_None)`
+            samples, as returned by :func:`scan_topography`. A `None`
+            distance is written as an empty field.
+
+    Returns:
+        None
+    """
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["x_usteps", "y_usteps", "distance_mm"])
@@ -309,6 +387,27 @@ def write_csv(path: str, samples: list) -> None:
 
 
 def render_ascii(grid: list, xs: list, ys: list) -> str:
+    """Render a bucketed distance grid as an ASCII-art heatmap string.
+
+    Values are scaled per-scan, from the grid's own min/max distance, onto
+    `_ASCII_RAMP`'s density characters, so the picture stays legible
+    without needing calibration to any known distance range. Rows are
+    printed with Y increasing upward (reversed from `grid`'s row order) to
+    match how a top-down map is normally read.
+
+    Args:
+        grid: Bucketed distance grid, as returned by `bucket_grid`, i.e.
+            `grid[row][col]` is a `distance_mm` or `None`.
+        xs: Bucket center X positions, as returned alongside `grid` by
+            `bucket_grid`. Accepted for a call signature matching
+            `save_png`, but not otherwise used by this renderer.
+        ys: Row Y positions, aligned with `grid`'s rows. Accepted for the
+            same reason as `xs`.
+
+    Returns:
+        str: Multi-line ASCII heatmap, or `"(no in-range readings)"` if
+        every bucket in `grid` is `None`.
+    """
     values = [v for row in grid for v in row if v is not None]
     if not values:
         return "(no in-range readings)"
@@ -329,6 +428,28 @@ def render_ascii(grid: list, xs: list, ys: list) -> str:
 
 
 def save_png(path: str, grid: list, xs: list, ys: list) -> bool:
+    """Render a bucketed distance grid as a PNG heatmap, if matplotlib is available.
+
+    matplotlib is an optional dependency for this script (see module
+    docstring) -- most of the scan pipeline, including the ASCII heatmap
+    and CSV output, works without it, so importing it eagerly at module
+    load time would force it on every user of this script just to gate
+    one optional output. Deferring the import to here, inside a
+    try/except, keeps it truly optional.
+
+    Args:
+        path: Destination PNG file path.
+        grid: Bucketed distance grid, as returned by `bucket_grid`, i.e.
+            `grid[row][col]` is a `distance_mm` or `None`.
+        xs: Bucket center X positions, used as the image's X extent.
+        ys: Row Y positions, used as the image's Y extent.
+
+    Returns:
+        bool: `True` if the PNG was written. `False` if matplotlib isn't
+        installed -- a real, meaningful outcome callers must check for
+        rather than an exception, since it's the caller's call whether a
+        missing optional dependency is worth warning about (see `main`).
+    """
     try:
         import matplotlib
 
@@ -352,15 +473,29 @@ def save_png(path: str, grid: list, xs: list, ys: list) -> bool:
 
 
 def build_robot(port: str | None, config: str | None):
-    """Returns (robot, simulated_transport). simulated_transport is the
-    SimulatedTransport instance when one was built here (so main() can feed
-    it synthetic terrain for the no-hardware demo), or None for --config/--port.
+    """Construct the robot this script will scan with.
 
-    No calibration is built or needed -- this script only ever drives raw
-    motor microsteps (see module docstring), so a bare Robot with just a
-    transport and a rear ultrasonic sensor is enough for --port; --config
-    still works too (its own transport/axis overrides apply), its
-    calibration (if any) is simply unused."""
+    No calibration is built or needed here -- this script only ever
+    drives raw motor microsteps (see module docstring), so a bare `Robot`
+    with just a transport and a rear ultrasonic sensor is enough when
+    `config` isn't given. When `config` is given, the full config-loaded
+    robot is used instead (its own transport/axis overrides apply); any
+    calibration it happens to carry is simply unused by this script.
+
+    Args:
+        port: Serial port for real hardware (e.g. `"COM6"`), or `None`
+            to use the in-memory `SimulatedTransport`. Ignored if
+            `config` is given.
+        config: Path to a robot config YAML to load instead of building
+            a bare robot, or `None`/empty to build one from `port` alone.
+
+    Returns:
+        tuple[Robot, SimulatedTransport | None]: The robot to scan with,
+        and the `SimulatedTransport` instance if one was built here (so
+        `main` can feed it synthetic terrain for the no-hardware demo),
+        or `None` when `config` was given or `port` selects real
+        hardware.
+    """
     if config:
         return load_robot(config), None
 
@@ -371,6 +506,17 @@ def build_robot(port: str | None, config: str | None):
 
 
 def main() -> None:
+    """Parse CLI args, run a raster scan, and write CSV/ASCII/PNG output.
+
+    Builds and connects a robot (real hardware via `--port`, a full
+    config via `--config`, or the simulated transport with synthetic
+    terrain by default -- see module docstring and `build_robot`), homes
+    it unless `--skip-home` is given, then runs `scan_topography` over
+    the requested (or default, axis-limit-derived) bounds. Results are
+    always written to `--out` as CSV and printed as an ASCII heatmap; a
+    PNG heatmap is also written to `--png` if given and matplotlib is
+    installed.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -387,11 +533,15 @@ def main() -> None:
     )
     parser.add_argument("--x-min-steps", type=int, help="min X, motor microsteps; default 0")
     parser.add_argument(
-        "--x-max-steps", type=int, help="max X, motor microsteps; default the X axis's endstop_limit"
+        "--x-max-steps",
+        type=int,
+        help="max X, motor microsteps; default the X axis's endstop_limit",
     )
     parser.add_argument("--y-min-steps", type=int, help="min Y, motor microsteps; default 0")
     parser.add_argument(
-        "--y-max-steps", type=int, help="max Y, motor microsteps; default the Y axis's endstop_limit"
+        "--y-max-steps",
+        type=int,
+        help="max Y, motor microsteps; default the Y axis's endstop_limit",
     )
     parser.add_argument(
         "--row-step-microsteps",
@@ -439,9 +589,17 @@ def main() -> None:
         )
 
     x_min = args.x_min_steps if args.x_min_steps is not None else 0
-    x_max = args.x_max_steps if args.x_max_steps is not None else robot.axes[AxisId.X].config.endstop_limit
+    x_max = (
+        args.x_max_steps
+        if args.x_max_steps is not None
+        else robot.axes[AxisId.X].config.endstop_limit
+    )
     y_min = args.y_min_steps if args.y_min_steps is not None else 0
-    y_max = args.y_max_steps if args.y_max_steps is not None else robot.axes[AxisId.Y].config.endstop_limit
+    y_max = (
+        args.y_max_steps
+        if args.y_max_steps is not None
+        else robot.axes[AxisId.Y].config.endstop_limit
+    )
 
     ys = _irange(y_min, y_max, args.row_step_microsteps)
     feed_effective = args.feed or robot.axes[AxisId.X].config.travel_speed

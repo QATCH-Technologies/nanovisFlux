@@ -140,9 +140,6 @@ def _corner_path(
 
 
 def _lerp_color(c1: QColor, c2: QColor, t: float) -> QColor:
-    """Blend c1 (t=0) toward c2 (t=1) -- used for the analog trigger
-    shoulders, whose fill tracks depression continuously rather than
-    snapping on/off like a digital button's highlight."""
     t = max(0.0, min(1.0, t))
     return QColor(
         round(c1.red() + (c2.red() - c1.red()) * t),
@@ -353,18 +350,6 @@ class _ControllerStage(QWidget):
 
 
 class _VScrollArea(QScrollArea):
-    """A QScrollArea that only ever constrains/scrolls vertically. Plain
-    QScrollArea + setWidgetResizable(True) refuses to shrink its content
-    widget below that widget's own minimumSizeHint in EITHER dimension --
-    fine normally, but ManualControlPanel's content is a QWidget directly
-    (not one, see __init__), so once _ControllerStage's height-for-width
-    growth can push the panel's total height past the viewport, that same
-    refusal also stops the panel from ever getting narrower than its
-    widest row (e.g. the header), even though every row here already
-    degrades gracefully to a narrower width on its own -- exactly what a
-    plain, non-scrolling QWidget would have let it do. Forcing the content
-    width to the viewport on every resize restores that, while height
-    stays free to exceed the viewport and scroll."""
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -380,28 +365,12 @@ class ManualControlPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.robot = None
-        self.jog = None  # JogController, set by set_context()
+        self.jog = None
         self.gamepad: GamepadInput | None = None
         self._input_mode = "keyboard"
-        self._input_locked = False  # True while a routine is running
-        self._stick_deflection = {"x": 0.0, "y": 0.0, "z": 0.0}  # -> stick_left/stick_right
+        self._input_locked = False
+        self._stick_deflection = {"x": 0.0, "y": 0.0, "z": 0.0}
 
-        # Continuous jog: press starts a move toward the endstop at the
-        # current jog_speed (see JogController.begin_jog); release quick-
-        # stops it wherever it got to. jog_speed is read fresh each call so
-        # it always reflects whatever the step/speed dial is set to *now*.
-        #
-        # X/Y/Z signs are deliberately the OPPOSITE of JogController's own
-        # "positive = away from the endstop" convention: away-from-home
-        # raw motor X/Y actually maps to a SMALLER deck x/y (see
-        # DeckCalibration/configs/calibration.yaml's calibration points --
-        # the gantry homes to the deck's back-right corner), which the 2D/3D
-        # deck view then renders moving left/down on screen (deck_view's
-        # _project is (x, -y), +screen-y is down). _GAMEPAD_JOG above
-        # applies the same correction for x (y/z's raw sign already lines
-        # up); these need it too so the "->" /"^"/PgUp glyphs (and the
-        # identically-bound arrow keys) actually move the marker the way
-        # they're labelled instead of backwards.
         self._begin = {
             "x-": self._guarded(lambda: self.jog.begin_jog(AxisId.X, +1, self.jog.jog_speed)),
             "x+": self._guarded(lambda: self.jog.begin_jog(AxisId.X, -1, self.jog.jog_speed)),
@@ -443,13 +412,6 @@ class ManualControlPanel(QWidget):
         root.addLayout(self._build_bottom_buttons())
         root.addStretch(1)
 
-        # The controller-stage illustration (see _ControllerStage) grows
-        # with the panel's width, which on a wide-but-short window can ask
-        # for more total height than the tab actually has -- without a
-        # scroll area that would silently squeeze every widget below it
-        # (fixed-size badges, buttons) into too little space, overlapping
-        # rather than resizing. A scroll area instead just grows past the
-        # viewport and scrolls, which is always safe.
         scroll = _VScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -460,7 +422,6 @@ class ManualControlPanel(QWidget):
 
         self._refresh_enabled()
 
-    # -- layout builders ------------------------------------------------------
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         title = QLabel("Manual control")
@@ -485,10 +446,6 @@ class ManualControlPanel(QWidget):
         for label, side in _MOUNT_BUTTONS:
             b = QPushButton(label)
             b.setCheckable(True)
-            # A few px narrower than a plain round number so the header row
-            # keeps a little slack below the panel's default width even
-            # when the vertical scrollbar (see the QScrollArea wrapping
-            # this panel's content) is showing and eating into it.
             b.setFixedWidth(34)
             b.clicked.connect(lambda _checked, s=side: self._select_mount(s))
             mount_group.addButton(b)
@@ -527,18 +484,12 @@ class ManualControlPanel(QWidget):
         icon_name: str | None = None,
         rotation: float = 0,
     ) -> QPushButton:
-        """A jog button styled/labelled as the physical key that triggers
-        it (e.g. "PgUp"), rather than the semantic action name -- unless
-        `icon_name` is given, in which case it shows that icon instead of
-        text (the XY jog cross reuses chevron.svg, rotated per direction,
-        rather than a "PgUp"-style keycap label)."""
         btn = self._jog_button(text, action, icon_name=icon_name, rotation=rotation)
         if wide:
             btn.setMinimumWidth(64)
         return btn
 
     def _captioned(self, item, caption: str, *, align=Qt.AlignCenter) -> QVBoxLayout:
-        """A widget or layout with a small eyebrow-style caption beneath it."""
         col = QVBoxLayout()
         col.setSpacing(2)
         if isinstance(item, QWidget):
@@ -635,10 +586,6 @@ class ManualControlPanel(QWidget):
         return page
 
     def _control_badge(self, text: str, *, circle: bool = False, danger: bool = False) -> QLabel:
-        """A small pill or circle label used only in the Control map legend
-        below the controller illustration -- plain text-on-background, not
-        a QPushButton, since none of these are click-able: the physical
-        control is what you actually press, this just names it."""
         lbl = QLabel(text)
         lbl.setAlignment(Qt.AlignCenter)
         bg = ACCENT_RED if danger else "#22262B"
@@ -658,9 +605,6 @@ class ManualControlPanel(QWidget):
     def _control_map_card(
         self, title: str, rows: list[tuple[QLabel, str]], *, columns: int = 1
     ) -> QFrame:
-        """One category card in the Control map (Motion / Face buttons /
-        Fluidics / System) -- a badge naming the physical control paired
-        with a plain-text description of what it does."""
         card = QFrame()
         card.setStyleSheet("QFrame { background: #F7F9FA; border-radius: 6px; }")
         outer = QVBoxLayout(card)
@@ -676,9 +620,6 @@ class ManualControlPanel(QWidget):
             row.setSpacing(10)
             row.addWidget(badge)
             desc_label = QLabel(desc)
-            # Word-wrap so a narrow panel can shrink these cards instead of
-            # forcing the whole row (and everything below the illustration)
-            # wider than the panel actually is.
             desc_label.setWordWrap(True)
             row.addWidget(desc_label, 1)
             if columns > 1:
@@ -692,35 +633,18 @@ class ManualControlPanel(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        # -- static reference illustration of the physical pad -- see
-        # _ControllerStage's own docstring for why nothing on it (besides
-        # the two sticks' live deflection) is click-able.
         stage_frame = QFrame()
         stage_frame.setProperty("class", "panel")
-        # Widget-level stylesheets take precedence over the app-level one
-        # regardless of selector specificity (Qt's own cascade, not CSS's)
-        # -- this drops just the ".panel" class's border while its
-        # background/radius still come through from app_theme.qss.
         stage_frame.setStyleSheet("QFrame { border: none; }")
         stage_layout = QVBoxLayout(stage_frame)
         stage_layout.setContentsMargins(14, 14, 14, 12)
         stage = _ControllerStage()
-        # Wrapped in an HBox with a stretch on each side rather than added
-        # directly (or with an alignment flag, which would collapse it to
-        # sizeHint and defeat _ControllerStage's whole Expanding size
-        # policy): below _PAD_MAX_WIDTH the stage's own Expanding policy
-        # outcompetes the two zero-sizeHint stretches for the row's space,
-        # so it keeps scaling with the panel; once it hits the cap, further
-        # space has nowhere else to go and splits evenly between the two
-        # stretches, centering it instead of leaving it flush left.
         stage_row = QHBoxLayout()
         stage_row.addStretch(1)
         stage_row.addWidget(stage)
         stage_row.addStretch(1)
         stage_layout.addLayout(stage_row)
         layout.addWidget(stage_frame)
-        # _on_gamepad_axis drives these by name, same attributes as before
-        # the sticks moved onto the illustration.
         self.stick_left = stage.stick_left
         self.stick_right = stage.stick_right
         self._controller_stage = stage
@@ -804,13 +728,6 @@ class ManualControlPanel(QWidget):
         return pos_box
 
     def _build_goto_box(self) -> QFrame:
-        """Immediate "go to deck mm" for the active mount (see the header's
-        mount selector) -- a blocking robot.safe_move_to/move_to call fired
-        straight from the button handler, same as the Home button
-        (MainWindow._on_home_requested): a single manual move is treated as
-        an acceptable one-off block on the GUI thread, unlike a full
-        multi-step Routine (see routine_runner.py's own docstring for why
-        *that* gets a worker QThread instead)."""
         goto_box = QFrame()
         goto_box.setProperty("class", "card")
         goto_layout = QVBoxLayout(goto_box)
@@ -865,7 +782,6 @@ class ManualControlPanel(QWidget):
         rows.addWidget(self.btn_stop)
         return rows
 
-    # -- helpers ------------------------------------------------------------
     def _guarded(self, fn):
         def call():
             if self.jog is None or self._input_locked:
@@ -875,11 +791,6 @@ class ManualControlPanel(QWidget):
         return call
 
     def _guarded_end(self, fn):
-        """Like _guarded, but without the lock check -- releasing a held
-        jog input must always be able to stop the move, even if a routine
-        started running while it was held (set_routine_active already
-        calls stop_all_jog in that case, but a stray release event should
-        never be a no-op that leaves motion running)."""
 
         def call():
             if self.jog is None:
@@ -929,7 +840,6 @@ class ManualControlPanel(QWidget):
         self.btn_stop.setEnabled(connected)
         self.btn_esc.setEnabled(connected)
 
-    # -- mount / step size ----------------------------------------------------
     def _select_mount(self, side: MountSide) -> None:
         if self.jog is not None:
             self.jog.select_mount(side)
@@ -950,7 +860,6 @@ class ManualControlPanel(QWidget):
         scale = self.jog.cycle_scale(direction)
         self.btn_step.setText(f"×{scale:g}")
 
-    # -- one-shot actions -----------------------------------------------------
     def _zero_z(self) -> None:
         if self.jog is None:
             return
@@ -973,17 +882,6 @@ class ManualControlPanel(QWidget):
         side = self.jog.side
         safe = self.goto_safe_check.isChecked()
         try:
-            # Robot.move_to/safe_move_to send absolute deck-mm targets but
-            # don't set the positioning mode themselves -- they trust the
-            # caller to already be in G90 (see RoutineRunner.run's own
-            # set_absolute/set_relative bracketing around a routine's
-            # moves). The ambient mode is G91 for the whole connection
-            # (JogController.__enter__, so held-key jogging stays
-            # relative), so without switching here first, the firmware
-            # would treat this target as a RELATIVE move by that many
-            # microsteps -- usually slamming into an endstop instead of
-            # landing on the requested point. Always restore relative
-            # mode afterward so jogging keeps working.
             self.robot.controller.set_absolute()
             try:
                 (self.robot.safe_move_to if safe else self.robot.move_to)(point, side)
@@ -1018,18 +916,13 @@ class ManualControlPanel(QWidget):
             logger.warning("quick stop")
 
     def _on_gamepad_axis(self, axis_name: str, signed: float) -> None:
-        """A stick/trigger's deflection changed. 0 means centered/released
-        -- stop; otherwise (re)start a continuous jog at this speed,
-        matching real accel/decel-by-deflection behaviour (see
-        JogController.begin_jog's own restart-tolerance for why re-calling
-        this every poll tick while deflected is cheap, not redundant)."""
         if axis_name in self._stick_deflection:
             self._stick_deflection[axis_name] = signed
             if axis_name in ("x", "y"):
                 self.stick_left.set_deflection(
                     self._stick_deflection["x"], self._stick_deflection["y"]
                 )
-            else:  # "z" -- right stick only ever reads vertical deflection
+            else:
                 self.stick_right.set_deflection(0.0, self._stick_deflection["z"])
         if self.jog is None:
             return
@@ -1051,7 +944,6 @@ class ManualControlPanel(QWidget):
         except Exception as exc:
             logger.error(f"{action} tip failed: {exc}")
 
-    # -- input mode ---------------------------------------------------------
     def _set_input_mode(self, mode: str) -> None:
         self._input_mode = mode
         if mode == "gamepad":
@@ -1109,7 +1001,6 @@ class ManualControlPanel(QWidget):
         self.stick_right.set_deflection(0.0, 0.0)
         self._controller_stage.clear_live_state()
 
-    # -- keyboard entry points, called from MainWindow.keyPressEvent --------
     def handle_key_press(self, key: int, autorepeat: bool) -> bool:
         if autorepeat or self._input_mode != "keyboard" or self.jog is None or self._input_locked:
             return False
@@ -1134,10 +1025,9 @@ class ManualControlPanel(QWidget):
             return True
         return False
 
-    # -- lifecycle ------------------------------------------------------------
     def stop_all_jog(self) -> None:
         if self.jog is not None:
-            self.jog.end_jog()  # every axis at once -- see JogController.end_jog
+            self.jog.end_jog()
         if self.gamepad is not None:
             self.gamepad.stop()
 

@@ -1,24 +1,23 @@
-"""Zoomed-in view of a single deck slot: renders the slot's own footprint
-and (if occupied) its labware's real well grid, scaled to fill the view on
-its own -- independent of the whole-deck scale, which has to keep 12 slots
-visible at once and so can barely show a plate's well pattern.
-
-Also owns add/swap/remove of labware in that one slot, via LabwareDialog ->
-Robot.load() -- so swapping labware from the UI goes through the same
-fit-checked path (GridLabwareDefinition._check_fits) a config load would.
-"""
 from __future__ import annotations
+
 import re
 
-from PyQt5.QtCore import Qt, QPointF, QRectF, QSize, pyqtSignal
-from PyQt5.QtGui import QPainter, QPainterPath, QPen, QColor, QFont
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-                             QDialog, QMessageBox)
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt5.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..deck import WellShape
 from . import icon_utils
-from .labware_dialog import LabwareDialog
 from . import style as S
+from .labware_dialog import LabwareDialog
 from .tokens import TOKENS
 
 _WELL_RE = re.compile(r"([A-Za-z]+)(\d+)")
@@ -27,8 +26,6 @@ _INK = QColor(*TOKENS["flat_text"][:3])
 
 
 class LabwareCanvas(QWidget):
-    """Paints one slot's rectangle (dashed, for context) plus its labware's
-    wells (if any) to scale, fit to this widget alone."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,16 +48,13 @@ class LabwareCanvas(QWidget):
         sw, sh = self.slot.size if (self.slot.size and self.slot.size[0]) else (100.0, 100.0)
         wells = list(self.labware.wells.items()) if self.labware is not None else []
 
-        # Frame on the SLOT's own rectangle only (not the wells) so the slot
-        # boundary always fills the view consistently -- a well grid that
-        # doesn't actually fit the slot should visibly stick out/get clipped
-        # rather than silently rescaling the camera to hide the mismatch.
         minx, miny, maxx, maxy = 0.0, 0.0, sw, sh
 
         pad = 36
         span_x, span_y = max(maxx - minx, 1e-6), max(maxy - miny, 1e-6)
-        scale = min(max(self.width() - 2 * pad, 10) / span_x,
-                   max(self.height() - 2 * pad, 10) / span_y)
+        scale = min(
+            max(self.width() - 2 * pad, 10) / span_x, max(self.height() - 2 * pad, 10) / span_y
+        )
         cx0, cy0 = (minx + maxx) / 2, (miny + maxy) / 2
 
         def to_screen(x, y):
@@ -82,8 +76,6 @@ class LabwareCanvas(QWidget):
         if not wells:
             return
 
-        # Hard guarantee that wells render inside the slot, regardless of
-        # how the labware's grid/offset was configured.
         p.setClipPath(path)
 
         p.setPen(QPen(QColor(S.INK_MUTED), 1))
@@ -98,9 +90,8 @@ class LabwareCanvas(QWidget):
                 w_, l_ = max(geo.width_mm * scale, 3), max(geo.length_mm * scale, 3)
                 p.drawRect(QRectF(cx - w_ / 2, cy - l_ / 2, w_, l_))
 
-        p.setClipping(False)   # labels may sit just outside the slot edge
+        p.setClipping(False)
 
-        # row letters along the left edge, column numbers along the front edge
         by_row, by_col = {}, {}
         for name, well in wells:
             m = _WELL_RE.match(name)
@@ -187,7 +178,6 @@ class SlotDetailView(QWidget):
         body.addLayout(side, 1)
         root.addLayout(body, 1)
 
-    # -- context --------------------------------------------------------------
     def set_context(self, robot, slot_name: str) -> None:
         self.robot = robot
         self.slot_name = slot_name
@@ -208,7 +198,9 @@ class SlotDetailView(QWidget):
         labware = self._current_labware()
         self.title.setText(f"SLOT {slot.name}")
         sw, sh = slot.size if (slot.size and slot.size[0]) else (0, 0)
-        self.size_label.setText(f"slot footprint: {sw:.1f} × {sh:.1f} mm" if sw else "slot size not set")
+        self.size_label.setText(
+            f"slot footprint: {sw:.1f} × {sh:.1f} mm" if sw else "slot size not set"
+        )
         self.canvas.set_content(slot, labware)
 
         has = labware is not None
@@ -223,8 +215,10 @@ class SlotDetailView(QWidget):
 
         wells = list(labware.wells.values())
         geo = wells[0].geometry if wells else None
-        lines = [f"LABWARE  ·  {labware.name}",
-                f"{len(wells)} wells  ({_row_count(labware)} × {_col_count(labware)})"]
+        lines = [
+            f"LABWARE  ·  {labware.name}",
+            f"{len(wells)} wells  ({_row_count(labware)} × {_col_count(labware)})",
+        ]
         if geo is not None:
             if geo.shape == WellShape.CIRCULAR:
                 lines.append(f"⌀ {geo.diameter_mm:.1f} mm")
@@ -239,7 +233,6 @@ class SlotDetailView(QWidget):
             lines.append(f"tip length {tip.length_mm:.1f} mm")
         self.info_label.setText("\n".join(lines))
 
-    # -- add / swap / remove ----------------------------------------------------
     def _add_labware(self) -> None:
         self._open_dialog(swap=False)
 
@@ -256,9 +249,11 @@ class SlotDetailView(QWidget):
         existing = self.robot.labware.get(new_name)
         if existing is not None and (existing.slot is None or existing.slot.name != self.slot_name):
             other = existing.slot.name if existing.slot else "?"
-            QMessageBox.warning(self, "Name already used",
-                                f"{new_name!r} is already placed on slot {other}. "
-                                "Choose a different name.")
+            QMessageBox.warning(
+                self,
+                "Name already used",
+                f"{new_name!r} is already placed on slot {other}. " "Choose a different name.",
+            )
             return
 
         if swap:

@@ -1,68 +1,27 @@
-"""Two-phase empirical calibration of a pipette's plunger: builds a
-PlungerCalibration (src/tools/pipette.py) for one (pipette, tip)
-combination by aspirating known step amounts, dispensing onto a scale, and
-recording the measured volume -- replacing PlungerModel's single linear
-microsteps_per_ul factor with a piecewise-linear curve for each direction.
+"""Two-phase empirical calibration of a pipette's plunger.
 
-Aspirate and dispense are measured SEPARATELY (not a simple aspirate-then-
-dispense-then-weigh round trip), because a round trip can't tell you which
-direction's error you're looking at:
+This script builds a piecewise-linear `PlungerCalibration` for a specific (pipette, tip)
+combination, replacing standard linear microstep models[cite: 1]. Aspirate and dispense
+are measured separately to isolate their respective errors[cite: 1].
 
-  Phase A (aspirate curve): the dispense side is always an identical, full
-  purge back to the same "empty" reference (bottom_microsteps); only the
-  ASPIRATE stroke length varies across trials. Since the dispense portion
-  is the same repeatable action every time, its own error is constant
-  across trials -- so the *differences* in measured volume between trials
-  isolate the aspirate curve's shape.
+Calibration Phases:
+    * Phase A (Aspirate): Varies the aspirate stroke length while performing identical,
+      full purges[cite: 1]. This isolates the aspirate error[cite: 1].
+    * Phase B (Dispense): Uses a fixed aspirate stroke and performs partial dispenses,
+      recording cumulative mass[cite: 1]. Requires Phase A's curve to run (prior results
+      are auto-loaded if available)[cite: 1].
 
-  Phase B (dispense curve): the aspirate side is always the same fixed
-  stroke (so aspirate error is held constant); the DISPENSE TARGET varies
-  instead, via partial dispenses within one continuous run -- the same
-  vessel returns to the same fixed spot between steps, and the operator
-  reports the CUMULATIVE mass dispensed so far at each step (never re-tare
-  mid-run). Phase B needs Phase A's fitted curve to know how much volume
-  that fixed aspirate stroke actually represents (remaining = total -
-  cumulative), so Phase A must run first before Phase B can. A prior
-  result already saved under configs/tools/pipettes/<pipette name>/
-  calibrations/ (see config/loader.py's build_pipette_tip_calibrations)
-  is auto-loaded for this same pipette/tip -- no need to re-run Phase A or
-  pass --aspirate-from just to resume at Phase B on a later invocation.
+Motion & Control:
+    * Gantry: Uses standard, safe routing (`Robot.safe_move_to`) requiring a calibrated
+      deck and labware[cite: 1].
+    * Plunger: Controlled directly via raw motor microsteps rather than standard
+      pipette routines to ensure precise calibration[cite: 1].
 
-GANTRY MOTION goes through the same deck-calibrated, well-addressed
-routine machinery as the rest of the app (src.routines.WellLocation +
-Robot.safe_move_to/raise_z/move_vertical_to) -- --aspirate-slot/
---dispense-slot name which deck slots hold the source and destination
-labware (7 and 8 by default), and --aspirate-well/--dispense-well pick a
-well on each (A1 by default). This needs the config's deck to actually be
-calibrated (a real `calibration:` section) and to have labware loaded on
-both slots -- see configs/robot.yaml's `labware:` section for the shape.
-Every move is safe by construction (Robot.safe_move_to always
-raises to the mount's travel_z_mm clearance height before crossing, and
-only descends once already over the target XY -- the same primitive the
-GUI's manual "Go To" and every routine step already use, not a bespoke
-raw-coordinate implementation with its own edge cases to re-discover).
-
-The ONE thing that stays in raw motor microsteps is the plunger (B on the
-left mount, C on the right) -- that conversion is literally what this
-script is calibrating, so it is deliberately never routed through
-Pipette.aspirate/dispense (which would use the PlungerModel/
-PlungerCalibration being measured to decide the very microsteps this
-script needs to control directly and precisely).
-
-This codebase has no integrated scale, so mass is entered interactively
-after each weighing. Pass --simulate to generate synthetic readings
-instead (deliberately different, mildly nonlinear "true" curves for
-aspirate vs. dispense) -- lets the whole two-phase flow, the YAML output,
-and PlungerCalibration's interpolation be exercised end-to-end without a
-human at the keyboard or any real hardware.
-
-SAFETY: --plunger-max-microsteps is a hard ceiling on the plunger (B on
-the left mount, C on the right) -- moving the plunger past this position
-detaches the tip instead of dispensing. Every planned target (all Phase A
-absolute aspirate positions, all Phase B targets) is checked against it
-before any motion happens at all, and every individual raw plunger move
-also re-checks it immediately before sending the command (see
-move_plunger) as a second, independent guard.
+Usage & Safety:
+    * Mass Entry: Operators must enter scale readings manually, or use the `--simulate`
+      flag to test end-to-end with synthetic data[cite: 1].
+    * Safety: A strict `--plunger-max-microsteps` ceiling prevents the pipette tip from
+      detaching, which is checked both during planning and right before execution[cite: 1].
 """
 
 from __future__ import annotations
@@ -97,11 +56,53 @@ _DISPENSE_TRUTH = {"microsteps_per_ul": 48.0, "nonlinearity": 0.00004}
 
 
 def _synthetic_volume_ul(microsteps_from_bottom: float, truth: dict) -> float:
+    """Convert a synthetic plunger stroke to the "true" volume it represents.
+
+    Models the mild, seal-friction-like nonlinearity described in the module
+    docstring's --simulate discussion: volume grows linearly with stroke
+    length, less an efficiency loss at larger strokes controlled by
+    `truth["nonlinearity"]`. Used by :func:`_synthetic_mass_mg` and
+    :func:`_synthetic_cumulative_mass_mg` to generate synthetic readings from
+    one of the two independent ground-truth curves (`_ASPIRATE_TRUTH`/
+    `_DISPENSE_TRUTH`).
+
+    Args:
+        microsteps_from_bottom: Plunger stroke length, in microsteps,
+            measured from the empty reference position.
+        truth: Ground-truth curve parameters -- a mapping with
+            `microsteps_per_ul` (the linear conversion factor) and
+            `nonlinearity` (the efficiency-loss coefficient), i.e.
+            `_ASPIRATE_TRUTH` or `_DISPENSE_TRUTH`.
+
+    Returns:
+        The synthetic "true" volume, in microliters, that
+        `microsteps_from_bottom` represents under `truth`. Never negative.
+    """
     linear = microsteps_from_bottom / truth["microsteps_per_ul"]
     return max(0.0, linear * (1.0 - truth["nonlinearity"] * microsteps_from_bottom))
 
 
 def _synthetic_mass_mg(stroke: float, density: float, *, aspirating: bool) -> float:
+    """Convert a synthetic plunger stroke to a synthetic mass reading.
+
+    Selects the aspirate or dispense ground-truth curve (`_ASPIRATE_TRUTH`/
+    `_DISPENSE_TRUTH`, see the module docstring's --simulate discussion) and
+    converts the resulting synthetic volume to a mass using `density`,
+    standing in for what an operator would otherwise read off a real scale.
+    Used by :func:`run_phase_a` when `simulate=True`.
+
+    Args:
+        stroke: Plunger stroke length, in microsteps, measured from the
+            empty reference position.
+        density: Liquid density in mg per microliter, used to convert the
+            synthetic volume to a synthetic mass.
+        aspirating: Whether to use the aspirate ground-truth curve
+            (`_ASPIRATE_TRUTH`) rather than the dispense one
+            (`_DISPENSE_TRUTH`).
+
+    Returns:
+        The synthetic mass, in milligrams, that `stroke` would produce.
+    """
     truth = _ASPIRATE_TRUTH if aspirating else _DISPENSE_TRUTH
     return _synthetic_volume_ul(stroke, truth) * density
 
@@ -109,15 +110,54 @@ def _synthetic_mass_mg(stroke: float, density: float, *, aspirating: bool) -> fl
 def _synthetic_cumulative_mass_mg(
     bottom: int, fixed_position: int, target: int, density: float
 ) -> float:
+    """Compute the synthetic CUMULATIVE mass dispensed at one Phase B target.
+
+    Mirrors :func:`run_phase_b`'s real measurement protocol (see the module
+    docstring's Phase B description and `run_phase_b`'s own docstring): the
+    fixed aspirate stroke (`bottom` to `fixed_position`) represents a total
+    volume under the dispense ground-truth curve (`_DISPENSE_TRUTH`), and the
+    plunger's remaining distance from `bottom` to `target` represents what
+    has NOT yet been dispensed. The synthetic reading returned here is the
+    difference, converted to mass -- the same cumulative-since-start quantity
+    an operator would report from one un-re-tared scale.
+
+    Args:
+        bottom: Plunger position, in microsteps, at the empty reference.
+        fixed_position: Plunger position, in microsteps, after the fixed
+            Phase B aspirate stroke.
+        target: Plunger position, in microsteps, of the partial-dispense step
+            being simulated.
+        density: Liquid density in mg per microliter.
+
+    Returns:
+        The synthetic cumulative mass, in milligrams, dispensed by the time
+        the plunger reaches `target`. Never negative.
+    """
     total = _synthetic_volume_ul(bottom - fixed_position, _DISPENSE_TRUTH)
     remaining = _synthetic_volume_ul(bottom - target, _DISPENSE_TRUTH)
     return max(0.0, total - remaining) * density
 
 
 def read_mass_mg(prompt: str, simulate_fn=None) -> float:
-    """The single seam between this script and an operator/scale: prompts
-    for a mass reading (mg) and keeps asking until it parses as a number.
-    --simulate swaps this for a deterministic synthetic value instead."""
+    """Prompt for a mass reading and keep asking until it parses as a number.
+
+    This is the single seam between this script and an operator with a real
+    scale -- every place that needs a mass reading goes through here, so
+    swapping in `simulate_fn` (see the module docstring's --simulate
+    discussion) is enough to exercise the whole two-phase flow without a
+    human at the keyboard or any real hardware.
+
+    Args:
+        prompt: Text displayed to the operator (or logged, under
+            `simulate_fn`) when requesting the reading.
+        simulate_fn: Optional zero-argument callable returning a synthetic
+            mass in milligrams. When given, it is called instead of
+            prompting, and its result is logged in place of operator input.
+
+    Returns:
+        The mass reading in milligrams, either operator-entered or produced
+        by `simulate_fn`.
+    """
     if simulate_fn is not None:
         value = simulate_fn()
         logger.info(f"{prompt}{value:.2f}  (simulated)")
@@ -139,15 +179,30 @@ def move_plunger(
     *,
     verify: bool = True,
 ) -> None:
-    """The one place that ever commands the plunger axis -- re-checks
-    `plunger_max` immediately before sending, as a second, independent
-    guard alongside the upfront plan-wide check in main() (see SAFETY in
-    the module docstring): going past it detaches the tip.
+    """Move the plunger axis directly to a raw microstep target.
 
-    verify: poll-confirm the plunger actually reached `target` before
-    returning (see Robot._await_settled's own docstring for why "ok"
-    alone isn't trusted) -- on by default here since a cut-short aspirate/
-    dispense stroke would silently corrupt the whole calibration."""
+    This is the one place in the script that ever commands the plunger axis.
+    It re-checks `plunger_max` immediately before sending, as a second,
+    independent guard alongside the upfront plan-wide check in `main` (see
+    SAFETY in the module docstring) -- moving past it detaches the tip
+    instead of dispensing.
+
+    Args:
+        robot: Connected robot instance whose controller issues the move.
+        axis: Plunger axis to command (B on the left mount, C on the right).
+        target: Absolute plunger position, in microsteps, to move to.
+        plunger_max: Hard safety ceiling -- the effective minimum of
+            `--plunger-max-microsteps` and the axis's own `endstop_limit`.
+        feed: Optional feed rate, in microsteps/sec, for the move.
+        verify: Poll-confirm the plunger actually reached `target` before
+            returning (see `Robot._await_settled`'s own docstring for why
+            "ok" alone isn't trusted). On by default here, since a cut-short
+            aspirate/dispense stroke would silently corrupt the whole
+            calibration.
+
+    Raises:
+        RuntimeError: If `target` exceeds `plunger_max`.
+    """
     if target > plunger_max:
         raise RuntimeError(
             f"refusing to move the plunger to {target} microsteps -- exceeds the "
@@ -159,9 +214,24 @@ def move_plunger(
 
 
 def _labware_on_slot(robot, slot_name: str):
-    """The Labware placed on deck slot `slot_name` -- lets --aspirate-slot/
-    --dispense-slot name a slot the way the operator thinks about the deck,
-    rather than needing to know that slot's labware's config `name:`."""
+    """Look up the labware placed on one named deck slot.
+
+    Lets `--aspirate-slot`/`--dispense-slot` name a slot the way an operator
+    thinks about the deck, rather than requiring them to know that slot's
+    labware's config `name:`.
+
+    Args:
+        robot: Connected robot instance whose `labware` mapping is searched.
+        slot_name: Deck slot name to look up, e.g. `"7"`.
+
+    Returns:
+        tuple[str, Labware]: The labware's config instance name and its
+        `Labware` object.
+
+    Raises:
+        SystemExit: If no labware entry in the config is placed on
+            `slot_name`.
+    """
     for instance_name, lw in robot.labware.items():
         if lw.slot is not None and lw.slot.name == slot_name:
             return instance_name, lw
@@ -172,12 +242,25 @@ def _labware_on_slot(robot, slot_name: str):
 
 
 def _log_at(robot, side: MountSide, label: str, loc: WellLocation) -> None:
-    """Logs which labware/well and resolved deck-mm point a move targeted,
-    the RAW MOTOR target that deck-mm point computes to, and the ACTUAL
-    measured raw position (M114) after the move -- three separate numbers
-    on purpose: deck-mm alone can't tell you whether a calibration/tip-
-    length miscalculation put the raw target somewhere wrong, or whether
-    the move itself didn't reach a correctly-computed target."""
+    """Log a move's target labware/well alongside its computed and actual raw motor position.
+
+    Three separate numbers are logged on purpose: the resolved deck-mm
+    point, the RAW MOTOR target that deck-mm point computes to, and the
+    ACTUAL measured raw position (M114) after the move. Deck-mm alone can't
+    tell you whether a calibration or tip-length miscalculation put the raw
+    target somewhere wrong, or whether the move itself simply didn't reach a
+    correctly-computed target -- having all three lets a bad calibration and
+    a stalled/short move be told apart from the log alone.
+
+    Args:
+        robot: Connected robot instance to read calibration and controller
+            position from.
+        side: Mount whose vertical axis and tip offset are used to compute
+            the raw target.
+        label: Short human-readable label identifying the move, e.g.
+            `"source (aspirate)"`.
+        loc: Well location the move targeted.
+    """
     pt = loc.resolve(robot)
     cal = robot.calibration
     vertical = cal.vertical_axis(side)
@@ -208,14 +291,47 @@ def run_phase_a(
     *,
     simulate: bool,
 ) -> list:
-    """See module docstring. Returns [(bottom - stroke, volume_ul), ...].
+    """Run Phase A: measure the aspirate curve by varying the aspirate stroke.
 
-    dwell_s: how long to hold still, plunger already at its target, at the
-    bottom of each aspirate/dispense stroke -- the stepper reaching its
-    commanded position isn't the same as the liquid actually finishing
-    moving (surface tension/viscosity lag behind the plunger), so raising
-    away immediately can leave a stroke short of what it should have
-    drawn or expelled."""
+    See the module docstring's Phase A description for the overall design:
+    the dispense side of each trial is always an identical, full purge back
+    to the empty reference (`bottom`), so its own error is constant across
+    trials and the differences in measured volume between trials isolate the
+    aspirate curve's shape. Each stroke in `strokes` is repeated `replicates`
+    times and the resulting volumes are averaged.
+
+    Args:
+        robot: Connected robot instance driving the motion.
+        side: Mount performing the aspirate/dispense cycle.
+        plunger_axis: Plunger axis to command (B on the left mount, C on the
+            right).
+        plunger_max: Hard safety ceiling passed through to every
+            :func:`move_plunger` call.
+        bottom: Plunger position, in microsteps, at the empty reference.
+        strokes: Aspirate stroke lengths to test, in microsteps from
+            `bottom`.
+        aspirate_loc: Well location of the aspirate source.
+        dispense_loc: Well location of the dispense destination (the scale).
+        replicates: Number of times to repeat each stroke; the reported
+            volume for a stroke is the mean of its replicates.
+        density: Liquid density in mg per microliter, used to convert each
+            mass reading to a volume.
+        feed: Optional feed rate, in microsteps/sec, for plunger and gantry
+            moves.
+        dwell_s: How long to hold still, plunger already at its target, at
+            the bottom of each aspirate/dispense stroke. The stepper
+            reaching its commanded position isn't the same as the liquid
+            actually finishing moving -- surface tension and viscosity lag
+            behind the plunger -- so raising away immediately can leave a
+            stroke short of what it should have drawn or expelled.
+        simulate: If `True`, generate synthetic mass readings via
+            :func:`_synthetic_mass_mg` instead of prompting the operator.
+
+    Returns:
+        list[tuple[int, float]]: `(bottom - stroke, volume_ul)` pairs, one
+        per stroke in `strokes`, giving the absolute plunger position and its
+        averaged measured volume in microliters.
+    """
     pairs = []
     for stroke in strokes:
         measurements = []
@@ -274,8 +390,51 @@ def run_phase_b(
     *,
     simulate: bool,
 ) -> list:
-    """See module docstring. Returns [(target, remaining_volume_ul), ...].
-    dwell_s: see run_phase_a's own docstring."""
+    """Run Phase B: measure the dispense curve by varying the dispense target.
+
+    See the module docstring's Phase B description for the overall design:
+    the aspirate side is always the same fixed stroke (`bottom` to
+    `bottom - max_stroke`), so aspirate error is held constant, while the
+    dispense target varies via partial dispenses within one continuous run.
+    The same vessel returns to the same fixed spot between steps, and the
+    operator reports the CUMULATIVE mass dispensed so far at each step
+    (never re-tare mid-run); `aspirate_calibration` -- Phase A's fitted curve
+    -- converts the fixed aspirate stroke to a known total volume so each
+    step's remaining volume can be recovered as `total - cumulative`.
+
+    Args:
+        robot: Connected robot instance driving the motion.
+        side: Mount performing the aspirate/dispense cycle.
+        plunger_axis: Plunger axis to command (B on the left mount, C on the
+            right).
+        plunger_max: Hard safety ceiling passed through to every
+            :func:`move_plunger` call.
+        bottom: Plunger position, in microsteps, at the empty reference.
+        max_stroke: Fixed aspirate stroke length, in microsteps from
+            `bottom`, held constant for every replicate.
+        targets: Absolute plunger positions, in microsteps, to partially
+            dispense to, in the order they are visited within one replicate.
+        aspirate_loc: Well location of the aspirate source.
+        dispense_loc: Well location of the dispense destination (the scale).
+        aspirate_calibration: Phase A's fitted aspirate curve, used to
+            convert the fixed aspirate stroke to a known total volume.
+        replicates: Number of times to repeat the full fixed-aspirate/
+            partial-dispense sequence; the reported volume for each target
+            is the mean of its replicates.
+        density: Liquid density in mg per microliter, used to convert each
+            cumulative mass reading to a volume.
+        feed: Optional feed rate, in microsteps/sec, for plunger and gantry
+            moves.
+        dwell_s: See :func:`run_phase_a`'s own docstring.
+        simulate: If `True`, generate synthetic cumulative mass readings via
+            :func:`_synthetic_cumulative_mass_mg` instead of prompting the
+            operator.
+
+    Returns:
+        list[tuple[int, float]]: `(target, remaining_volume_ul)` pairs, one
+        per entry in `targets`, giving the absolute plunger position and its
+        averaged measured remaining volume in microliters.
+    """
     fixed_position = bottom - max_stroke
     total_ul = aspirate_calibration.volume_for_microsteps(fixed_position, aspirating=True)
     logger.info(
@@ -322,6 +481,23 @@ def run_phase_b(
 
 
 def _load_points(path: str, key: str) -> list:
+    """Load calibration points from one direction of a pipette_calibration YAML file.
+
+    Accepts either a full config file with a top-level `pipette_calibration:`
+    section (the shape `write_yaml` produces) or a file that is just that
+    section's contents, so a hand-trimmed or bare calibration file also
+    loads. Used by `main`'s `--aspirate-from` handling to load a prior Phase
+    A result independently of the auto-loaded calibration in
+    `pipette.tip_calibrations`.
+
+    Args:
+        path: Path to the YAML file to load.
+        key: Which direction's points to read, `"aspirate"` or `"dispense"`.
+
+    Returns:
+        list[tuple[int, float]]: `(microsteps, volume_ul)` pairs in the order
+        they appear in the file.
+    """
     cfg = load_config(path)
     section = cfg.get("pipette_calibration", cfg)
     return [(p["microsteps"], p["volume_ul"]) for p in section[key]]
@@ -336,13 +512,26 @@ def write_yaml(
     aspirate: list,
     dispense: list,
 ) -> None:
-    """Writes a pipette_calibration: file in the shape
-    config/loader.py's build_pipette_tip_calibrations reads back -- no
-    `side:` in it: a plunger's steps<->volume mapping doesn't depend on
-    which mount the pipette is on (see PlungerCalibration), so unlike
-    mounts: this is never split by side. Which mount --side drove during
-    THIS run only matters for the measurement itself, not what's saved."""
-    import yaml  # lazy dependency, matches config/loader.py's own convention
+    """Write a pipette_calibration: YAML file for this (pipette, tip) result.
+
+    Produces the shape `config/loader.py`'s `build_pipette_tip_calibrations`
+    reads back. There is deliberately no `side:` in the output: a plunger's
+    steps-to-volume mapping doesn't depend on which mount the pipette is on
+    (see :class:`PlungerCalibration`), so unlike `mounts:`, this file is
+    never split by side. Which mount `--side` drove during this run only
+    matters for how the measurement was taken, not what gets saved.
+
+    Args:
+        path: Output file path. Parent directories are created as needed.
+        pipette_name: Name of the pipette this calibration is for.
+        tip: Tip name this calibration is for, matched against a pipette's
+            `tip_calibrations` keys.
+        density: Liquid density, in mg per microliter, used to take the
+            measurements being saved.
+        aspirate: `(microsteps, volume_ul)` pairs for the aspirate curve.
+        dispense: `(microsteps, volume_ul)` pairs for the dispense curve.
+    """
+    import yaml
 
     data = {
         "pipette_calibration": {
@@ -359,13 +548,25 @@ def write_yaml(
 
 
 def _default_strokes(available: int, num_points: int) -> list:
-    """Evenly spaced Phase A test strokes spanning most of the plunger's
-    usable travel from the empty reference (0) up toward `available` --
-    plunger_max minus bottom_microsteps, the room actually available
-    before the tip-detach safety ceiling -- but stopping at 90% of it and
-    starting at 5%, so an unattended default never tests right up against
-    either extreme. Deduplicates in case rounding collides two points for
-    a very small `available` or large `num_points`."""
+    """Generate evenly spaced Phase A test strokes when none are given explicitly.
+
+    Spans most of the plunger's usable travel from the empty reference (0)
+    up toward `available` -- `plunger_max` minus `bottom_microsteps`, the
+    room actually available before the tip-detach safety ceiling -- but
+    stops at 90% of it and starts at 5%, so an unattended default never
+    tests right up against either extreme.
+
+    Args:
+        available: Usable plunger travel, in microsteps, between the empty
+            reference and the safety ceiling.
+        num_points: Number of strokes to generate. Fewer than 2 yields a
+            single stroke at the 90% mark.
+
+    Returns:
+        list[int]: Ascending, deduplicated stroke lengths in microsteps.
+        Deduplication guards against rounding collapsing two points onto the
+        same value for a very small `available` or large `num_points`.
+    """
     lo = max(1, round(available * 0.05))
     hi = max(lo + 1, round(available * 0.9))
     if num_points < 2:
@@ -375,6 +576,19 @@ def _default_strokes(available: int, num_points: int) -> list:
 
 
 def print_summary(aspirate_pairs: list, dispense_pairs: list) -> None:
+    """Log a combined aspirate/dispense volume table for a calibration run.
+
+    Rows are keyed by plunger position in microsteps and sorted ascending; a
+    position measured on only one side of the calibration (e.g. a `--phase
+    aspirate`-only run) shows `-` for the other column rather than being
+    dropped, so a single-phase run still gets a readable summary.
+
+    Args:
+        aspirate_pairs: `(microsteps, volume_ul)` pairs from the aspirate
+            curve.
+        dispense_pairs: `(microsteps, volume_ul)` pairs from the dispense
+            curve. May be empty.
+    """
     lines = [f"{'microsteps':>12}  {'aspirate uL':>12}  {'dispense uL':>12}"]
     a, d = dict(aspirate_pairs), dict(dispense_pairs)
     for m in sorted(set(a) | set(d)):
@@ -385,6 +599,16 @@ def print_summary(aspirate_pairs: list, dispense_pairs: list) -> None:
 
 
 def main() -> None:
+    """Parse CLI arguments and drive the two-phase pipette calibration.
+
+    Connects to the robot described by `--config`, validates the deck
+    calibration and plunger safety ceiling described in the module
+    docstring's SAFETY section, runs Phase A and/or Phase B per `--phase`
+    (auto-loading a prior Phase A result for `--phase dispense` when one is
+    already saved, per the module docstring's Phase B description), and
+    writes the result with :func:`write_yaml`. See each flag's own
+    `--help` text below for the full CLI surface.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -573,11 +797,7 @@ def main() -> None:
 
     with robot:
         if not args.skip_home:
-            robot.home()  # leaves absolute mode
-        # Defensive, even though this script never jogs and so never puts
-        # the controller in G91: see the ambient-relative-mode bug fixed in
-        # gui/manual_control.py's _go_to_point -- raw linear_move calls
-        # (move_plunger) trust the caller is already in G90.
+            robot.home()
         robot.controller.set_absolute()
 
         if args.phase in ("aspirate", "both"):
@@ -597,21 +817,8 @@ def main() -> None:
                 simulate=args.simulate,
             )
         elif args.aspirate_from:
-            # Loaded straight from the file -- it already carries the
-            # (bottom, 0.0) reference point (every Phase A run's own
-            # aspirate_pairs is built with it prepended before writing, see
-            # the "aspirate"/"both" branch above and write_yaml's callers
-            # below), so re-prepending it here would duplicate that point
-            # and fail PlungerCalibration's monotonicity check.
             aspirate_pairs = _load_points(args.aspirate_from, "aspirate")
         else:
-            # No explicit override -- use whatever config/loader.py's
-            # build_pipette_tip_calibrations already auto-loaded for this
-            # exact pipette/tip from configs/tools/pipettes/<pipette
-            # name>/calibrations/ (see load_robot, called above), same as a
-            # normal connect already would. Same no-re-prepend reasoning as
-            # the --aspirate-from branch: that calibration's own points
-            # already include (bottom, 0.0).
             existing = pipette.tip_calibrations.get(args.tip_name)
             if existing is None:
                 raise SystemExit(
@@ -625,10 +832,6 @@ def main() -> None:
 
         dispense_pairs = [(bottom, 0.0)]
         if args.phase in ("dispense", "both"):
-            # A throwaway PlungerCalibration just to look up Phase A's fitted
-            # volume for the fixed Phase B stroke (see module docstring) --
-            # the dispense side is unused for that lookup, so it's given the
-            # same points only to satisfy the constructor's validation.
             aspirate_only = PlungerCalibration.from_pairs(
                 aspirate=aspirate_pairs, dispense=aspirate_pairs
             )

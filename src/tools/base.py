@@ -17,8 +17,8 @@ from abc import ABC
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from motion import Mount
-    from robot import Robot
+    from ..motion import Mount
+    from ..robot import Robot
 
 
 class Tool(ABC):

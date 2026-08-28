@@ -390,10 +390,10 @@ class DeckCanvas(QWidget):
         w, h = self._slot_footprint(slot)
         ox, oy = slot.origin.x, slot.origin.y
         return [
-            (ox, oy, ox + w, oy + t),  # front (min-y) wall
-            (ox, oy + h - t, ox + w, oy + h),  # back (max-y) wall
-            (ox, oy, ox + t, oy + h),  # left (min-x) wall
-            (ox + w - t, oy, ox + w, oy + h),  # right (max-x) wall
+            (ox, oy, ox + w, oy + t),
+            (ox, oy + h - t, ox + w, oy + h),
+            (ox, oy, ox + t, oy + h),
+            (ox + w - t, oy, ox + w, oy + h),
         ]
 
     def _draw_slot_floor(

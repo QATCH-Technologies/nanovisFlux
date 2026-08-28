@@ -1,13 +1,3 @@
-"""Builds a Robot from a config dict for a *transport the GUI already chose*.
-
-This mirrors ``config.loader.load_robot`` almost exactly, but deliberately
-does not use ``loader.build_transport`` / the YAML's own ``transport:``
-section: the whole point of the connection bar is to let an operator pick
-simulated vs. real (and which COM port) independently of whatever a given
-config file happens to say, so the same configs/robot.yaml can be pointed
-at either SimulatedTransport or a real SerialTransport.
-"""
-
 from __future__ import annotations
 
 from ..config.loader import (
@@ -55,8 +45,6 @@ def _touch_probe_from_cfg(cfg: dict) -> TouchProbe:
 
 
 def build_robot(cfg: dict | None, transport) -> Robot:
-    """``cfg`` is a parsed config dict (or None for a bare robot with no deck
-    or calibration -- still enough to jog once axes are homed)."""
     cfg = cfg or {}
     calibration = build_calibration(cfg["calibration"]) if "calibration" in cfg else None
     deck = build_deck(cfg["deck"]) if "deck" in cfg else None
