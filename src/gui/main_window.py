@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, QTabW
                              QLabel, QPushButton, QFrame, QMessageBox, QListWidget)
 
 from ..core import AxisId, MountSide
-from ..transport import FakeTransport, SerialTransport
+from ..transport import SerialTransport, SimulatedTransport
 from ..control.jog import JogController
 from ..motion.axis import HOMING_ORDER
 from ..motion.mounts import MOUNT_OFFSET_MM
@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
 
         # Routine motion sweep: a routine step's G0/G1 acks long before (or,
         # in simulation, entirely unrelated to) the real move actually
-        # finishing -- see FakeTransport and RoutineRunner.step_motion's
+        # finishing -- see SimulatedTransport and RoutineRunner.step_motion's
         # docstrings -- so there's no honest position to poll mid-step.
         # Same idea as the homing sweep above, but timed per move from the
         # distance it was actually commanded to cover (tracked from one
@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
                     raise RuntimeError("choose a serial port first")
                 transport = SerialTransport(opts["port"], opts["baud"])
             else:
-                transport = FakeTransport()
+                transport = SimulatedTransport()
 
             robot = build_robot(cfg, transport)
             robot.connect()
@@ -477,7 +477,7 @@ class MainWindow(QMainWindow):
         actually asked for. Starts from the tracked display position, not
         a live poll: a live poll here would race a still-settling
         preceding move exactly like step_motion's legs do (see its
-        docstring), and G28 is instant in FakeTransport, so by the time
+        docstring), and G28 is instant in SimulatedTransport, so by the time
         one could be taken it'd already show the post-home result."""
         before = dict(self._routine_display_pos)
         schedule = self._build_home_schedule(before, axes)

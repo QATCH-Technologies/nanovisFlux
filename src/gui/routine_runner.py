@@ -41,7 +41,7 @@ class RoutineRunner(QThread):
     #: rapid move). Captured straight off the dispatched Command objects
     #: (see _run_step) rather than by polling position before/after: in
     #: simulation a G1's target isn't reached until real wall-clock time
-    #: passes (see FakeTransport), so an immediate re-poll would just see
+    #: passes (see SimulatedTransport), so an immediate re-poll would just see
     #: "no change yet", not the move's real extent. Empty list means the
     #: step issued no G0/G1 (e.g. Wait, Home, a raw line) -- the GUI treats
     #: that as "nothing to sweep, but resync the display" (see MainWindow).
@@ -49,7 +49,7 @@ class RoutineRunner(QThread):
     #: emitted once per G28 a step issued, with which axes it homed (a bare
     #: G28 expands to every AxisId, matching Robot.home()'s own default).
     #: No position here -- like step_motion, an immediate re-poll would
-    #: just race FakeTransport's (or the wire's) own timing; the GUI times
+    #: just race SimulatedTransport's (or the wire's) own timing; the GUI times
     #: the sweep from its own tracked display position instead (the same
     #: one step_motion's legs advance), not a live poll. Kept separate from
     #: step_motion since a home sweep is a different animation model
@@ -88,7 +88,7 @@ class RoutineRunner(QThread):
         """Run one step, capturing every G0/G1/G28 it issues as it's
         dispatched rather than inferring motion from a before/after
         position poll -- see step_motion's docstring for why (G28 is
-        instant in FakeTransport, but a live poll right after would still
+        instant in SimulatedTransport, but a live poll right after would still
         race a *preceding* step's still-settling G1, which is exactly the
         bug this avoids for legs too). Temporarily borrows Controller.on_send
         (unused elsewhere today), restoring whatever was there -- this runs

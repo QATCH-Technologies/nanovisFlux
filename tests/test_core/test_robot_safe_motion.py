@@ -20,7 +20,7 @@ from src.geometry.coordinates import DeckPoint
 from src.geometry.transform import AffineTransform2D
 from src.geometry.units import AxisScale
 from src.robot import Robot
-from src.transport.fake import FakeTransport
+from src.transport.simulated import SimulatedTransport
 
 
 def _labware(name: str, top_z: float) -> Labware:
@@ -47,7 +47,7 @@ def _robot_with_deck(*, travel_z_mm: float = 30.0) -> Robot:
         z_zero={MountSide.LEFT: 800_000},
     )
     robot = Robot(
-        FakeTransport(axis_limits={"X": 500_000, "Y": 500_000, "Z": 800_000}),
+        SimulatedTransport(axis_limits={"X": 500_000, "Y": 500_000, "Z": 800_000}),
         calibration=calibration,
         deck=deck,
         travel_z_mm=travel_z_mm,
@@ -124,7 +124,7 @@ def test_slot_top_height_considers_obstacles_and_walls_not_just_labware():
             obstacles=[SlotObstacle(offset=(0, 0), size=(20, 20), height_mm=40.0)],
         )
     )
-    robot = Robot(FakeTransport(), deck=deck)
+    robot = Robot(SimulatedTransport(), deck=deck)
 
     assert robot._slot_top_height_mm(deck["12"]) == 85.0  # walls are the tallest thing here
 
@@ -204,7 +204,7 @@ def test_move_to_and_raise_z_verify_by_default_too():
 def _stub_robot() -> Robot:
     """A bare Robot -- _await_settled only touches self.controller, so no
     calibration/deck is needed to exercise it directly."""
-    return Robot(FakeTransport())
+    return Robot(SimulatedTransport())
 
 
 def test_await_settled_resends_on_stall_and_recovers():

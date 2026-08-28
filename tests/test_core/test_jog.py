@@ -6,11 +6,11 @@ resonance_bands_hz is avoided in the feed actually sent."""
 from src.control.jog import JogController, JogSettings
 from src.core import AxisId, MountSide
 from src.robot import Robot
-from src.transport.fake import FakeTransport
+from src.transport.simulated import SimulatedTransport
 
 
 def _robot() -> Robot:
-    robot = Robot(FakeTransport())
+    robot = Robot(SimulatedTransport())
     robot.connect()
     return robot
 
@@ -24,7 +24,7 @@ def _sent_g1_feeds(robot) -> list:
 
 def _nudge(jog: JogController, axis: AxisId, sign: int) -> None:
     """nudge() waits for the firmware's 'ok' (unlike continuous jog) --
-    FakeTransport actually completes the G1 in real time (a nudge's own
+    SimulatedTransport actually completes the G1 in real time (a nudge's own
     step_microsteps distance is tiny, so this resolves in milliseconds,
     not a real wait); the G1 line itself is captured via on_send() before
     that (brief) wait, same as with continuous jog's fire-and-forget."""

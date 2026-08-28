@@ -14,7 +14,7 @@ import yaml
 from src.config.loader import resolve_robot_config
 from src.core import MountSide
 from src.gui.robot_factory import build_robot
-from src.transport import FakeTransport
+from src.transport import SimulatedTransport
 
 
 def _write_yaml(path: Path, data) -> None:
@@ -50,13 +50,13 @@ def test_build_robot_picks_up_pipette_tip_calibrations(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "mounts": {"left": {"name": "p300", "config": "tools/pipette.yaml"}},
         },
     )
 
     cfg = resolve_robot_config(str(robot_path))
-    robot = build_robot(cfg, FakeTransport())
+    robot = build_robot(cfg, SimulatedTransport())
 
     tool = robot.mounts[MountSide.LEFT].tool
     assert set(tool.tip_calibrations) == {"tip A"}

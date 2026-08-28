@@ -72,7 +72,7 @@ def _build_split_configs(root: Path) -> Path:
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "travel_z_mm": 120,
             "timeout": 30,
             "axes": "axes.yaml",
@@ -119,7 +119,7 @@ def test_resolve_robot_config_follows_all_reference_kinds(tmp_path):
         "left": {"type": "pipette", "name": "p300", "microsteps_per_ul": 50, "max_volume_ul": 300}
     }
     # sections never given as a reference pass straight through untouched
-    assert cfg["transport"] == {"type": "fake"}
+    assert cfg["transport"] == {"type": "simulated"}
     assert cfg["travel_z_mm"] == 120
 
 
@@ -198,7 +198,7 @@ def test_pipette_tip_calibrations_are_side_agnostic(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "mounts": {
                 "left": {"name": "p300", "config": "tools/pipette.yaml"},
                 "right": {"name": "p300", "config": "tools/pipette.yaml"},
@@ -250,7 +250,7 @@ def test_brand_field_plumbed_through_to_labware_tips_and_tools(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "deck": "deck.yaml",
             "tips": [{"name": "branded_tip", "brand": "Opentrons", "length_mm": 50.0}],
             "labware": [{"slot": "1", "name": "branded_plate", "config": "labware/plate.yaml"}],
@@ -290,7 +290,7 @@ def test_pipette_channels_defaults_to_one_and_is_configurable(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "mounts": {
                 "left": {
                     "type": "pipette",
@@ -322,7 +322,7 @@ def test_resolve_robot_config_leaves_inline_sections_untouched(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "axes": {"X": {"steps_per_mm": 9.0}},
             "calibration": _CALIBRATION,
             "deck": _DECK,
@@ -355,7 +355,7 @@ def test_resolve_robot_config_supports_mixed_inline_and_referenced_sections(tmp_
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "axes": "axes.yaml",
             "calibration": "calibration.yaml",
             "deck": _DECK,
@@ -380,7 +380,7 @@ def test_resolve_robot_config_raises_on_labware_name_mismatch(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "labware": [{"slot": "1", "name": "wrong_name", "config": "labware/plate.yaml"}],
         },
     )
@@ -394,7 +394,7 @@ def test_resolve_robot_config_raises_on_tip_name_mismatch(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "tips": [{"name": "wrong_tip", "config": "tools/tips/tip.yaml"}],
         },
     )
@@ -411,7 +411,7 @@ def test_resolve_robot_config_raises_on_mount_name_mismatch(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "mounts": {"left": {"name": "wrong_pipette", "config": "tools/tool.yaml"}},
         },
     )
@@ -449,7 +449,7 @@ def test_shared_labware_definition_addressed_by_distinct_instance_keys(tmp_path)
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "deck": "deck.yaml",
             "labware": [
                 {
@@ -496,7 +496,7 @@ def test_labware_instance_defaults_to_definition_name_when_omitted(tmp_path):
     _write_yaml(
         robot_path,
         {
-            "transport": {"type": "fake"},
+            "transport": {"type": "simulated"},
             "deck": "deck.yaml",
             "labware": [{"slot": "1", "name": "only_plate", "config": "labware/plate.yaml"}],
         },

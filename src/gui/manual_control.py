@@ -5,8 +5,8 @@ jog button, or a gamepad stick/trigger deflection) calls
 JogController.begin_jog, which commands a move toward the axis's endstop
 limit -- as far as it can physically go, the practical "max step size" --
 at a feed proportional to speed; release calls end_jog, which quick-stops
-it wherever it's gotten to. This now works correctly against FakeTransport
-too (see transport/fake.py's real-time G1 simulation), not just real
+it wherever it's gotten to. This now works correctly against SimulatedTransport
+too (see transport/simulated.py's real-time G1 simulation), not just real
 hardware, which is why the panel no longer drives repeated discrete
 nudge() calls the way it used to.
 """

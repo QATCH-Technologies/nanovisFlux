@@ -30,7 +30,7 @@
 # Load with:  robot = openflux.config.load_robot("configs/robot.yaml")
 
 transport:
-  type: serial              # fake | serial | tcp
+  type: serial              # simulated | serial | tcp
   port: "COM6"    # required when type: serial
   baudrate: 115200
 

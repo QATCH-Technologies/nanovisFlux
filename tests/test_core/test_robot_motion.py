@@ -6,7 +6,7 @@ from src.geometry.coordinates import DeckPoint
 from src.geometry.transform import AffineTransform2D
 from src.geometry.units import AxisScale
 from src.robot import Robot
-from src.transport.fake import FakeTransport
+from src.transport.simulated import SimulatedTransport
 
 
 def _robot() -> Robot:
@@ -18,13 +18,13 @@ def _robot() -> Robot:
     # z_zero=200_000 (home, deck_z=0) sits above the real default Z
     # endstop_limit (175_000 -- see motion.axis.default_axis_configs) --
     # harmless before Robot's move_* methods verified their own moves, but
-    # now that verify=True is the default (see robot.py), FakeTransport
+    # now that verify=True is the default (see robot.py), SimulatedTransport
     # would otherwise clamp every commanded target at 175_000 and
     # _await_settled would poll forever for a raw position this
-    # calibration can legitimately ask for but the fake hardware's default
+    # calibration can legitimately ask for but the simulated hardware's default
     # ceiling can't reach. Widened here to match this test's own numbers,
     # not a real safety limit.
-    return Robot(FakeTransport(axis_limits={"Z": 300_000}), calibration=calibration)
+    return Robot(SimulatedTransport(axis_limits={"Z": 300_000}), calibration=calibration)
 
 
 def test_move_to_sends_xy_before_z() -> None:

@@ -15,7 +15,7 @@ from src.routines import PointLocation, Routine, SwitchMountStep
 @dataclass
 class _RecordingStep:
     """A bare Step double that just records the side it was called with --
-    avoids needing a real/fake robot to observe Routine.run's own
+    avoids needing a real/simulated robot to observe Routine.run's own
     side-threading logic in isolation."""
 
     seen: list = field(default_factory=list)

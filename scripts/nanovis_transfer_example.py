@@ -18,7 +18,7 @@ the Routine object -- the same mechanism a routine would use mid-run to
 address a second mount, e.g. aspirating on the left pipette and dispensing
 on the right one, which this one doesn't need but could.
 
-Runs against the in-memory FakeTransport by default, so it can be exercised
+Runs against the in-memory SimulatedTransport by default, so it can be exercised
 without hardware attached; pass --port to drive real hardware over serial
 (overriding whatever configs/robot.yaml's own transport: says, same as the
 GUI connection bar -- see gui/robot_factory.py).
@@ -48,7 +48,7 @@ from src.routines import (
     WellLocation,
 )
 from src.tools import TipPickup
-from src.transport import FakeTransport, SerialTransport
+from src.transport import SerialTransport, SimulatedTransport
 
 #: Anchored to this script's own location, matching calibrate_pipette.py's
 #: _DEFAULT_CONFIG -- a bare relative string would resolve against wherever
@@ -116,7 +116,7 @@ def main() -> None:
     )
     parser.add_argument("--config", default=str(_DEFAULT_CONFIG), help="robot config YAML")
     parser.add_argument(
-        "--port", help="serial port for real hardware (e.g. COM6); omit to use the fake transport"
+        "--port", help="serial port for real hardware (e.g. COM6); omit to use the simulated transport"
     )
     parser.add_argument(
         "--side", choices=sorted(_SIDES), default="left", help="which mount runs this routine"
@@ -130,7 +130,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = resolve_robot_config(args.config)
-    transport = SerialTransport(args.port) if args.port else FakeTransport()
+    transport = SerialTransport(args.port) if args.port else SimulatedTransport()
     robot = build_robot(cfg, transport)
 
     routine = build_routine(robot, args.wells, _SIDES[args.side])

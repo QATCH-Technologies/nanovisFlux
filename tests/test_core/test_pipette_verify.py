@@ -13,7 +13,7 @@ from src.geometry.transform import AffineTransform2D
 from src.geometry.units import AxisScale
 from src.robot import Robot
 from src.tools import Pipette, PlungerModel
-from src.transport.fake import FakeTransport
+from src.transport.simulated import SimulatedTransport
 
 
 def _robot_with_pipette() -> Robot:
@@ -23,7 +23,7 @@ def _robot_with_pipette() -> Robot:
         z_zero={MountSide.LEFT: 800_000},
     )
     robot = Robot(
-        FakeTransport(axis_limits={"X": 500_000, "Y": 500_000, "Z": 800_000, "B": 800_000}),
+        SimulatedTransport(axis_limits={"X": 500_000, "Y": 500_000, "Z": 800_000, "B": 800_000}),
         calibration=calibration,
     )
     robot.connect()

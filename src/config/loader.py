@@ -33,7 +33,7 @@ from ..tools import (
     TouchProbe,
     UltrasonicSensor,
 )
-from ..transport import FakeTransport, SerialTransport
+from ..transport import SerialTransport, SimulatedTransport
 
 _SIDES = {"left": MountSide.LEFT, "right": MountSide.RIGHT, "rear": MountSide.REAR}
 
@@ -241,11 +241,11 @@ def resolve_robot_config(path: str) -> dict:
 
 # -- individual sections ----------------------------------------------------
 def build_transport(cfg: dict):
-    kind = cfg.get("type", "fake")
+    kind = cfg.get("type", "simulated")
     if kind == "serial":
         return SerialTransport(cfg["port"], cfg.get("baudrate", 115200), cfg.get("timeout", 30.0))
-    if kind == "fake":
-        return FakeTransport()
+    if kind == "simulated":
+        return SimulatedTransport()
     if kind == "tcp":
         raise NotImplementedError("add a TCPTransport and wire it here")
     raise ValueError(f"unknown transport type: {kind}")
@@ -492,7 +492,7 @@ def load_robot(path: str) -> Robot:
     override = load_calibration_override(path)
     if override is not None:
         cfg = {**cfg, "calibration": override}
-    transport = build_transport(cfg.get("transport", {"type": "fake"}))
+    transport = build_transport(cfg.get("transport", {"type": "simulated"}))
     calibration = build_calibration(cfg["calibration"]) if "calibration" in cfg else None
     deck = build_deck(cfg["deck"]) if "deck" in cfg else None
 

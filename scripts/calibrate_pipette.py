@@ -393,7 +393,7 @@ def main() -> None:
         default=str(_DEFAULT_CONFIG),
         help="robot config YAML -- needs a mounted pipette on --side, a real deck "
         "calibration, and labware loaded on --aspirate-slot/--dispense-slot. Point "
-        "this at a transport: {type: fake} config to --simulate without touching "
+        "this at a transport: {type: simulated} config to --simulate without touching "
         "real hardware.",
     )
     parser.add_argument("--side", choices=sorted(_SIDES), default="left")

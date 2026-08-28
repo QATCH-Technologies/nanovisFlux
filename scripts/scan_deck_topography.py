@@ -66,7 +66,7 @@ Output:
   grid per row -- see bucket_grid -- purely for a legible picture; the CSV
   is never bucketed)
 
-Runs against the in-memory FakeTransport by default (no hardware needed):
+Runs against the in-memory SimulatedTransport by default (no hardware needed):
 without --config it also fabricates a smooth synthetic surface so the
 heatmap/PNG output can be exercised end-to-end. Pass --port for real
 hardware, or --config to load a full robot config (for its own transport/
@@ -90,7 +90,7 @@ from src.core import AxisId, MountSide
 from src.geometry import default_axis_scale
 from src.robot import Robot
 from src.tools import UltrasonicSensor
-from src.transport import FakeTransport, SerialTransport
+from src.transport import SerialTransport, SimulatedTransport
 
 #: Anchored to this script's own location, not the process's current
 #: working directory -- see scripts/calibrate_pipette.py's identical fix
@@ -352,9 +352,9 @@ def save_png(path: str, grid: list, xs: list, ys: list) -> bool:
 
 
 def build_robot(port: str | None, config: str | None):
-    """Returns (robot, fake_transport). fake_transport is the FakeTransport
-    instance when one was built here (so main() can feed it synthetic
-    terrain for the no-hardware demo), or None for --config/--port.
+    """Returns (robot, simulated_transport). simulated_transport is the
+    SimulatedTransport instance when one was built here (so main() can feed
+    it synthetic terrain for the no-hardware demo), or None for --config/--port.
 
     No calibration is built or needed -- this script only ever drives raw
     motor microsteps (see module docstring), so a bare Robot with just a
@@ -364,10 +364,10 @@ def build_robot(port: str | None, config: str | None):
     if config:
         return load_robot(config), None
 
-    transport = SerialTransport(port) if port else FakeTransport()
+    transport = SerialTransport(port) if port else SimulatedTransport()
     robot = Robot(transport, travel_z_mm=120)
     robot.attach(MountSide.REAR, UltrasonicSensor())
-    return robot, (transport if isinstance(transport, FakeTransport) else None)
+    return robot, (transport if isinstance(transport, SimulatedTransport) else None)
 
 
 def main() -> None:
@@ -377,7 +377,7 @@ def main() -> None:
     parser.add_argument(
         "--port",
         default="COM6",
-        help="serial port for real hardware (e.g. COM6); omit to use the fake transport",
+        help="serial port for real hardware (e.g. COM6); omit to use the simulated transport",
     )
     parser.add_argument(
         "--config",
@@ -431,7 +431,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    robot, fake_transport = build_robot(args.port, args.config)
+    robot, simulated_transport = build_robot(args.port, args.config)
     if robot.rear() is None:
         raise SystemExit(
             "no ultrasonic sensor attached to the rear mount -- "
@@ -461,8 +461,8 @@ def main() -> None:
         return
 
     def before_sample(x, y):
-        if fake_transport is not None:
-            fake_transport.ultrasonic_mm = synthetic_height_mm(x, y)
+        if simulated_transport is not None:
+            simulated_transport.ultrasonic_mm = synthetic_height_mm(x, y)
 
     def on_row_start(row_idx, n_rows, y, x_start, x_end):
         logger.info(f"Row {row_idx + 1}/{n_rows}: sweeping X {x_start} -> {x_end} @ Y={y}")

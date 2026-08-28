@@ -1,4 +1,4 @@
-# Runs the pytest suite with coverage. The suite is built around FakeTransport
+# Runs the pytest suite with coverage. The suite is built around SimulatedTransport
 # (see tests/), so it needs no real serial hardware and runs the same on every OS.
 
 name: Test

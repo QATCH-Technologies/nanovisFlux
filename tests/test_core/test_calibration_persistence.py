@@ -39,7 +39,7 @@ def test_load_calibration_override_reads_sidecar(tmp_path):
 def test_load_robot_prefers_sidecar_calibration_over_config(tmp_path):
     config_path = tmp_path / "robot.yaml"
     _write_yaml(config_path, {
-        "transport": {"type": "fake"},
+        "transport": {"type": "simulated"},
         "calibration": {
             "points": {"deck": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 0, "y": 10}],
                       "motor": [[0, 0], [100, 0], [0, 100]]},   # scale 10
@@ -63,7 +63,7 @@ def test_load_robot_prefers_sidecar_calibration_over_config(tmp_path):
 def test_load_robot_without_sidecar_uses_config_calibration(tmp_path):
     config_path = tmp_path / "robot.yaml"
     _write_yaml(config_path, {
-        "transport": {"type": "fake"},
+        "transport": {"type": "simulated"},
         "calibration": {
             "points": {"deck": [{"x": 0, "y": 0}, {"x": 10, "y": 0}, {"x": 0, "y": 10}],
                       "motor": [[0, 0], [100, 0], [0, 100]]},

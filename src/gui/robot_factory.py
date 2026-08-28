@@ -5,7 +5,7 @@ does not use ``loader.build_transport`` / the YAML's own ``transport:``
 section: the whole point of the connection bar is to let an operator pick
 simulated vs. real (and which COM port) independently of whatever a given
 config file happens to say, so the same configs/robot.yaml can be pointed
-at either FakeTransport or a real SerialTransport.
+at either SimulatedTransport or a real SerialTransport.
 """
 
 from __future__ import annotations
