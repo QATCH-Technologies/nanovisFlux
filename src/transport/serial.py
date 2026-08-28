@@ -84,14 +84,14 @@ class SerialTransport(Transport):
     def write_line(self, line: str) -> None:
         """Send one ASCII-encoded command line to the controller.
 
-        A newline terminator is appended to ``line`` before transmission.
+        A newline terminator is appended to `line` before transmission.
 
         Args:
             line: Command text to send without a trailing newline.
 
         Raises:
             AssertionError: If the transport has not been opened.
-            UnicodeEncodeError: If ``line`` contains characters that cannot be
+            UnicodeEncodeError: If `line` contains characters that cannot be
                 encoded as ASCII.
             serial.SerialException: If the command cannot be transmitted.
         """
@@ -101,7 +101,7 @@ class SerialTransport(Transport):
     def read_line(self, timeout: float | None = None) -> str:
         """Read one response line from the controller.
 
-        If ``timeout`` is provided, it temporarily updates the serial connection's
+        If `timeout` is provided, it temporarily updates the serial connection's
         read timeout before reading. The received bytes are decoded as ASCII,
         replacing invalid byte sequences, and surrounding whitespace is removed.
 
