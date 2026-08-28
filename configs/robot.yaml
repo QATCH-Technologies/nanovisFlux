@@ -66,7 +66,7 @@ tips:
 # Drop `instance:` for a labware with only one placement (like the tip
 # rack below) and it defaults to the definition's own `name:`.
 labware:
-  - slot: "10"
+  - slot: "7"
     instance: tiprack1
     name: opentrons_300ul_ot2_tip_rack
     config: labware/tipracks/opentrons_300ul_ot2_tip_rack.yaml
@@ -78,11 +78,11 @@ labware:
     instance: dest
     name: qatch_nanoflux_24_well_plate
     config: labware/wellplates/qatch_nanoflux_24_well_plate.yaml
-  - slot: "7"
+  - slot: "8"
     instance: aspirate_plate
     name: opentrons_ot2_tip_rack_lid
     config: labware/reservoirs/opentrons_ot2_tip_rack_lid.yaml
-  - slot: "8"
+  - slot: "11"
     instance: dispense_plate
     name: opentrons_ot2_tip_rack_lid
     config: labware/reservoirs/opentrons_ot2_tip_rack_lid.yaml
